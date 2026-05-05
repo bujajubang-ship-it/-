@@ -529,7 +529,7 @@ titles는 5개, thumbnails는 3개, script_sections는 영상 흐름에 맞게 4
   "avoid_topics": ["이미 포화되어 새로 만들어도 묻힐 주제 3-4개 (구체적으로)"]
 }}
 
-hot_topics는 7개 작성하세요: 풀링+키 겸용 3개 이상, 풀링 2-3개, 키 1-2개. urgency high를 앞에 배치."""
+hot_topics는 5개 작성하세요: 풀링+키 겸용 2개 이상, 풀링 2개, 키 1개. urgency high를 앞에 배치. 각 필드는 간결하게 1-2문장 이내로."""
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
