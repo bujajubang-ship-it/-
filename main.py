@@ -52,10 +52,13 @@ class ScriptRequest(BaseModel):
 
 class ShortformRequest(BaseModel):
     keyword: str
-    product_desc: str = ""
+    product_desc: str = "부자주방 채널 — 외식업 운영자(식당/분식집/한식당 사장님) 대상, 업소용 주방용품 전문. 신제품 소개, 수납 아이디어, 꿀팁 정보 제공."
     duration: str = "30"
-    market_insights: str = ""
-    reference_reel: str = ""
+
+
+class MidformRequest(BaseModel):
+    keyword: str
+    product_desc: str = "부자주방 채널 — 외식업 운영자(식당/분식집/한식당 사장님) 대상, 업소용 주방용품 전문. 신제품 소개, 수납 아이디어, 꿀팁 정보 제공."
 
 
 def sse(data: dict) -> str:
@@ -280,6 +283,10 @@ async def script(req: ScriptRequest):
 
 @app.post("/api/shortform")
 async def shortform(req: ShortformRequest):
+    youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+    naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
+    naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+
     async def stream():
         if not os.getenv("ANTHROPIC_API_KEY", "").strip():
             yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
@@ -287,17 +294,93 @@ async def shortform(req: ShortformRequest):
         if not req.keyword.strip():
             yield sse({"step": "error", "message": "주제/키워드를 입력해주세요."})
             return
+
+        videos_with_comments = []
+        naver_results = []
+        yt = YouTubeService(youtube_key) if youtube_key else None
         try:
-            yield sse({"step": "analyzing", "message": f"AI가 {req.duration}초 릴스 기획 중... (30초 내외)"})
+            if yt:
+                yield sse({"step": "searching", "message": f'"{req.keyword}" 시장 데이터 수집 중...'})
+                videos = await yt.search_videos(req.keyword, max_results=10)
+                if videos:
+                    yield sse({"step": "found", "message": f"상위 {len(videos)}개 영상 발견! 댓글 수집 중..."})
+                    videos_with_comments = await yt.get_comments_for_videos(videos[:5])
+                    total = sum(len(v.get("comments", [])) for v in videos_with_comments)
+                    yield sse({"step": "comments_done", "message": f"댓글 {total}개 수집 완료!"})
+
+            if naver_id and naver_secret:
+                yield sse({"step": "naver", "message": "네이버 카페 반응 수집 중..."})
+                naver = NaverService(naver_id, naver_secret)
+                naver_results = await naver.search_cafe(req.keyword)
+                await naver.close()
+                yield sse({"step": "naver_done", "message": f"네이버 카페 {len(naver_results)}개 게시글 수집 완료!"})
+
+            yield sse({"step": "analyzing", "message": f"AI가 {req.duration}초 릴스 기획 중... (30~60초 소요)"})
             analyzer = Analyzer()
             report = await analyzer.analyze_shortform(
                 req.keyword, req.product_desc, req.duration,
-                req.market_insights, req.reference_reel
+                videos_with_comments or None, naver_results or None
             )
             save_history("shortform", req.keyword, report)
             yield sse({"step": "done", "report": report, "keyword": req.keyword})
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
+        finally:
+            if yt:
+                await yt.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/midform")
+async def midform(req: MidformRequest):
+    youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+    naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
+    naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+
+    async def stream():
+        if not youtube_key:
+            yield sse({"step": "error", "message": ".env 파일에 YOUTUBE_API_KEY를 설정해주세요."})
+            return
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
+            return
+
+        yt = YouTubeService(youtube_key)
+        try:
+            yield sse({"step": "searching", "message": f'"{req.keyword}" 유튜브 영상 검색 중...'})
+            videos = await yt.search_videos(req.keyword, max_results=20)
+            if not videos:
+                yield sse({"step": "error", "message": "검색 결과가 없습니다. 키워드를 확인해주세요."})
+                return
+
+            yield sse({"step": "found", "message": f"상위 {len(videos)}개 영상 발견! 댓글 수집 중..."})
+            videos_with_comments = await yt.get_comments_for_videos(videos[:10])
+            total = sum(len(v.get("comments", [])) for v in videos_with_comments)
+            yield sse({"step": "comments_done", "message": f"댓글 {total}개 수집 완료!"})
+
+            naver_results = []
+            if naver_id and naver_secret:
+                yield sse({"step": "naver", "message": "네이버 카페 반응 수집 중..."})
+                naver = NaverService(naver_id, naver_secret)
+                naver_results = await naver.search_cafe(req.keyword)
+                await naver.close()
+                yield sse({"step": "naver_done", "message": f"네이버 카페 {len(naver_results)}개 게시글 수집 완료!"})
+
+            yield sse({"step": "analyzing", "message": "AI가 전체 영상 기획 작성 중... (1~2분 소요)"})
+            analyzer = Analyzer()
+            report = await analyzer.analyze_midform(req.keyword, req.product_desc, videos_with_comments, naver_results)
+            save_history("midform", req.keyword, report)
+            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
+        finally:
+            await yt.close()
 
     return StreamingResponse(
         stream(),

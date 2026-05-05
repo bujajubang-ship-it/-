@@ -295,7 +295,7 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .comment-question-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-top: 1px solid #fee2e2; }
 .comment-q-num { font-size: 12px; font-weight: 700; background: #ef4444; color: #fff; border-radius: 20px; padding: 2px 8px; flex-shrink: 0; margin-top: 2px; }
 
-/* ===== edit-inputs 내 input 공통 ===== */
+/* ===== edit-inputs 내 공통 ===== */
 .edit-inputs input[type="text"] {
   width: 100%;
   padding: 14px 16px;
@@ -309,6 +309,35 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   margin-bottom: 0;
 }
 .edit-inputs input[type="text"]:focus { outline: none; border-color: var(--red); }
+.edit-inputs textarea {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.7;
+  background: #fff;
+  color: var(--text);
+  resize: vertical;
+  transition: border-color .15s;
+}
+.edit-inputs textarea:focus { outline: none; border-color: var(--red); }
+.edit-inputs button:not(#edit-analyze-btn) {
+  width: 100%;
+  padding: 16px;
+  background: var(--red);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity .2s;
+  font-family: inherit;
+}
+.edit-inputs button:not(#edit-analyze-btn):hover { opacity: .9; }
+.edit-inputs button:not(#edit-analyze-btn):disabled { opacity: .5; cursor: not-allowed; }
 
 /* Utility */
 .hidden { display: none !important; }
@@ -395,3 +424,28 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .hash-niche { background: #d1fae5; color: #065f46; }
 .hash-trending { background: #fce7f3; color: #9d174d; }
 .hash-strategy { padding: 12px 24px; font-size: 13px; color: var(--text-sub); font-style: italic; border-top: 1px solid var(--border); }
+
+/* ===== 🎬 미드폼 탭 ===== */
+.midform-intro-formula { display: flex; align-items: center; gap: 12px; padding: 16px 24px 0; flex-wrap: wrap; }
+.midform-formula-badge { background: #d1fae5; color: #065f46; font-size: 14px; font-weight: 700; padding: 4px 14px; border-radius: 20px; border: 1px solid #6ee7b7; white-space: nowrap; }
+.midform-formula-reason { font-size: 13px; color: #6b7280; line-height: 1.5; flex: 1; }
+.midform-hook-line { font-size: 19px; font-weight: 800; color: #1e293b; padding: 12px 24px 4px; line-height: 1.4; }
+
+.midform-script-list { display: flex; flex-direction: column; }
+.midform-section { border-bottom: 1px solid var(--border); padding: 18px 24px; }
+.midform-section:last-child { border-bottom: none; }
+.midform-section-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.midform-section-time { font-size: 12px; font-weight: 800; color: #3b82f6; background: #eff6ff; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+.midform-section-name { font-size: 15px; font-weight: 700; color: #1e293b; }
+.midform-section-content { font-size: 13px; color: #6b7280; line-height: 1.6; margin-bottom: 10px; }
+.midform-section-script { font-size: 14px; color: #1e293b; line-height: 1.8; font-style: italic; background: #f0f7ff; border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; border-left: 3px solid #3b82f6; white-space: pre-wrap; }
+.midform-section-tip { font-size: 12px; color: #92400e; background: #fffbeb; padding: 6px 12px; border-radius: 6px; border: 1px solid #fde68a; }
+
+.midform-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+.midform-duration-banner { background: linear-gradient(135deg, #1a1a2e, #2d2d44); color: #fff; text-align: center; padding: 14px 24px; border-radius: var(--radius); font-size: 16px; font-weight: 700; margin-bottom: 20px; letter-spacing: .03em; }
+.midform-duration-banner::before { content: "🕐 예상 영상 길이: "; }
+
+@media (max-width: 768px) {
+  .midform-bottom-grid, .thumb-concept-grid { grid-template-columns: 1fr; }
+  .midform-intro-formula { flex-direction: column; align-items: flex-start; }
+}

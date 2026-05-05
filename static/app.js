@@ -1,16 +1,21 @@
-let analyzing = false;
+let midformAnalyzing = false;
+let shortformAnalyzing = false;
 let editAnalyzing = false;
+// kept for history backwards compatibility
+let analyzing = false;
 let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
-let shortformAnalyzing = false;
 
-const ALL_TABS = ['research', 'planning', 'intro', 'script', 'edit', 'shortform', 'history'];
+// includes old tabs so history items still render into their panes
+const ALL_TABS = ['midform', 'shortform', 'edit', 'history', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
-    document.getElementById(`tab-${t}`).classList.toggle('active', t === tab);
-    document.getElementById(`pane-${t}`).classList.toggle('hidden', t !== tab);
+    const btn = document.getElementById(`tab-${t}`);
+    if (btn) btn.classList.toggle('active', t === tab);
+    const pane = document.getElementById(`pane-${t}`);
+    if (pane) pane.classList.toggle('hidden', t !== tab);
   });
   if (tab === 'history') loadHistory('');
 }
@@ -84,341 +89,106 @@ async function streamSSE(url, body, addStep, onDone, onError) {
   }
 }
 
-// ===== ① 시장조사 =====
+// ===== 🎬 미드폼 =====
 
-function setKeyword(kw) {
-  document.getElementById('keyword-input').value = kw;
-  document.getElementById('keyword-input').focus();
-}
-
-document.getElementById('keyword-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') startAnalysis();
+document.addEventListener('DOMContentLoaded', () => {
+  const mi = document.getElementById('midform-keyword-input');
+  if (mi) mi.addEventListener('keydown', e => { if (e.key === 'Enter') startMidform(); });
+  const ei = document.getElementById('edit-keyword-input');
+  if (ei) ei.addEventListener('keydown', e => { if (e.key === 'Enter') startEditAnalysis(); });
 });
 
-function startAnalysis() {
-  if (analyzing) return;
-  const keyword = document.getElementById('keyword-input').value.trim();
-  if (!keyword) { document.getElementById('keyword-input').focus(); return; }
-  runAnalysis(keyword);
+function resetToMidform() {
+  document.getElementById('midform-report-section').classList.add('hidden');
+  document.getElementById('midform-progress-section').classList.add('hidden');
+  document.getElementById('midform-input-section').classList.remove('hidden');
+  document.getElementById('midform-btn').disabled = false;
+  midformAnalyzing = false;
 }
 
-function resetToSearch() {
-  document.getElementById('report-section').classList.add('hidden');
-  document.getElementById('progress-section').classList.add('hidden');
-  document.getElementById('search-section').classList.remove('hidden');
-  document.getElementById('analyze-btn').disabled = false;
-  analyzing = false;
+function startMidform() {
+  if (midformAnalyzing) return;
+  const keyword = document.getElementById('midform-keyword-input').value.trim();
+  if (!keyword) { document.getElementById('midform-keyword-input').focus(); return; }
+  const product_desc = document.getElementById('midform-product-input').value.trim();
+  runMidform(keyword, product_desc);
 }
 
-async function runAnalysis(keyword) {
-  analyzing = true;
-  document.getElementById('analyze-btn').disabled = true;
-  document.getElementById('search-section').classList.add('hidden');
-  document.getElementById('report-section').classList.add('hidden');
-  document.getElementById('progress-steps').innerHTML = '';
-  document.getElementById('progress-section').classList.remove('hidden');
+async function runMidform(keyword, product_desc) {
+  midformAnalyzing = true;
+  document.getElementById('midform-btn').disabled = true;
+  document.getElementById('midform-input-section').classList.add('hidden');
+  document.getElementById('midform-report-section').classList.add('hidden');
+  document.getElementById('midform-progress-steps').innerHTML = '';
+  document.getElementById('midform-progress-section').classList.remove('hidden');
 
-  const addStep = makeProgressStepper('progress-steps');
+  const addStep = makeProgressStepper('midform-progress-steps');
   addStep('분석 준비 중...', 'active');
 
   await streamSSE(
-    '/api/analyze', { keyword },
+    '/api/midform', { keyword, product_desc },
     addStep,
     (data) => {
-      document.getElementById('progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
+      document.getElementById('midform-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
         s.className = 'progress-step done';
         s.querySelector('.step-icon').textContent = '✅';
       });
-      addStep('분석 완료!', 'done');
+      addStep('기획 완성!', 'done');
       setTimeout(() => {
-        document.getElementById('progress-section').classList.add('hidden');
-        renderReport(data.report, keyword);
-        document.getElementById('report-section').classList.remove('hidden');
+        document.getElementById('midform-progress-section').classList.add('hidden');
+        renderMidformReport(data.report, keyword);
+        document.getElementById('midform-report-section').classList.remove('hidden');
         window.scrollTo({ top: 0, behavior: 'smooth' });
-        analyzing = false;
-        document.getElementById('analyze-btn').disabled = false;
+        midformAnalyzing = false;
+        document.getElementById('midform-btn').disabled = false;
       }, 600);
     },
     (msg) => {
-      document.getElementById('progress-steps').innerHTML = '';
-      makeProgressStepper('progress-steps')(msg, 'error');
-      analyzing = false;
-      document.getElementById('analyze-btn').disabled = false;
+      document.getElementById('midform-progress-steps').innerHTML = '';
+      makeProgressStepper('midform-progress-steps')(msg, 'error');
+      midformAnalyzing = false;
+      document.getElementById('midform-btn').disabled = false;
     }
   );
 }
 
-let _currentReport = null;
-let _currentKeyword = '';
+function renderMidformReport(r, keyword) {
+  document.getElementById('midform-report-title').textContent = `"${keyword}" 영상 기획 완성본`;
 
-function renderReport(r, keyword) {
-  _currentReport = r;
-  _currentKeyword = keyword;
+  const cb = document.getElementById('midform-concept');
+  cb.textContent = r.concept || '';
+  cb.style.display = r.concept ? '' : 'none';
 
-  document.getElementById('report-keyword-title').textContent = `"${keyword}" 시장조사 결과`;
-  document.getElementById('report-subtitle').textContent = `유튜브 상위 영상 댓글 + 네이버 카페 데이터 기반`;
+  document.getElementById('midform-market-summary').textContent = r.market_summary || '';
 
-  const cb = document.getElementById('concept-banner');
-  cb.textContent = r.one_line_concept || '';
-  cb.style.display = r.one_line_concept ? '' : 'none';
+  const desires = r.viewer_desires || {};
+  renderList('midform-curiosity', desires.curiosity);
+  renderList('midform-complaints', desires.complaints);
+  renderList('midform-wants', desires.wants);
 
-  document.getElementById('summary-text').textContent = r.summary || '';
-
-  renderList('desire-curiosity', r.desire_analysis?.curiosity);
-  renderList('desire-complaints', r.desire_analysis?.complaints);
-  renderList('desire-wants', r.desire_analysis?.wants);
-
-  const ql = document.getElementById('top-questions');
-  ql.innerHTML = '';
-  (r.top_questions || []).forEach((q, i) => {
-    const li = document.createElement('li');
-    li.innerHTML = `<span class="q-num">${i + 1}</span><span>${q}</span>`;
-    ql.appendChild(li);
-  });
-
-  renderList('must-include', r.must_include_content);
-
-  const dg = document.getElementById('diff-points');
-  dg.innerHTML = '';
-  (r.differentiation_points || []).forEach(p => {
-    const div = document.createElement('div');
-    div.className = 'diff-card';
-    div.textContent = p;
-    dg.appendChild(div);
-  });
-
-  renderList('title-patterns', r.competitor_analysis?.title_patterns);
-  renderList('thumb-styles', r.competitor_analysis?.thumbnail_styles);
-  const kc = document.getElementById('keywords-cloud');
-  kc.innerHTML = '';
-  (r.competitor_analysis?.popular_keywords || []).forEach(kw => {
-    const span = document.createElement('span');
-    span.className = 'kw-tag';
-    span.textContent = kw;
-    kc.appendChild(span);
-  });
-
-  const vl = document.getElementById('top-videos-list');
-  vl.innerHTML = '';
-  (r.top_videos || []).forEach(v => {
-    const card = document.createElement('div');
-    card.className = 'video-thumb-card';
-    card.innerHTML = `
-      <a href="${v.url}" target="_blank" rel="noopener">
-        <img src="${v.thumbnail}" alt="${v.title}" loading="lazy" onerror="this.style.background='#ddd'" />
-        <div class="video-thumb-info">
-          <div class="video-thumb-title">${v.title}</div>
-          <div class="video-thumb-views">조회수 ${fmt(v.views)}회 · ${v.channel}</div>
-          ${v.success_reason ? `<div class="video-thumb-reason">${v.success_reason}</div>` : ''}
-        </div>
-      </a>
-    `;
-    vl.appendChild(card);
-  });
-
-  const ss = document.getElementById('video-structure');
-  ss.innerHTML = '';
-  (r.recommended_structure || []).forEach((step, i, arr) => {
-    const div = document.createElement('div');
-    div.className = 'structure-step';
-    const isLast = i === arr.length - 1;
-    div.innerHTML = `
-      <div class="step-line-wrap">
-        <div class="step-circle">${i + 1}</div>
-        ${!isLast ? '<div class="step-connector"></div>' : ''}
-      </div>
-      <div class="step-content"><div class="step-text">${step}</div></div>
-    `;
-    ss.appendChild(div);
-  });
-}
-
-function downloadPDF() {
-  if (!_currentReport) return;
-  openPrintWindow(_currentReport, _currentKeyword, 'research');
-}
-
-function openPrintWindow(report, keyword, type) {
-  const saved = { r: _currentReport, k: _currentKeyword };
-  _currentReport = report; _currentKeyword = keyword;
-  let reportEl, html;
-  if (type === 'research') {
-    reportEl = document.getElementById('report-section');
-    renderReport(report, keyword);
-    html = reportEl.innerHTML;
-  } else {
-    reportEl = document.getElementById('edit-report-section');
-    renderEditReport(report, keyword);
-    html = reportEl.innerHTML;
-  }
-  _currentReport = saved.r; _currentKeyword = saved.k;
-  _printHTML(keyword, html, 'report-section');
-}
-
-function _printHTML(title, bodyHTML, wrapClass) {
-  const style = Array.from(document.styleSheets)
-    .map(s => { try { return Array.from(s.cssRules).map(r => r.cssText).join('\n'); } catch { return ''; } })
-    .join('\n');
-  const html = `<!DOCTYPE html>
-<html lang="ko"><head><meta charset="UTF-8"/><title>${title}</title>
-<style>${style}
-body{background:#fff!important;margin:0;padding:24px;font-family:'Apple SD Gothic Neo','Noto Sans KR',sans-serif;}
-.report-header-actions,.reset-btn{display:none!important;}
-.card{box-shadow:none!important;border:1px solid #e5e7eb;break-inside:avoid;}
-.videos-scroll{overflow:visible;flex-wrap:wrap;}
-@media print{body{padding:0;}.card{break-inside:avoid;}}
-</style></head><body>
-<h2 style="font-size:22px;font-weight:800;margin-bottom:4px">"${title}"</h2>
-<p style="color:#6b7280;font-size:13px;margin-bottom:20px">유튜브 콘텐츠 리서처 · AI 분석 결과</p>
-<div class="${wrapClass}" style="padding:0;max-width:100%">${bodyHTML}</div>
-<script>window.onload=function(){document.querySelectorAll('button').forEach(b=>b.style.display='none');setTimeout(()=>window.print(),400);};<\/script>
-</body></html>`;
-  const win = window.open('', '_blank');
-  if (!win) { alert('팝업이 차단되었습니다.'); return; }
-  win.document.write(html);
-  win.document.close();
-}
-
-function copyReportText() {
-  if (!_currentReport) return;
-  const r = _currentReport;
-  let text = `📊 "${_currentKeyword}" 시장조사 결과\n${'='.repeat(40)}\n\n`;
-  if (r.one_line_concept) text += `💎 핵심 컨셉\n${r.one_line_concept}\n\n`;
-  if (r.summary) text += `📋 시장 요약\n${r.summary}\n\n`;
-  if (r.desire_analysis) {
-    text += `💡 시청자 욕구\n`;
-    (r.desire_analysis.curiosity||[]).forEach(i => text += `  🤔 ${i}\n`);
-    (r.desire_analysis.complaints||[]).forEach(i => text += `  😤 ${i}\n`);
-    (r.desire_analysis.wants||[]).forEach(i => text += `  ✨ ${i}\n`);
-    text += '\n';
-  }
-  if (r.top_questions?.length) {
-    text += `❓ 시청자 TOP 질문\n`;
-    r.top_questions.forEach((q, i) => text += `  ${i+1}. ${q}\n`);
-    text += '\n';
-  }
-  if (r.must_include_content?.length) {
-    text += `📝 반드시 넣어야 할 내용\n`;
-    r.must_include_content.forEach(i => text += `  • ${i}\n`);
-    text += '\n';
-  }
-  if (r.differentiation_points?.length) {
-    text += `⚡ 차별화 포인트\n`;
-    r.differentiation_points.forEach(i => text += `  • ${i}\n`);
-  }
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = document.querySelector('#report-section .copy-btn');
-    if (btn) { btn.textContent = '✅ 복사됨!'; setTimeout(() => btn.textContent = '📋 텍스트 복사', 2000); }
-  }).catch(() => alert('복사 실패'));
-}
-
-// ===== ② 기획 (문제 정의 + 제목 + 썸네일) =====
-
-function resetToPlanning() {
-  document.getElementById('planning-report-section').classList.add('hidden');
-  document.getElementById('planning-progress-section').classList.add('hidden');
-  document.getElementById('planning-input-section').classList.remove('hidden');
-  document.getElementById('planning-btn').disabled = false;
-  planningAnalyzing = false;
-}
-
-function startPlanning() {
-  if (planningAnalyzing) return;
-  const keyword = document.getElementById('planning-keyword-input').value.trim();
-  const product_desc = document.getElementById('planning-product-input').value.trim();
-  if (!keyword) { document.getElementById('planning-keyword-input').focus(); return; }
-  if (!product_desc) { document.getElementById('planning-product-input').focus(); return; }
-  const market_insights = document.getElementById('planning-insights-input').value.trim();
-  runPlanning(keyword, product_desc, market_insights);
-}
-
-async function runPlanning(keyword, product_desc, market_insights) {
-  planningAnalyzing = true;
-  document.getElementById('planning-btn').disabled = true;
-  document.getElementById('planning-input-section').classList.add('hidden');
-  document.getElementById('planning-report-section').classList.add('hidden');
-  document.getElementById('planning-progress-steps').innerHTML = '';
-  document.getElementById('planning-progress-section').classList.remove('hidden');
-
-  const addStep = makeProgressStepper('planning-progress-steps');
-  addStep('문제 정의 + 제목 + 썸네일 기획 중...', 'active');
-
-  await streamSSE(
-    '/api/planning', { keyword, product_desc, market_insights },
-    addStep,
-    (data) => {
-      document.getElementById('planning-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
-        s.className = 'progress-step done';
-        s.querySelector('.step-icon').textContent = '✅';
-      });
-      addStep('완성!', 'done');
-      setTimeout(() => {
-        document.getElementById('planning-progress-section').classList.add('hidden');
-        renderPlanningReport(data.report, keyword);
-        document.getElementById('planning-report-section').classList.remove('hidden');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        planningAnalyzing = false;
-        document.getElementById('planning-btn').disabled = false;
-      }, 600);
-    },
-    (msg) => {
-      document.getElementById('planning-progress-steps').innerHTML = '';
-      makeProgressStepper('planning-progress-steps')(msg, 'error');
-      planningAnalyzing = false;
-      document.getElementById('planning-btn').disabled = false;
-    }
-  );
-}
-
-function renderPlanningReport(r, keyword) {
-  document.getElementById('planning-report-title').textContent = `"${keyword}" 기획안`;
-
-  // 문제 정의
-  const pd = r.problem_definition || {};
-  const problemEl = document.getElementById('planning-problem');
-  problemEl.innerHTML = `
-    <div class="problem-def-item">
-      <div class="problem-def-label">📍 현상 (지금 시청자의 상황)</div>
-      <div class="problem-def-text">${pd.current_situation || ''}</div>
-    </div>
-    <div class="problem-def-item">
-      <div class="problem-def-label">✨ 욕구 (시청자가 원하는 결과)</div>
-      <div class="problem-def-text">${pd.desired_outcome || ''}</div>
-    </div>
-    <div class="problem-def-item" style="grid-column:1/-1">
-      <div class="problem-def-label">🎯 핵심 문제</div>
-      <div class="problem-def-text" style="font-size:16px;font-weight:700;color:#1e293b">${pd.core_problem || ''}</div>
-    </div>
-    <div class="problem-def-item" style="grid-column:1/-1">
-      <div class="problem-def-label">💡 이 영상의 해결 각도</div>
-      <div class="problem-def-text">${pd.solution_angle || ''}</div>
-    </div>
-  `;
-
-  // 제목 후보
-  const tg = document.getElementById('planning-titles');
+  // 제목
+  const tg = document.getElementById('midform-titles');
   tg.innerHTML = '';
-  (r.recommended_titles || []).forEach((t, i) => {
+  (r.titles || []).forEach((t, i) => {
     const div = document.createElement('div');
     div.className = 'title-card';
     div.innerHTML = `
       <div class="title-num">제목 ${i + 1}</div>
       <div class="title-text">${t.title || t}</div>
-      ${t.ctr_strategy ? `<div class="title-hook" style="color:#f59e0b">전략: ${t.ctr_strategy}</div>` : ''}
+      ${t.strategy ? `<div class="title-hook" style="color:#f59e0b">전략: ${t.strategy}</div>` : ''}
       ${t.hook_reason ? `<div class="title-hook">${t.hook_reason}</div>` : ''}
-      ${t.strength ? `<span class="title-emotion">${t.strength}</span>` : ''}
     `;
     tg.appendChild(div);
   });
 
-  // 썸네일 컨셉
-  const thg = document.getElementById('planning-thumbnails');
+  // 썸네일
+  const thg = document.getElementById('midform-thumbnails');
   thg.innerHTML = '';
-  (r.thumbnail_concepts || []).forEach((t, i) => {
+  (r.thumbnails || []).forEach((t, i) => {
     const div = document.createElement('div');
     div.className = 'thumb-concept-card';
     div.innerHTML = `
-      <div class="thumb-concept-num">썸네일 ${i + 1} — ${t.concept_name || ''}</div>
+      <div class="thumb-concept-num">썸네일 ${i + 1}</div>
       <div class="thumb-main-text">"${t.main_text || ''}"</div>
       ${t.sub_text ? `<div class="thumb-sub-text">${t.sub_text}</div>` : ''}
       <div class="thumb-concept-detail"><strong>🎨 색상/분위기:</strong> ${t.color_mood || ''}</div>
@@ -428,247 +198,249 @@ function renderPlanningReport(r, keyword) {
     `;
     thg.appendChild(div);
   });
-}
 
-// ===== ③ 도입부 작성 =====
+  // 문제 정의
+  const pd = r.problem_definition || {};
+  document.getElementById('midform-problem').innerHTML = `
+    <div class="problem-def-item">
+      <div class="problem-def-label">📍 현재 시청자 상황</div>
+      <div class="problem-def-text">${pd.viewer_situation || ''}</div>
+    </div>
+    <div class="problem-def-item">
+      <div class="problem-def-label">✨ 시청자가 원하는 결과</div>
+      <div class="problem-def-text">${pd.core_desire || ''}</div>
+    </div>
+    <div class="problem-def-item" style="grid-column:1/-1">
+      <div class="problem-def-label">💡 이 영상의 해결 각도</div>
+      <div class="problem-def-text" style="font-size:16px;font-weight:700;color:#1e293b">${pd.video_angle || ''}</div>
+    </div>
+  `;
 
-let _currentIntroScript = '';
+  // 도입부
+  const intro = r.intro || {};
+  document.getElementById('midform-intro').innerHTML = `
+    <div class="midform-intro-formula">
+      <span class="midform-formula-badge">${intro.formula || ''}</span>
+      <span class="midform-formula-reason">${intro.reason || ''}</span>
+    </div>
+    ${intro.hook_line ? `<div class="midform-hook-line">"${intro.hook_line}"</div>` : ''}
+    <div class="intro-script-output" style="margin:12px 24px 20px">${intro.script || ''}</div>
+  `;
 
-function resetToIntro() {
-  document.getElementById('intro-report-section').classList.add('hidden');
-  document.getElementById('intro-progress-section').classList.add('hidden');
-  document.getElementById('intro-input-section').classList.remove('hidden');
-  document.getElementById('intro-btn').disabled = false;
-  introAnalyzing = false;
-}
-
-function startIntro() {
-  if (introAnalyzing) return;
-  const keyword = document.getElementById('intro-keyword-input').value.trim();
-  const product_desc = document.getElementById('intro-product-input').value.trim();
-  const problem_definition = document.getElementById('intro-problem-input').value.trim();
-  const viewer_desire = document.getElementById('intro-desire-input').value.trim();
-  if (!keyword) { document.getElementById('intro-keyword-input').focus(); return; }
-  if (!problem_definition) { document.getElementById('intro-problem-input').focus(); return; }
-  if (!viewer_desire) { document.getElementById('intro-desire-input').focus(); return; }
-  runIntro(keyword, product_desc, problem_definition, viewer_desire);
-}
-
-async function runIntro(keyword, product_desc, problem_definition, viewer_desire) {
-  introAnalyzing = true;
-  document.getElementById('intro-btn').disabled = true;
-  document.getElementById('intro-input-section').classList.add('hidden');
-  document.getElementById('intro-report-section').classList.add('hidden');
-  document.getElementById('intro-progress-steps').innerHTML = '';
-  document.getElementById('intro-progress-section').classList.remove('hidden');
-
-  const addStep = makeProgressStepper('intro-progress-steps');
-  addStep('도입부 대본 작성 중...', 'active');
-
-  await streamSSE(
-    '/api/intro', { keyword, product_desc, problem_definition, viewer_desire },
-    addStep,
-    (data) => {
-      document.getElementById('intro-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
-        s.className = 'progress-step done';
-        s.querySelector('.step-icon').textContent = '✅';
-      });
-      addStep('완성!', 'done');
-      setTimeout(() => {
-        document.getElementById('intro-progress-section').classList.add('hidden');
-        renderIntroReport(data.report, keyword);
-        document.getElementById('intro-report-section').classList.remove('hidden');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        introAnalyzing = false;
-        document.getElementById('intro-btn').disabled = false;
-      }, 600);
-    },
-    (msg) => {
-      document.getElementById('intro-progress-steps').innerHTML = '';
-      makeProgressStepper('intro-progress-steps')(msg, 'error');
-      introAnalyzing = false;
-      document.getElementById('intro-btn').disabled = false;
-    }
-  );
-}
-
-const STAGE_COLORS = {
-  '문제제기': '#ef4444',
-  '공감': '#f59e0b',
-  '손해': '#8b5cf6',
-  '이득': '#10b981',
-  '사례': '#3b82f6',
-};
-
-function renderIntroReport(r, keyword) {
-  _currentIntroScript = r.full_intro || '';
-  document.getElementById('intro-report-title').textContent = `"${keyword}" 도입부 대본`;
-  document.getElementById('intro-full-script').textContent = r.full_intro || '';
-
-  // 단계별 분석
-  const breakdownEl = document.getElementById('intro-breakdown');
-  breakdownEl.innerHTML = '';
-  (r.breakdown || []).forEach((item) => {
-    const color = STAGE_COLORS[item.stage] || '#6b7280';
-    const div = document.createElement('div');
-    div.className = 'intro-breakdown-item';
-    div.innerHTML = `
-      <div class="intro-stage-badge" style="background:${color}20;color:${color};border:1px solid ${color}40">
-        ${item.stage} · ${item.duration_sec || ''}초
-      </div>
-      <div class="intro-stage-script">"${item.text || ''}"</div>
-      <div class="intro-stage-purpose">${item.purpose || ''}</div>
-    `;
-    breakdownEl.appendChild(div);
-  });
-
-  renderList('intro-hook-variations', r.hook_variations);
-  renderList('intro-filming-tips', r.filming_tips);
-}
-
-function copyIntroScript() {
-  if (!_currentIntroScript) return;
-  navigator.clipboard.writeText(_currentIntroScript).then(() => {
-    const btn = document.querySelector('#intro-report-section .copy-btn');
-    if (btn) { btn.textContent = '✅ 복사됨!'; setTimeout(() => btn.textContent = '📋 대본 복사', 2000); }
-  }).catch(() => alert('복사 실패'));
-}
-
-// ===== ④ 대본 작성 =====
-
-let _currentAdaptedScript = '';
-
-function resetToScript() {
-  document.getElementById('script-report-section').classList.add('hidden');
-  document.getElementById('script-progress-section').classList.add('hidden');
-  document.getElementById('script-input-section').classList.remove('hidden');
-  document.getElementById('script-btn').disabled = false;
-  scriptAnalyzing = false;
-}
-
-function startScript() {
-  if (scriptAnalyzing) return;
-  const keyword = document.getElementById('script-keyword-input').value.trim();
-  const product_desc = document.getElementById('script-product-input').value.trim();
-  const reference_script = document.getElementById('script-ref-input').value.trim();
-  const context = document.getElementById('script-context-input').value.trim();
-  if (!keyword) { document.getElementById('script-keyword-input').focus(); return; }
-  if (!reference_script) { document.getElementById('script-ref-input').focus(); return; }
-  runScript(keyword, product_desc, reference_script, context);
-}
-
-async function runScript(keyword, product_desc, reference_script, context) {
-  scriptAnalyzing = true;
-  document.getElementById('script-btn').disabled = true;
-  document.getElementById('script-input-section').classList.add('hidden');
-  document.getElementById('script-report-section').classList.add('hidden');
-  document.getElementById('script-progress-steps').innerHTML = '';
-  document.getElementById('script-progress-section').classList.remove('hidden');
-
-  const addStep = makeProgressStepper('script-progress-steps');
-  addStep('레퍼런스 분석 + 대본 변형 중...', 'active');
-
-  await streamSSE(
-    '/api/script', { keyword, product_desc, reference_script, context },
-    addStep,
-    (data) => {
-      document.getElementById('script-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
-        s.className = 'progress-step done';
-        s.querySelector('.step-icon').textContent = '✅';
-      });
-      addStep('완성!', 'done');
-      setTimeout(() => {
-        document.getElementById('script-progress-section').classList.add('hidden');
-        renderScriptReport(data.report, keyword);
-        document.getElementById('script-report-section').classList.remove('hidden');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        scriptAnalyzing = false;
-        document.getElementById('script-btn').disabled = false;
-      }, 600);
-    },
-    (msg) => {
-      document.getElementById('script-progress-steps').innerHTML = '';
-      makeProgressStepper('script-progress-steps')(msg, 'error');
-      scriptAnalyzing = false;
-      document.getElementById('script-btn').disabled = false;
-    }
-  );
-}
-
-function renderScriptReport(r, keyword) {
-  _currentAdaptedScript = r.adapted_script || '';
-  document.getElementById('script-report-title').textContent = `"${keyword}" 변형 대본`;
-
-  renderList('script-ref-structure', r.reference_structure_analysis);
-
-  document.getElementById('script-adapted').textContent = r.adapted_script || '';
-
-  // 섹션별
-  const sectionsEl = document.getElementById('script-sections');
+  // 전체 원고
+  const sectionsEl = document.getElementById('midform-script-sections');
   sectionsEl.innerHTML = '';
-  (r.sections || []).forEach((s, i) => {
+  (r.script_sections || []).forEach((s) => {
     const div = document.createElement('div');
-    div.className = 'script-section-item';
+    div.className = 'midform-section';
     div.innerHTML = `
-      <div class="script-section-name">📌 ${s.section_name || ''}</div>
-      <div class="script-section-row">
-        <div class="script-section-half">
-          <div class="script-section-label">레퍼런스 방식</div>
-          <div class="script-section-val">${s.original_approach || ''}</div>
-        </div>
-        <div class="script-section-half">
-          <div class="script-section-label">내 버전</div>
-          <div class="script-section-val">${s.my_version || ''}</div>
-        </div>
+      <div class="midform-section-header">
+        <span class="midform-section-time">${s.timestamp || ''}</span>
+        <span class="midform-section-name">${s.name || ''}</span>
       </div>
-      ${s.script ? `<div class="script-section-text">"${s.script}"</div>` : ''}
+      <div class="midform-section-content">${s.content || ''}</div>
+      <div class="midform-section-script">"${s.script || ''}"</div>
+      ${s.filming_tip ? `<div class="midform-section-tip">💡 ${s.filming_tip}</div>` : ''}
     `;
     sectionsEl.appendChild(div);
   });
 
-  // 추가 요소
-  const enhEl = document.getElementById('script-enhancements');
-  enhEl.innerHTML = '';
-  (r.enhancement_suggestions || []).forEach(e => {
+  // CTA
+  document.getElementById('midform-cta').textContent = r.cta || '';
+
+  // 반드시 넣어야 할 내용
+  renderList('midform-must-include', r.must_include);
+
+  // 차별화 포인트
+  const dg = document.getElementById('midform-differentiation');
+  dg.innerHTML = '';
+  (r.differentiation || []).forEach(p => {
     const div = document.createElement('div');
-    div.className = 'enhancement-card';
-    div.innerHTML = `
-      <div class="enhancement-type">${e.type}</div>
-      <div class="enhancement-suggestion">${e.suggestion}</div>
-      <div class="enhancement-why">${e.why}</div>
-    `;
-    enhEl.appendChild(div);
+    div.className = 'diff-card';
+    div.textContent = p;
+    dg.appendChild(div);
   });
 
-  // 댓글 유도
-  const ci = r.comment_inducing || {};
-  const commentEl = document.getElementById('script-comment');
-  commentEl.innerHTML = `
-    <div style="font-weight:700;color:#ef4444;margin-bottom:10px">전략: ${ci.strategy || ''}</div>
-    <div class="intro-script-output" style="border-left-color:#ef4444;margin-bottom:16px">${ci.ending_script || ''}</div>
-    ${(ci.question_variations || []).map((q, i) => `
-      <div class="comment-question-item">
-        <span class="comment-q-num">Q${i+1}</span>
-        <span>${q}</span>
+  // 예상 길이
+  const dur = document.getElementById('midform-duration');
+  if (r.estimated_duration) {
+    dur.textContent = r.estimated_duration;
+    dur.style.display = '';
+  } else {
+    dur.style.display = 'none';
+  }
+}
+
+// ===== 📱 숏폼 기획 =====
+
+let _selectedDuration = '30';
+let _currentShortformCaption = '';
+
+function selectDuration(btn) {
+  document.querySelectorAll('.duration-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _selectedDuration = btn.dataset.dur;
+}
+
+function resetToShortform() {
+  document.getElementById('shortform-report-section').classList.add('hidden');
+  document.getElementById('shortform-progress-section').classList.add('hidden');
+  document.getElementById('shortform-input-section').classList.remove('hidden');
+  document.getElementById('shortform-btn').disabled = false;
+  shortformAnalyzing = false;
+}
+
+function startShortform() {
+  if (shortformAnalyzing) return;
+  const keyword = document.getElementById('shortform-keyword-input').value.trim();
+  if (!keyword) { document.getElementById('shortform-keyword-input').focus(); return; }
+  const product_desc = document.getElementById('shortform-product-input').value.trim();
+  runShortform(keyword, product_desc, _selectedDuration);
+}
+
+async function runShortform(keyword, product_desc, duration) {
+  shortformAnalyzing = true;
+  document.getElementById('shortform-btn').disabled = true;
+  document.getElementById('shortform-input-section').classList.add('hidden');
+  document.getElementById('shortform-report-section').classList.add('hidden');
+  document.getElementById('shortform-progress-steps').innerHTML = '';
+  document.getElementById('shortform-progress-section').classList.remove('hidden');
+
+  const addStep = makeProgressStepper('shortform-progress-steps');
+  addStep('분석 준비 중...', 'active');
+
+  await streamSSE(
+    '/api/shortform', { keyword, product_desc, duration },
+    addStep,
+    (data) => {
+      document.getElementById('shortform-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
+        s.className = 'progress-step done';
+        s.querySelector('.step-icon').textContent = '✅';
+      });
+      addStep('기획 완성!', 'done');
+      setTimeout(() => {
+        document.getElementById('shortform-progress-section').classList.add('hidden');
+        renderShortformReport(data.report, keyword);
+        document.getElementById('shortform-report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        shortformAnalyzing = false;
+        document.getElementById('shortform-btn').disabled = false;
+      }, 600);
+    },
+    (msg) => {
+      document.getElementById('shortform-progress-steps').innerHTML = '';
+      makeProgressStepper('shortform-progress-steps')(msg, 'error');
+      shortformAnalyzing = false;
+      document.getElementById('shortform-btn').disabled = false;
+    }
+  );
+}
+
+function renderShortformReport(r, keyword) {
+  _currentShortformCaption = r.caption?.full_caption || '';
+  document.getElementById('shortform-report-title').textContent = `"${keyword}" 릴스 기획안`;
+
+  const cm = document.getElementById('shortform-core-message');
+  cm.textContent = r.core_message || '';
+  cm.style.display = r.core_message ? '' : 'none';
+
+  const hooksEl = document.getElementById('shortform-hooks');
+  hooksEl.innerHTML = '';
+  (r.hooks || []).forEach((h, i) => {
+    const div = document.createElement('div');
+    div.className = 'shortform-hook-card';
+    div.innerHTML = `
+      <div class="shortform-hook-num">훅 ${i + 1} <span class="shortform-hook-type">${h.type || ''}</span></div>
+      <div class="shortform-hook-text">"${h.text || ''}"</div>
+      <div class="shortform-hook-why">${h.why || ''}</div>
+    `;
+    hooksEl.appendChild(div);
+  });
+
+  const scriptEl = document.getElementById('shortform-script');
+  scriptEl.innerHTML = '';
+  (r.script || []).forEach((s) => {
+    const div = document.createElement('div');
+    div.className = 'shortform-scene';
+    div.innerHTML = `
+      <div class="shortform-scene-time">${s.time || ''}</div>
+      <div class="shortform-scene-body">
+        <div class="shortform-scene-scene">🎥 ${s.scene || ''}</div>
+        ${s.narration ? `<div class="shortform-scene-narration">🗣 "${s.narration}"</div>` : ''}
+        ${s.text_overlay ? `<div class="shortform-scene-overlay">📝 자막: <strong>${s.text_overlay}</strong></div>` : ''}
+        ${s.action ? `<div class="shortform-scene-action">💡 ${s.action}</div>` : ''}
       </div>
-    `).join('')}
+    `;
+    scriptEl.appendChild(div);
+  });
+
+  renderList('shortform-save-triggers', r.save_triggers);
+  renderList('shortform-share-triggers', r.share_triggers);
+
+  const ctaEl = document.getElementById('shortform-comment-cta');
+  const cta = r.comment_cta || {};
+  ctaEl.innerHTML = `
+    <div class="shortform-cta-question">"${cta.question || ''}"</div>
+    <div class="shortform-cta-why">${cta.why_comments || ''}</div>
+    ${(cta.alternatives || []).map((a, i) => `<div class="shortform-cta-alt">대안 ${i+1}: "${a}"</div>`).join('')}
+  `;
+
+  const coverEl = document.getElementById('shortform-cover-frame');
+  const cf = r.cover_frame || {};
+  coverEl.innerHTML = `
+    <div class="shortform-cover-grid">
+      <div class="shortform-cover-preview">
+        <div class="shortform-cover-main">${cf.main_text || ''}</div>
+        ${cf.sub_text ? `<div class="shortform-cover-sub">${cf.sub_text}</div>` : ''}
+      </div>
+      <div class="shortform-cover-info">
+        <div class="shortform-cover-detail"><strong>📸 비주얼:</strong> ${cf.visual || ''}</div>
+        <div class="shortform-cover-detail"><strong>✅ 클릭 이유:</strong> ${cf.why_clicks || ''}</div>
+      </div>
+    </div>
+  `;
+
+  const capEl = document.getElementById('shortform-caption');
+  const cap = r.caption || {};
+  capEl.innerHTML = `
+    <div class="shortform-caption-box">
+      <div class="shortform-caption-label">첫 줄 훅</div>
+      <div class="shortform-caption-hook">${cap.hook_line || ''}</div>
+    </div>
+    <div class="shortform-caption-full">
+      <div class="shortform-caption-label">완성 캡션 <button class="shortform-copy-mini" onclick="copyShortformCaption()">복사</button></div>
+      <pre class="shortform-caption-text">${cap.full_caption || ''}</pre>
+    </div>
+  `;
+
+  const hashEl = document.getElementById('shortform-hashtags');
+  const ht = r.hashtags || {};
+  const renderTags = (tags, cls) => (tags || []).map(t => `<span class="hash-tag ${cls}">${t}</span>`).join('');
+  hashEl.innerHTML = `
+    <div class="hash-group"><div class="hash-group-label">핵심 (검색량 높음)</div><div class="hash-tags">${renderTags(ht.core, 'hash-core')}</div></div>
+    <div class="hash-group"><div class="hash-group-label">틈새 (경쟁 낮음)</div><div class="hash-tags">${renderTags(ht.niche, 'hash-niche')}</div></div>
+    <div class="hash-group"><div class="hash-group-label">트렌딩</div><div class="hash-tags">${renderTags(ht.trending, 'hash-trending')}</div></div>
+    ${ht.strategy ? `<div class="hash-strategy">${ht.strategy}</div>` : ''}
+  `;
+
+  renderList('shortform-text-overlay', r.text_overlay_guide);
+
+  const mlEl = document.getElementById('shortform-music-loop');
+  mlEl.innerHTML = `
+    <div style="margin-bottom:12px"><strong>🎵 음악:</strong> ${r.music_mood || ''}</div>
+    <div><strong>🔁 루프 팁:</strong> ${r.loop_tip || ''}</div>
   `;
 }
 
-function copyAdaptedScript() {
-  if (!_currentAdaptedScript) return;
-  navigator.clipboard.writeText(_currentAdaptedScript).then(() => {
-    const btn = document.querySelector('#script-report-section .copy-btn');
-    if (btn) { btn.textContent = '✅ 복사됨!'; setTimeout(() => btn.textContent = '📋 대본 복사', 2000); }
+function copyShortformCaption() {
+  if (!_currentShortformCaption) return;
+  navigator.clipboard.writeText(_currentShortformCaption).then(() => {
+    const btns = document.querySelectorAll('#shortform-report-section .copy-btn, .shortform-copy-mini');
+    btns.forEach(btn => { btn.textContent = '✅ 복사됨!'; setTimeout(() => btn.textContent = btn.classList.contains('copy-btn') ? '📋 캡션 복사' : '복사', 2000); });
   }).catch(() => alert('복사 실패'));
 }
 
-// ===== ⑤ 편집 피드백 =====
-
-document.addEventListener('DOMContentLoaded', () => {
-  const ei = document.getElementById('edit-keyword-input');
-  if (ei) ei.addEventListener('keydown', e => { if (e.key === 'Enter') startEditAnalysis(); });
-});
+// ===== ✏️ 편집 피드백 =====
 
 function resetToEdit() {
   document.getElementById('edit-report-section').classList.add('hidden');
@@ -801,198 +573,10 @@ function renderEditReport(r, keyword) {
   });
 }
 
-// ===== 📱 숏폼 기획 =====
-
-let _selectedDuration = '30';
-let _currentShortformCaption = '';
-
-function selectDuration(btn) {
-  document.querySelectorAll('.duration-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  _selectedDuration = btn.dataset.dur;
-}
-
-function resetToShortform() {
-  document.getElementById('shortform-report-section').classList.add('hidden');
-  document.getElementById('shortform-progress-section').classList.add('hidden');
-  document.getElementById('shortform-input-section').classList.remove('hidden');
-  document.getElementById('shortform-btn').disabled = false;
-  shortformAnalyzing = false;
-}
-
-function startShortform() {
-  if (shortformAnalyzing) return;
-  const keyword = document.getElementById('shortform-keyword-input').value.trim();
-  if (!keyword) { document.getElementById('shortform-keyword-input').focus(); return; }
-  const product_desc = document.getElementById('shortform-product-input').value.trim();
-  const market_insights = document.getElementById('shortform-insights-input').value.trim();
-  const reference_reel = document.getElementById('shortform-ref-input').value.trim();
-  runShortform(keyword, product_desc, _selectedDuration, market_insights, reference_reel);
-}
-
-async function runShortform(keyword, product_desc, duration, market_insights, reference_reel) {
-  shortformAnalyzing = true;
-  document.getElementById('shortform-btn').disabled = true;
-  document.getElementById('shortform-input-section').classList.add('hidden');
-  document.getElementById('shortform-report-section').classList.add('hidden');
-  document.getElementById('shortform-progress-steps').innerHTML = '';
-  document.getElementById('shortform-progress-section').classList.remove('hidden');
-
-  const addStep = makeProgressStepper('shortform-progress-steps');
-  addStep(`${duration}초 릴스 기획 중...`, 'active');
-
-  await streamSSE(
-    '/api/shortform', { keyword, product_desc, duration, market_insights, reference_reel },
-    addStep,
-    (data) => {
-      document.getElementById('shortform-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
-        s.className = 'progress-step done';
-        s.querySelector('.step-icon').textContent = '✅';
-      });
-      addStep('완성!', 'done');
-      setTimeout(() => {
-        document.getElementById('shortform-progress-section').classList.add('hidden');
-        renderShortformReport(data.report, keyword);
-        document.getElementById('shortform-report-section').classList.remove('hidden');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        shortformAnalyzing = false;
-        document.getElementById('shortform-btn').disabled = false;
-      }, 600);
-    },
-    (msg) => {
-      document.getElementById('shortform-progress-steps').innerHTML = '';
-      makeProgressStepper('shortform-progress-steps')(msg, 'error');
-      shortformAnalyzing = false;
-      document.getElementById('shortform-btn').disabled = false;
-    }
-  );
-}
-
-function renderShortformReport(r, keyword) {
-  _currentShortformCaption = r.caption?.full_caption || '';
-  document.getElementById('shortform-report-title').textContent = `"${keyword}" 릴스 기획안`;
-
-  // 핵심 메시지
-  const cm = document.getElementById('shortform-core-message');
-  cm.textContent = r.core_message || '';
-  cm.style.display = r.core_message ? '' : 'none';
-
-  // 훅
-  const hooksEl = document.getElementById('shortform-hooks');
-  hooksEl.innerHTML = '';
-  (r.hooks || []).forEach((h, i) => {
-    const div = document.createElement('div');
-    div.className = 'shortform-hook-card';
-    div.innerHTML = `
-      <div class="shortform-hook-num">훅 ${i + 1} <span class="shortform-hook-type">${h.type || ''}</span></div>
-      <div class="shortform-hook-text">"${h.text || ''}"</div>
-      <div class="shortform-hook-why">${h.why || ''}</div>
-    `;
-    hooksEl.appendChild(div);
-  });
-
-  // 스크립트
-  const scriptEl = document.getElementById('shortform-script');
-  scriptEl.innerHTML = '';
-  (r.script || []).forEach((s, i) => {
-    const div = document.createElement('div');
-    div.className = 'shortform-scene';
-    div.innerHTML = `
-      <div class="shortform-scene-time">${s.time || ''}</div>
-      <div class="shortform-scene-body">
-        <div class="shortform-scene-scene">🎥 ${s.scene || ''}</div>
-        ${s.narration ? `<div class="shortform-scene-narration">🗣 "${s.narration}"</div>` : ''}
-        ${s.text_overlay ? `<div class="shortform-scene-overlay">📝 자막: <strong>${s.text_overlay}</strong></div>` : ''}
-        ${s.action ? `<div class="shortform-scene-action">💡 ${s.action}</div>` : ''}
-      </div>
-    `;
-    scriptEl.appendChild(div);
-  });
-
-  // 저장/공유
-  renderList('shortform-save-triggers', r.save_triggers);
-  renderList('shortform-share-triggers', r.share_triggers);
-
-  // 댓글 CTA
-  const ctaEl = document.getElementById('shortform-comment-cta');
-  const cta = r.comment_cta || {};
-  ctaEl.innerHTML = `
-    <div class="shortform-cta-question">"${cta.question || ''}"</div>
-    <div class="shortform-cta-why">${cta.why_comments || ''}</div>
-    ${(cta.alternatives || []).map((a, i) => `<div class="shortform-cta-alt">대안 ${i+1}: "${a}"</div>`).join('')}
-  `;
-
-  // 커버 프레임
-  const coverEl = document.getElementById('shortform-cover-frame');
-  const cf = r.cover_frame || {};
-  coverEl.innerHTML = `
-    <div class="shortform-cover-grid">
-      <div class="shortform-cover-preview">
-        <div class="shortform-cover-main">${cf.main_text || ''}</div>
-        ${cf.sub_text ? `<div class="shortform-cover-sub">${cf.sub_text}</div>` : ''}
-      </div>
-      <div class="shortform-cover-info">
-        <div class="shortform-cover-detail"><strong>📸 비주얼:</strong> ${cf.visual || ''}</div>
-        <div class="shortform-cover-detail"><strong>✅ 클릭 이유:</strong> ${cf.why_clicks || ''}</div>
-      </div>
-    </div>
-  `;
-
-  // 캡션
-  const capEl = document.getElementById('shortform-caption');
-  const cap = r.caption || {};
-  capEl.innerHTML = `
-    <div class="shortform-caption-box">
-      <div class="shortform-caption-label">첫 줄 훅</div>
-      <div class="shortform-caption-hook">${cap.hook_line || ''}</div>
-    </div>
-    <div class="shortform-caption-full">
-      <div class="shortform-caption-label">완성 캡션 <button class="shortform-copy-mini" onclick="copyShortformCaption()">복사</button></div>
-      <pre class="shortform-caption-text">${cap.full_caption || ''}</pre>
-    </div>
-  `;
-
-  // 해시태그
-  const hashEl = document.getElementById('shortform-hashtags');
-  const ht = r.hashtags || {};
-  const renderTags = (tags, cls) => (tags || []).map(t => `<span class="hash-tag ${cls}">${t}</span>`).join('');
-  hashEl.innerHTML = `
-    <div class="hash-group"><div class="hash-group-label">핵심 (검색량 높음)</div><div class="hash-tags">${renderTags(ht.core, 'hash-core')}</div></div>
-    <div class="hash-group"><div class="hash-group-label">틈새 (경쟁 낮음)</div><div class="hash-tags">${renderTags(ht.niche, 'hash-niche')}</div></div>
-    <div class="hash-group"><div class="hash-group-label">트렌딩</div><div class="hash-tags">${renderTags(ht.trending, 'hash-trending')}</div></div>
-    ${ht.strategy ? `<div class="hash-strategy">${ht.strategy}</div>` : ''}
-  `;
-
-  // 자막 가이드
-  renderList('shortform-text-overlay', r.text_overlay_guide);
-
-  // 음악 & 루프
-  const mlEl = document.getElementById('shortform-music-loop');
-  mlEl.innerHTML = `
-    <div style="margin-bottom:12px"><strong>🎵 음악:</strong> ${r.music_mood || ''}</div>
-    <div><strong>🔁 루프 팁:</strong> ${r.loop_tip || ''}</div>
-  `;
-}
-
-function copyShortformCaption() {
-  if (!_currentShortformCaption) return;
-  navigator.clipboard.writeText(_currentShortformCaption).then(() => {
-    const btns = document.querySelectorAll('#shortform-report-section .copy-btn, .shortform-copy-mini');
-    btns.forEach(btn => { btn.textContent = '✅ 복사됨!'; setTimeout(() => btn.textContent = btn.classList.contains('copy-btn') ? '📋 캡션 복사' : '복사', 2000); });
-  }).catch(() => alert('복사 실패'));
-}
-
-// ===== 히스토리 =====
-
-async function downloadHistoryPDF(id) {
-  const data = await fetch(`/api/history/${id}`).then(r => r.json());
-  if (['research', 'edit'].includes(data.type)) {
-    openPrintWindow(data.report, data.keyword, data.type);
-  }
-}
+// ===== 📚 히스토리 =====
 
 async function loadHistory(type) {
-  ['all','research','planning','intro','script','edit','shortform'].forEach(t => {
+  ['all', 'midform', 'shortform', 'edit'].forEach(t => {
     const el = document.getElementById(`hf-${t}`);
     if (el) el.classList.toggle('active', (type || '') === (t === 'all' ? '' : t));
   });
@@ -1007,8 +591,14 @@ async function loadHistory(type) {
     return;
   }
 
-  const typeLabels = { research: '시장조사', edit: '편집 피드백', planning: '기획', intro: '도입부', script: '대본', shortform: '숏폼' };
-  const typeColors = { research: '#3b82f6', edit: '#8b5cf6', planning: '#f59e0b', intro: '#10b981', script: '#ef4444', shortform: '#ec4899' };
+  const typeLabels = {
+    midform: '미드폼', shortform: '숏폼', edit: '편집 피드백',
+    research: '시장조사', planning: '기획', intro: '도입부', script: '대본'
+  };
+  const typeColors = {
+    midform: '#3b82f6', shortform: '#ec4899', edit: '#8b5cf6',
+    research: '#6366f1', planning: '#f59e0b', intro: '#10b981', script: '#ef4444'
+  };
 
   list.innerHTML = '';
   data.forEach(item => {
@@ -1037,48 +627,12 @@ async function loadHistoryItem(id) {
   const data = await fetch(`/api/history/${id}`).then(r => r.json());
 
   const actions = {
-    research: () => {
-      switchTab('research'); resetToSearch();
+    midform: () => {
+      switchTab('midform'); resetToMidform();
       setTimeout(() => {
-        renderReport(data.report, data.keyword);
-        document.getElementById('report-section').classList.remove('hidden');
-        document.getElementById('search-section').classList.add('hidden');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }, 100);
-    },
-    planning: () => {
-      switchTab('planning'); resetToPlanning();
-      setTimeout(() => {
-        renderPlanningReport(data.report, data.keyword);
-        document.getElementById('planning-report-section').classList.remove('hidden');
-        document.getElementById('planning-input-section').classList.add('hidden');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }, 100);
-    },
-    intro: () => {
-      switchTab('intro'); resetToIntro();
-      setTimeout(() => {
-        renderIntroReport(data.report, data.keyword);
-        document.getElementById('intro-report-section').classList.remove('hidden');
-        document.getElementById('intro-input-section').classList.add('hidden');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }, 100);
-    },
-    script: () => {
-      switchTab('script'); resetToScript();
-      setTimeout(() => {
-        renderScriptReport(data.report, data.keyword);
-        document.getElementById('script-report-section').classList.remove('hidden');
-        document.getElementById('script-input-section').classList.add('hidden');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }, 100);
-    },
-    edit: () => {
-      switchTab('edit'); resetToEdit();
-      setTimeout(() => {
-        renderEditReport(data.report, data.keyword);
-        document.getElementById('edit-report-section').classList.remove('hidden');
-        document.getElementById('edit-input-section').classList.add('hidden');
+        renderMidformReport(data.report, data.keyword);
+        document.getElementById('midform-report-section').classList.remove('hidden');
+        document.getElementById('midform-input-section').classList.add('hidden');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }, 100);
     },
@@ -1091,9 +645,51 @@ async function loadHistoryItem(id) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }, 100);
     },
+    edit: () => {
+      switchTab('edit'); resetToEdit();
+      setTimeout(() => {
+        renderEditReport(data.report, data.keyword);
+        document.getElementById('edit-report-section').classList.remove('hidden');
+        document.getElementById('edit-input-section').classList.add('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
+    // legacy history items
+    research: () => {
+      switchTab('research');
+      setTimeout(() => {
+        renderReport(data.report, data.keyword);
+        document.getElementById('report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
+    planning: () => {
+      switchTab('planning');
+      setTimeout(() => {
+        renderPlanningReport(data.report, data.keyword);
+        document.getElementById('planning-report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
+    intro: () => {
+      switchTab('intro');
+      setTimeout(() => {
+        renderIntroReport(data.report, data.keyword);
+        document.getElementById('intro-report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
+    script: () => {
+      switchTab('script');
+      setTimeout(() => {
+        renderScriptReport(data.report, data.keyword);
+        document.getElementById('script-report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
   };
 
-  (actions[data.type] || actions.research)();
+  (actions[data.type] || actions.midform)();
 }
 
 async function deleteHistoryItem(id, btn) {
@@ -1104,4 +700,95 @@ async function deleteHistoryItem(id, btn) {
   const remaining = document.getElementById('history-list').querySelectorAll('.history-card').length;
   document.getElementById('history-count').textContent = `총 ${remaining}건`;
   if (!remaining) document.getElementById('history-list').innerHTML = '<div class="history-empty">저장된 결과가 없습니다.</div>';
+}
+
+// ===== 하위호환 렌더 함수 (이전 히스토리 항목용) =====
+
+let _currentReport = null;
+let _currentKeyword = '';
+
+function renderReport(r, keyword) {
+  _currentReport = r; _currentKeyword = keyword;
+  document.getElementById('report-keyword-title').textContent = `"${keyword}" 시장조사 결과`;
+  document.getElementById('report-subtitle').textContent = '유튜브 + 네이버 데이터 기반';
+  const cb = document.getElementById('concept-banner');
+  cb.textContent = r.one_line_concept || '';
+  cb.style.display = r.one_line_concept ? '' : 'none';
+  document.getElementById('summary-text').textContent = r.summary || '';
+  renderList('desire-curiosity', r.desire_analysis?.curiosity);
+  renderList('desire-complaints', r.desire_analysis?.complaints);
+  renderList('desire-wants', r.desire_analysis?.wants);
+  const ql = document.getElementById('top-questions');
+  ql.innerHTML = '';
+  (r.top_questions || []).forEach((q, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="q-num">${i + 1}</span><span>${q}</span>`;
+    ql.appendChild(li);
+  });
+  renderList('must-include', r.must_include_content);
+  const dg = document.getElementById('diff-points');
+  dg.innerHTML = '';
+  (r.differentiation_points || []).forEach(p => {
+    const div = document.createElement('div');
+    div.className = 'diff-card';
+    div.textContent = p;
+    dg.appendChild(div);
+  });
+  const vl = document.getElementById('top-videos-list');
+  vl.innerHTML = '';
+  (r.top_videos || []).forEach(v => {
+    const card = document.createElement('div');
+    card.className = 'video-thumb-card';
+    card.innerHTML = `<a href="${v.url}" target="_blank" rel="noopener"><img src="${v.thumbnail}" alt="${v.title}" loading="lazy" /><div class="video-thumb-info"><div class="video-thumb-title">${v.title}</div><div class="video-thumb-views">조회수 ${fmt(v.views)}회 · ${v.channel}</div></div></a>`;
+    vl.appendChild(card);
+  });
+}
+
+function renderPlanningReport(r, keyword) {
+  document.getElementById('planning-report-title').textContent = `"${keyword}" 기획안`;
+  const pd = r.problem_definition || {};
+  document.getElementById('planning-problem').innerHTML = `
+    <div class="problem-def-item"><div class="problem-def-label">현상</div><div class="problem-def-text">${pd.current_situation || ''}</div></div>
+    <div class="problem-def-item"><div class="problem-def-label">욕구</div><div class="problem-def-text">${pd.desired_outcome || ''}</div></div>
+    <div class="problem-def-item" style="grid-column:1/-1"><div class="problem-def-label">핵심 문제</div><div class="problem-def-text">${pd.core_problem || ''}</div></div>
+    <div class="problem-def-item" style="grid-column:1/-1"><div class="problem-def-label">해결 각도</div><div class="problem-def-text">${pd.solution_angle || ''}</div></div>
+  `;
+  const tg = document.getElementById('planning-titles');
+  tg.innerHTML = '';
+  (r.recommended_titles || []).forEach((t, i) => {
+    const div = document.createElement('div');
+    div.className = 'title-card';
+    div.innerHTML = `<div class="title-num">제목 ${i+1}</div><div class="title-text">${t.title || t}</div>${t.hook_reason ? `<div class="title-hook">${t.hook_reason}</div>` : ''}`;
+    tg.appendChild(div);
+  });
+  const thg = document.getElementById('planning-thumbnails');
+  thg.innerHTML = '';
+  (r.thumbnail_concepts || []).forEach((t, i) => {
+    const div = document.createElement('div');
+    div.className = 'thumb-concept-card';
+    div.innerHTML = `<div class="thumb-concept-num">썸네일 ${i+1}</div><div class="thumb-main-text">"${t.main_text||''}"</div><div class="thumb-concept-detail">${t.visual||''}</div>`;
+    thg.appendChild(div);
+  });
+}
+
+let _currentIntroScript = '';
+function renderIntroReport(r, keyword) {
+  _currentIntroScript = r.full_intro || '';
+  document.getElementById('intro-report-title').textContent = `"${keyword}" 도입부`;
+  document.getElementById('intro-full-script').textContent = r.full_intro || '';
+  const breakdownEl = document.getElementById('intro-breakdown');
+  breakdownEl.innerHTML = '';
+  (r.breakdown || []).forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'intro-breakdown-item';
+    div.innerHTML = `<div class="intro-stage-badge">${item.stage} · ${item.duration_sec || ''}초</div><div class="intro-stage-script">"${item.text||''}"</div><div class="intro-stage-purpose">${item.purpose||''}</div>`;
+    breakdownEl.appendChild(div);
+  });
+}
+
+let _currentAdaptedScript = '';
+function renderScriptReport(r, keyword) {
+  _currentAdaptedScript = r.adapted_script || '';
+  document.getElementById('script-report-title').textContent = `"${keyword}" 변형 대본`;
+  document.getElementById('script-adapted').textContent = r.adapted_script || '';
 }

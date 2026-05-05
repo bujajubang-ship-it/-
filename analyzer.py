@@ -340,9 +340,122 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
 
         return _safe_json(msg.content[0].text.strip())
 
-    async def analyze_shortform(self, keyword: str, product_desc: str, duration: str, market_insights: str, reference_reel: str) -> Dict:
+    async def analyze_midform(self, keyword: str, product_desc: str, videos: List[Dict], naver: List[Dict]) -> Dict:
+        videos_text = self._build_videos_text(videos)
+        naver_text = self._build_naver_text(naver)
+
+        thumb_blocks = []
+        for v in videos[:3]:
+            url = v.get("thumbnail_url", "")
+            if url:
+                b64 = await self._fetch_thumbnail_b64(url)
+                if b64:
+                    thumb_blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}})
+
+        system_prompt = (
+            "당신은 유튜브 영상 기획 전문가입니다. "
+            "시장 데이터를 분석하여 제목부터 전체 원고까지 영상 제작의 모든 단계를 한 번에 완성합니다. "
+            "도입부는 문제제기/공감/손해/이득/사례 중 이 제품과 주제에 가장 잘 맞는 요소 2-3개를 선택해 자연스럽게 조합하세요. "
+            "5단계를 모두 순서대로 쓰는 것이 아니라, 상황에 맞는 요소를 골라 결합하는 것이 핵심입니다. "
+            "전체 원고는 실제 카메라 앞에서 말할 수 있는 구어체로 작성하세요. "
+            "반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만."
+        )
+
+        user_text = f"""키워드: "{keyword}"
+내 채널/제품: {product_desc}
+
+== 유튜브 상위 영상 데이터 ==
+{videos_text}
+
+== 네이버 카페 반응 ==
+{naver_text}
+
+위 시장 데이터를 바탕으로 영상 제작의 모든 단계를 포함한 완성된 기획안을 작성하세요.
+
+[도입부 공식 선택 원칙]
+- 정보/꿀팁 콘텐츠 → 공감 + 이득 조합 추천
+- 신제품 소개 → 문제제기 + 이득 + 사례 조합 추천
+- 비교/검증 → 공감 + 손해 + 이득 조합 추천
+- 어떤 요소를 선택했는지 formula 필드에 명시하고, 이유도 설명할 것
+
+{{
+  "concept": "이 영상의 핵심 컨셉 한 줄 (제작 방향 잡는 문장)",
+  "market_summary": "시장 상황과 시청자 핵심 욕구 2-3문장",
+  "viewer_desires": {{
+    "curiosity": ["구체적 궁금증 5-6개"],
+    "complaints": ["구체적 불만/페인포인트 5-6개"],
+    "wants": ["시청자가 원하는 것 5-6개"]
+  }},
+  "titles": [
+    {{
+      "title": "제목 (30자 내외)",
+      "strategy": "클릭 심리 전략 (공포/호기심/이득/비교 등)",
+      "hook_reason": "클릭하고 싶어지는 이유"
+    }}
+  ],
+  "thumbnails": [
+    {{
+      "main_text": "썸네일 메인 문구 (5-10자, 강렬하게)",
+      "sub_text": "서브 문구 (없으면 빈 문자열)",
+      "visual": "이미지/배경/구도 설명 (촬영자가 바로 재현 가능하게)",
+      "color_mood": "주요 색상과 분위기",
+      "expression": "표정/포즈 (사람이 나오는 경우)",
+      "why_clicks": "클릭 유도 이유"
+    }}
+  ],
+  "problem_definition": {{
+    "viewer_situation": "시청자가 지금 처한 상황",
+    "core_desire": "시청자가 진짜 원하는 결과",
+    "video_angle": "이 영상이 문제를 해결하는 각도"
+  }},
+  "intro": {{
+    "formula": "선택한 공식 요소들 (예: 공감 + 손해 + 이득)",
+    "reason": "이 공식을 선택한 이유",
+    "script": "완성된 도입부 대본 (30-50초 분량, 구어체)",
+    "hook_line": "첫 문장 (스크롤을 멈추게 하는)"
+  }},
+  "script_sections": [
+    {{
+      "name": "섹션명",
+      "timestamp": "00:00-01:30",
+      "content": "이 섹션에서 다룰 핵심 내용",
+      "script": "실제 대본 (구어체, 100-200자)",
+      "filming_tip": "이 장면 촬영 팁"
+    }}
+  ],
+  "cta": "영상 마지막 댓글/구독 유도 대본 (구어체)",
+  "estimated_duration": "예상 영상 길이 (예: 5-7분)",
+  "must_include": ["반드시 넣어야 할 내용 6-8개"],
+  "differentiation": ["차별화 포인트 4-5개 (근거 포함)"]
+}}
+
+titles는 5개, thumbnails는 3개, script_sections는 영상 흐름에 맞게 4-7개 작성하세요."""
+
+        content: list = []
+        if thumb_blocks:
+            content.append({"type": "text", "text": "상위 영상 썸네일 참고:\n"})
+            content.extend(thumb_blocks)
+        content.append({"type": "text", "text": user_text})
+
+        msg = await self.client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[{"role": "user", "content": content}],
+        )
+
+        return _safe_json(msg.content[0].text.strip())
+
+    async def analyze_shortform(self, keyword: str, product_desc: str, duration: str, videos: List[Dict] = None, naver: List[Dict] = None) -> Dict:
+        market_section = ""
+        if videos:
+            market_section += f"\n== 유튜브 시장 데이터 (시청자 욕구·관심사 분석용) ==\n{self._build_videos_text(videos)}\n"
+        if naver:
+            market_section += f"\n== 네이버 카페 반응 ==\n{self._build_naver_text(naver)}\n"
+
         system_prompt = (
             "당신은 인스타그램 릴스 전문 콘텐츠 전략가입니다. "
+            "시장 데이터(유튜브 댓글, 네이버 카페)를 분석해 시청자가 진짜 원하는 것을 파악하고, "
             "인스타그램 알고리즘에서 저장·공유·댓글이 노출을 결정한다는 것을 알고, "
             "이 세 가지 지표를 극대화하는 숏폼 콘텐츠를 기획합니다. "
             "첫 1-3초 훅이 스크롤을 멈추게 해야 하며, 자막/텍스트 오버레이로 음소거 시청도 소화 가능해야 합니다. "
@@ -352,11 +465,10 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
         user_text = f"""주제/키워드: "{keyword}"
 내 제품/서비스/채널: {product_desc or "없음"}
 영상 길이: {duration}초
-시장조사 인사이트: {market_insights or "없음 — 키워드 기반으로 분석"}
-참고 릴스 내용: {reference_reel or "없음"}
+{market_section or "시장 데이터 없음 — 키워드 기반으로 분석"}
 
 인스타그램 릴스 알고리즘 핵심: 저장 > 공유 > 댓글 > 좋아요 순으로 노출에 영향.
-위 정보를 바탕으로 아래 JSON 형식으로 숏폼 기획안을 작성하세요.
+위 시장 데이터와 정보를 바탕으로 아래 JSON 형식으로 숏폼 기획안을 작성하세요.
 
 {{
   "core_message": "이 릴스 하나로 전달할 핵심 메시지 한 문장 (시청자가 저장하고 싶어지는 유용한 내용)",
