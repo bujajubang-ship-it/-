@@ -22,12 +22,12 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 
 /* Header */
 .site-header { background: #fff; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
-.header-inner { max-width: 1100px; margin: 0 auto; padding: 0 24px; height: 58px; display: flex; align-items: center; justify-content: space-between; }
-.logo { display: flex; align-items: center; gap: 10px; }
+.header-inner { max-width: 1200px; margin: 0 auto; padding: 0 24px; height: 58px; display: flex; align-items: center; gap: 16px; }
+.logo { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .logo-icon { font-size: 22px; color: var(--red); }
 .logo-text { font-size: 18px; font-weight: 700; color: var(--text); }
-.api-status { display: flex; gap: 10px; }
-.api-dot { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 600; }
+.api-status { display: flex; gap: 8px; flex-shrink: 0; margin-left: auto; }
+.api-dot { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
 .api-dot.ok { background: #d1fae5; color: #065f46; }
 .api-dot.off { background: #fee2e2; color: #991b1b; }
 
@@ -157,9 +157,9 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .step-text { font-size: 14px; line-height: 1.6; }
 
 /* Tab Nav */
-.header-center { position: absolute; left: 50%; transform: translateX(-50%); }
-.tab-nav { display: flex; gap: 4px; background: #f0f2f5; border-radius: 10px; padding: 4px; }
-.tab-btn { padding: 7px 20px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; background: transparent; color: var(--text-sub); transition: all .2s; }
+.header-center { flex: 1; min-width: 0; display: flex; justify-content: center; }
+.tab-nav { display: flex; gap: 2px; background: #f0f2f5; border-radius: 10px; padding: 4px; overflow: hidden; }
+.tab-btn { padding: 7px 14px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; background: transparent; color: var(--text-sub); transition: all .2s; white-space: nowrap; }
 .tab-btn.active { background: #fff; color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,0.12); }
 .tab-btn:hover:not(.active) { color: var(--text); }
 
