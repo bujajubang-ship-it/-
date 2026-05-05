@@ -142,6 +142,11 @@ function startTopicSuggest() {
 
 const URGENCY_LABEL = { high: '🔥 지금 당장', medium: '⚡ 이번 주 안에', low: '📌 여유 있을 때' };
 const URGENCY_COLOR = { high: '#ef4444', medium: '#f59e0b', low: '#6b7280' };
+const CTYPE_CONFIG = {
+  '풀링+키': { icon: '⭐', bg: 'linear-gradient(135deg,#fef3c7,#d1fae5)', color: '#065f46', border: '#6ee7b7', label: '풀링+키 겸용' },
+  '풀링': { icon: '🧲', bg: '#eff6ff', color: '#1e40af', border: '#93c5fd', label: '풀링 컨텐츠' },
+  '키': { icon: '💰', bg: '#fff7ed', color: '#9a3412', border: '#fed7aa', label: '키 컨텐츠' },
+};
 
 function renderTopicReport(r) {
   const now = new Date().toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
@@ -151,21 +156,41 @@ function renderTopicReport(r) {
   ts.textContent = r.trend_summary || '';
   ts.style.display = r.trend_summary ? '' : 'none';
 
+  // 콘텐츠 믹스 노트
+  if (r.content_mix_note) {
+    const note = document.createElement('div');
+    note.className = 'topic-mix-note';
+    note.innerHTML = `<strong>📋 발행 전략:</strong> ${r.content_mix_note}`;
+    const reportSection = document.getElementById('topic-report-section');
+    const existing = reportSection.querySelector('.topic-mix-note');
+    if (existing) existing.remove();
+    document.getElementById('topic-hot-topics').closest('.card').insertAdjacentElement('beforebegin', note);
+  }
+
   // 추천 주제 카드
   const container = document.getElementById('topic-hot-topics');
   container.innerHTML = '';
   (r.hot_topics || []).forEach((t, i) => {
     const urgency = t.urgency || 'medium';
-    const color = URGENCY_COLOR[urgency] || '#6b7280';
-    const label = URGENCY_LABEL[urgency] || urgency;
+    const uColor = URGENCY_COLOR[urgency] || '#6b7280';
+    const uLabel = URGENCY_LABEL[urgency] || urgency;
+    const ct = t.content_type || '풀링';
+    const ctKey = ct.includes('+') ? '풀링+키' : ct.includes('키') ? '키' : '풀링';
+    const ctCfg = CTYPE_CONFIG[ctKey] || CTYPE_CONFIG['풀링'];
+
     const div = document.createElement('div');
     div.className = 'topic-card';
     div.innerHTML = `
       <div class="topic-card-top">
-        <span class="topic-urgency-badge" style="background:${color}20;color:${color};border:1px solid ${color}40">${label}</span>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span class="topic-content-type-badge" style="background:${ctCfg.bg};color:${ctCfg.color};border:1.5px solid ${ctCfg.border}">${ctCfg.icon} ${ctCfg.label}</span>
+          <span class="topic-urgency-badge" style="background:${uColor}20;color:${uColor};border:1px solid ${uColor}40">${uLabel}</span>
+        </div>
         <span class="topic-num">추천 ${i + 1}</span>
       </div>
       <div class="topic-title">${t.title || ''}</div>
+      ${t.content_type_reason ? `<div class="topic-type-reason">${ctCfg.icon} ${t.content_type_reason}</div>` : ''}
+      ${t.sell_angle ? `<div class="topic-sell-angle">💰 판매 연결: <strong>${t.sell_angle}</strong></div>` : ''}
       <div class="topic-why-now">📊 ${t.why_now || ''}</div>
       <div class="topic-details-grid">
         <div class="topic-detail-item">
@@ -259,6 +284,20 @@ async function runMidform(keyword, product_desc) {
 
 function renderMidformReport(r, keyword) {
   document.getElementById('midform-report-title').textContent = `"${keyword}" 영상 기획 완성본`;
+
+  // 콘텐츠 유형 배너
+  const ct = r.content_type || '';
+  const ctKey = ct.includes('+') ? '풀링+키' : ct.includes('키') ? '키' : ct ? '풀링' : '';
+  const ctCfg = ctKey ? CTYPE_CONFIG[ctKey] : null;
+  const ctBanner = document.getElementById('midform-content-type-banner');
+  if (ctBanner) {
+    if (ctCfg) {
+      ctBanner.innerHTML = `<span style="background:${ctCfg.bg};color:${ctCfg.color};border:1.5px solid ${ctCfg.border};padding:4px 14px;border-radius:20px;font-size:14px;font-weight:700">${ctCfg.icon} ${ctCfg.label}</span>${r.content_type_reason ? `<span style="font-size:13px;color:#6b7280;margin-left:12px">${r.content_type_reason}</span>` : ''}${r.sell_angle ? `<span style="font-size:13px;color:#9a3412;margin-left:8px">💰 ${r.sell_angle}</span>` : ''}`;
+      ctBanner.style.display = '';
+    } else {
+      ctBanner.style.display = 'none';
+    }
+  }
 
   const cb = document.getElementById('midform-concept');
   cb.textContent = r.concept || '';

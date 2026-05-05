@@ -445,7 +445,13 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .topic-start-btn { padding: 10px 20px; background: var(--red); color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer; transition: opacity .15s; font-family: inherit; }
 .topic-start-btn:hover { opacity: .85; }
 
+.topic-content-type-badge { font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 20px; }
+.topic-type-reason { font-size: 13px; color: #374151; line-height: 1.55; padding: 8px 12px; background: #f8fafc; border-radius: 8px; margin-bottom: 8px; border-left: 3px solid #d1d5db; }
+.topic-sell-angle { font-size: 13px; color: #9a3412; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 7px 12px; margin-bottom: 8px; }
+.topic-mix-note { background: #f0fdf4; border: 1.5px solid #6ee7b7; border-radius: var(--radius); padding: 14px 20px; font-size: 14px; color: #065f46; line-height: 1.6; margin-bottom: 20px; }
 .topic-insight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+
+.midform-ct-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 20px; background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 16px; }
 
 @media (max-width: 768px) {
   .topic-details-grid, .topic-insight-grid { grid-template-columns: 1fr; }
