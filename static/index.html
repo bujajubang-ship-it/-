@@ -35,7 +35,15 @@
           <p class="search-desc">키워드를 입력하면 시장조사부터 제목·썸네일·도입부·전체 원고까지<br>유튜브 영상 제작의 모든 단계를 한 번에 완성해드립니다.</p>
           <div class="edit-inputs">
             <input type="text" id="midform-keyword-input" placeholder="영상 주제 키워드 (예: 업소용 가스레인지, 식당 수납 아이디어)" autocomplete="off" />
-            <textarea id="midform-product-input" rows="3">부자주방 채널 — 외식업 운영자(식당/분식집/한식당 사장님) 대상, 업소용 주방용품 전문. 신제품 소개, 수납 아이디어, 꿀팁 정보 제공.</textarea>
+            <textarea id="midform-product-input" rows="6" placeholder="이 영상에서 소개할 제품/주제 상세 정보 (선택 — 비워도 됩니다)
+
+예시로 넣을 수 있는 내용:
+• 제품명·모델: 린나이 2구 가스레인지 RBA-286WS
+• 가격: 12만원대 (업소용)
+• 핵심 특징: 버너 탈착 청소 가능, 4.5kW 강력 화력
+• 이 제품이 해결하는 문제: 기름때 끼는 버너 청소 어려움
+• 경쟁 대비 차별점: 기존 제품보다 청소 시간 70% 단축
+• 촬영에서 보여줄 것: 청소 비교 장면, 화력 시연"></textarea>
             <button id="midform-btn" onclick="startMidform()">원클릭 기획 시작</button>
           </div>
         </div>
@@ -139,7 +147,9 @@
           <p class="search-desc">시장조사부터 훅·스크립트·해시태그·캡션까지 AI가 한 번에 기획합니다.<br>저장·공유·댓글을 극대화하는 알고리즘 최적화 숏폼을 만들어드려요.</p>
           <div class="edit-inputs">
             <input type="text" id="shortform-keyword-input" placeholder="주제/키워드 (예: 가스레인지 청소법, 업소용 냉장고)" autocomplete="off" />
-            <textarea id="shortform-product-input" rows="2">부자주방 채널 — 외식업 운영자(식당/분식집/한식당 사장님) 대상, 업소용 주방용품 전문.</textarea>
+            <textarea id="shortform-product-input" rows="4" placeholder="이 릴스에서 보여줄 제품/장면 상세 (선택 — 비워도 됩니다)
+
+예: 제품명, 가격, 핵심 특징, 어떤 장면을 찍을지"></textarea>
             <div class="shortform-duration-row">
               <span class="shortform-duration-label">영상 길이</span>
               <div class="shortform-duration-btns">

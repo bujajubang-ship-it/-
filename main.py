@@ -52,13 +52,13 @@ class ScriptRequest(BaseModel):
 
 class ShortformRequest(BaseModel):
     keyword: str
-    product_desc: str = "부자주방 채널 — 외식업 운영자(식당/분식집/한식당 사장님) 대상, 업소용 주방용품 전문. 신제품 소개, 수납 아이디어, 꿀팁 정보 제공."
+    product_desc: str = ""
     duration: str = "30"
 
 
 class MidformRequest(BaseModel):
     keyword: str
-    product_desc: str = "부자주방 채널 — 외식업 운영자(식당/분식집/한식당 사장님) 대상, 업소용 주방용품 전문. 신제품 소개, 수납 아이디어, 꿀팁 정보 제공."
+    product_desc: str = ""
 
 
 def sse(data: dict) -> str:
