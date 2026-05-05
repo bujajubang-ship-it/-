@@ -8,7 +8,7 @@ let introAnalyzing = false;
 let scriptAnalyzing = false;
 
 // includes old tabs so history items still render into their panes
-const ALL_TABS = ['midform', 'shortform', 'edit', 'history', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'topic', 'edit', 'history', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -87,6 +87,111 @@ async function streamSSE(url, body, addStep, onDone, onError) {
   } catch (err) {
     onError(err.message);
   }
+}
+
+// ===== 🔍 주제 추천 =====
+
+let topicAnalyzing = false;
+
+function resetToTopic() {
+  document.getElementById('topic-report-section').classList.add('hidden');
+  document.getElementById('topic-progress-section').classList.add('hidden');
+  document.getElementById('topic-input-section').classList.remove('hidden');
+  document.getElementById('topic-btn').disabled = false;
+  topicAnalyzing = false;
+}
+
+function startTopicSuggest() {
+  if (topicAnalyzing) return;
+  topicAnalyzing = true;
+  document.getElementById('topic-btn').disabled = true;
+  document.getElementById('topic-input-section').classList.add('hidden');
+  document.getElementById('topic-report-section').classList.add('hidden');
+  document.getElementById('topic-progress-steps').innerHTML = '';
+  document.getElementById('topic-progress-section').classList.remove('hidden');
+
+  const addStep = makeProgressStepper('topic-progress-steps');
+  addStep('분석 준비 중...', 'active');
+
+  streamSSE(
+    '/api/topic-suggest', {},
+    addStep,
+    (data) => {
+      document.getElementById('topic-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
+        s.className = 'progress-step done';
+        s.querySelector('.step-icon').textContent = '✅';
+      });
+      addStep('분석 완료!', 'done');
+      setTimeout(() => {
+        document.getElementById('topic-progress-section').classList.add('hidden');
+        renderTopicReport(data.report);
+        document.getElementById('topic-report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        topicAnalyzing = false;
+        document.getElementById('topic-btn').disabled = false;
+      }, 600);
+    },
+    (msg) => {
+      document.getElementById('topic-progress-steps').innerHTML = '';
+      makeProgressStepper('topic-progress-steps')(msg, 'error');
+      topicAnalyzing = false;
+      document.getElementById('topic-btn').disabled = false;
+    }
+  );
+}
+
+const URGENCY_LABEL = { high: '🔥 지금 당장', medium: '⚡ 이번 주 안에', low: '📌 여유 있을 때' };
+const URGENCY_COLOR = { high: '#ef4444', medium: '#f59e0b', low: '#6b7280' };
+
+function renderTopicReport(r) {
+  const now = new Date().toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+  document.getElementById('topic-report-subtitle').textContent = `${now} 기준 트렌드 분석`;
+
+  const ts = document.getElementById('topic-trend-summary');
+  ts.textContent = r.trend_summary || '';
+  ts.style.display = r.trend_summary ? '' : 'none';
+
+  // 추천 주제 카드
+  const container = document.getElementById('topic-hot-topics');
+  container.innerHTML = '';
+  (r.hot_topics || []).forEach((t, i) => {
+    const urgency = t.urgency || 'medium';
+    const color = URGENCY_COLOR[urgency] || '#6b7280';
+    const label = URGENCY_LABEL[urgency] || urgency;
+    const div = document.createElement('div');
+    div.className = 'topic-card';
+    div.innerHTML = `
+      <div class="topic-card-top">
+        <span class="topic-urgency-badge" style="background:${color}20;color:${color};border:1px solid ${color}40">${label}</span>
+        <span class="topic-num">추천 ${i + 1}</span>
+      </div>
+      <div class="topic-title">${t.title || ''}</div>
+      <div class="topic-why-now">📊 ${t.why_now || ''}</div>
+      <div class="topic-details-grid">
+        <div class="topic-detail-item">
+          <div class="topic-detail-label">시청자 고민</div>
+          <div class="topic-detail-val">${t.viewer_pain || ''}</div>
+        </div>
+        <div class="topic-detail-item">
+          <div class="topic-detail-label">경쟁 영상 빈틈</div>
+          <div class="topic-detail-val">${t.content_gap || ''}</div>
+        </div>
+      </div>
+      ${t.urgency_reason ? `<div class="topic-urgency-reason">⏰ ${t.urgency_reason}</div>` : ''}
+      <button class="topic-start-btn" onclick="startMidformFromTopic('${(t.keyword || t.title || '').replace(/'/g, "\\'")}')">이 주제로 기획 시작 →</button>
+    `;
+    container.appendChild(div);
+  });
+
+  document.getElementById('topic-cafe-insights').textContent = r.cafe_insights || '';
+  document.getElementById('topic-competitor-insights').textContent = r.competitor_insights || '';
+  renderList('topic-avoid', r.avoid_topics);
+}
+
+function startMidformFromTopic(keyword) {
+  document.getElementById('midform-keyword-input').value = keyword;
+  switchTab('midform');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // ===== 🎬 미드폼 =====
@@ -576,7 +681,7 @@ function renderEditReport(r, keyword) {
 // ===== 📚 히스토리 =====
 
 async function loadHistory(type) {
-  ['all', 'midform', 'shortform', 'edit'].forEach(t => {
+  ['all', 'topic', 'midform', 'shortform', 'edit'].forEach(t => {
     const el = document.getElementById(`hf-${t}`);
     if (el) el.classList.toggle('active', (type || '') === (t === 'all' ? '' : t));
   });
@@ -592,11 +697,11 @@ async function loadHistory(type) {
   }
 
   const typeLabels = {
-    midform: '미드폼', shortform: '숏폼', edit: '편집 피드백',
+    topic: '주제 추천', midform: '미드폼', shortform: '숏폼', edit: '편집 피드백',
     research: '시장조사', planning: '기획', intro: '도입부', script: '대본'
   };
   const typeColors = {
-    midform: '#3b82f6', shortform: '#ec4899', edit: '#8b5cf6',
+    topic: '#ef4444', midform: '#3b82f6', shortform: '#ec4899', edit: '#8b5cf6',
     research: '#6366f1', planning: '#f59e0b', intro: '#10b981', script: '#ef4444'
   };
 
@@ -627,6 +732,15 @@ async function loadHistoryItem(id) {
   const data = await fetch(`/api/history/${id}`).then(r => r.json());
 
   const actions = {
+    topic: () => {
+      switchTab('topic'); resetToTopic();
+      setTimeout(() => {
+        renderTopicReport(data.report);
+        document.getElementById('topic-report-section').classList.remove('hidden');
+        document.getElementById('topic-input-section').classList.add('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
     midform: () => {
       switchTab('midform'); resetToMidform();
       setTimeout(() => {

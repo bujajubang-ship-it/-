@@ -425,6 +425,32 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .hash-trending { background: #fce7f3; color: #9d174d; }
 .hash-strategy { padding: 12px 24px; font-size: 13px; color: var(--text-sub); font-style: italic; border-top: 1px solid var(--border); }
 
+/* ===== 🔍 주제 추천 탭 ===== */
+.tab-btn-trend { border: 1.5px solid #fca5a5 !important; color: #ef4444 !important; }
+.tab-btn-trend.active { background: #fef2f2 !important; color: #ef4444 !important; box-shadow: 0 1px 4px rgba(239,68,68,.2) !important; }
+
+.topic-cards-list { display: flex; flex-direction: column; gap: 0; }
+.topic-card { padding: 20px 24px; border-bottom: 1px solid var(--border); }
+.topic-card:last-child { border-bottom: none; }
+.topic-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.topic-urgency-badge { font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 20px; }
+.topic-num { font-size: 11px; color: var(--text-sub); font-weight: 600; }
+.topic-title { font-size: 18px; font-weight: 800; color: #1e293b; line-height: 1.4; margin-bottom: 8px; }
+.topic-why-now { font-size: 13px; color: #6366f1; line-height: 1.6; margin-bottom: 12px; background: #f5f3ff; border-radius: 8px; padding: 8px 12px; }
+.topic-details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 10px; }
+.topic-detail-item { background: #f8fafc; border-radius: 8px; padding: 10px 12px; }
+.topic-detail-label { font-size: 11px; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+.topic-detail-val { font-size: 13px; color: #1e293b; line-height: 1.55; }
+.topic-urgency-reason { font-size: 12px; color: #92400e; background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 6px 12px; margin-bottom: 12px; }
+.topic-start-btn { padding: 10px 20px; background: var(--red); color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer; transition: opacity .15s; font-family: inherit; }
+.topic-start-btn:hover { opacity: .85; }
+
+.topic-insight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+
+@media (max-width: 768px) {
+  .topic-details-grid, .topic-insight-grid { grid-template-columns: 1fr; }
+}
+
 /* ===== 🎬 미드폼 탭 ===== */
 .midform-intro-formula { display: flex; align-items: center; gap: 12px; padding: 16px 24px 0; flex-wrap: wrap; }
 .midform-formula-badge { background: #d1fae5; color: #065f46; font-size: 14px; font-weight: 700; padding: 4px 14px; border-radius: 20px; border: 1px solid #6ee7b7; white-space: nowrap; }

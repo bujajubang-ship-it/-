@@ -389,6 +389,83 @@ async def midform(req: MidformRequest):
     )
 
 
+@app.post("/api/topic-suggest")
+async def topic_suggest():
+    youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+    naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
+    naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+
+    async def stream():
+        if not youtube_key:
+            yield sse({"step": "error", "message": ".env 파일에 YOUTUBE_API_KEY를 설정해주세요."})
+            return
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
+            return
+
+        yt = YouTubeService(youtube_key)
+        try:
+            all_videos = []
+            yt_keywords = [
+                "업소용 주방용품 추천",
+                "민쿡tv 주방",
+                "식당 주방 아이템",
+                "음식점 주방용품",
+            ]
+            yield sse({"step": "youtube", "message": "유튜브 트렌드 영상 수집 중..."})
+            for kw in yt_keywords:
+                try:
+                    results = await yt.search_videos(kw, max_results=8)
+                    all_videos.extend(results)
+                except Exception:
+                    pass
+            # deduplicate by url
+            seen = set()
+            unique_videos = []
+            for v in all_videos:
+                if v["url"] not in seen:
+                    seen.add(v["url"])
+                    unique_videos.append(v)
+            yield sse({"step": "youtube_done", "message": f"유튜브 영상 {len(unique_videos)}개 수집 완료!"})
+
+            all_naver = []
+            if naver_id and naver_secret:
+                naver_keywords = [
+                    "주방용품 추천 식당",
+                    "업소용 냉장고",
+                    "아프니까사장이다 주방",
+                    "식당 가스레인지 추천",
+                    "고창모 주방",
+                ]
+                yield sse({"step": "naver", "message": "네이버 카페 트렌드 수집 중..."})
+                naver_svc = NaverService(naver_id, naver_secret)
+                for kw in naver_keywords:
+                    try:
+                        results = await naver_svc.search_cafe(kw)
+                        all_naver.extend(results)
+                    except Exception:
+                        pass
+                await naver_svc.close()
+                yield sse({"step": "naver_done", "message": f"네이버 카페 게시글 {len(all_naver)}개 수집 완료!"})
+
+            yield sse({"step": "analyzing", "message": "AI가 트렌드 분석 + 주제 추천 중... (30~60초 소요)"})
+            analyzer = Analyzer()
+            report = await analyzer.analyze_topic_trends(unique_videos, all_naver)
+            save_history("topic", "트렌드 주제 추천", report)
+            yield sse({"step": "done", "report": report})
+
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
+        finally:
+            await yt.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/history")
 async def history_list(type: str = ""):
     return list_history(type)

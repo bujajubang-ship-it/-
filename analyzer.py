@@ -64,6 +64,16 @@ class Analyzer:
             )
         return "\n---\n".join(parts)
 
+    def _build_videos_simple(self, videos: List[Dict]) -> str:
+        parts = []
+        for i, v in enumerate(videos[:20], 1):
+            parts.append(
+                f"[{i}] {v['title']}\n"
+                f"조회수:{v['view_count']:,} / 채널:{v['channel']} / 업로드:{v['published_at']}\n"
+                f"설명:{v['description'][:250]}\n"
+            )
+        return "\n---\n".join(parts)
+
     def _build_naver_text(self, naver: List[Dict]) -> str:
         if not naver:
             return "데이터 없음"
@@ -445,6 +455,61 @@ titles는 5개, thumbnails는 3개, script_sections는 영상 흐름에 맞게 4
             max_tokens=8192,
             system=system_prompt,
             messages=[{"role": "user", "content": content}],
+        )
+
+        return _safe_json(msg.content[0].text.strip())
+
+    async def analyze_topic_trends(self, youtube_data: List[Dict], naver_data: List[Dict]) -> Dict:
+        videos_text = self._build_videos_simple(youtube_data)
+        naver_text = self._build_naver_text(naver_data)
+
+        system_prompt = (
+            "당신은 외식업 주방용품 유튜브 채널 전략 컨설턴트입니다. "
+            "채널: 부자주방 — 외식업 운영자(식당·분식집·한식당 사장님) 대상 업소용 주방용품 전문 채널. "
+            "시장 데이터를 분석하여 지금 당장 촬영할 가치 있는 트렌드 기반 영상 주제를 발굴하세요. "
+            "추천 근거는 반드시 데이터에서 발견한 실제 증거를 포함해야 합니다. "
+            "반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만."
+        )
+
+        user_text = f"""== 유튜브 트렌드 데이터 (경쟁 채널 + 인기 영상) ==
+{videos_text}
+
+== 네이버 카페 데이터 (식당 사장님 커뮤니티 트렌드) ==
+{naver_text}
+
+위 데이터를 분석하여 부자주방 채널에서 지금 바로 촬영해야 할 주제를 추천하세요.
+
+[추천 기준]
+- 사람들이 실제로 검색하고 궁금해하는 주제인가 (댓글·카페 근거)
+- 경쟁 영상이 아직 충분히 다루지 못한 빈틈이 있는가
+- 부자주방 채널 타겟(식당 사장님)과 직결되는 주제인가
+- 지금 이 시기에 맞는 시즌성·시의성이 있는가
+
+{{
+  "trend_summary": "현재 외식업 주방용품 시장 핵심 트렌드 요약 2-3문장 (데이터 기반)",
+  "hot_topics": [
+    {{
+      "title": "바로 쓸 수 있는 영상 제목 (구체적, 30자 내외)",
+      "keyword": "미드폼 탭에 입력할 검색 키워드 (짧게)",
+      "why_now": "왜 지금 이 주제가 뜨는지 구체적 근거 (어느 데이터에서 발견했는지 포함)",
+      "viewer_pain": "이 주제가 해결하는 시청자의 실제 고민",
+      "content_gap": "경쟁 채널/영상이 아직 못 다룬 빈틈",
+      "urgency": "high 또는 medium 또는 low",
+      "urgency_reason": "긴급도 이유 (시즌성·신제품 출시·트렌드 급부상 등)"
+    }}
+  ],
+  "cafe_insights": "네이버 카페에서 발견한 식당 사장님들의 핵심 고민/관심사 3-4가지",
+  "competitor_insights": "경쟁 채널 최근 동향 및 부자주방이 치고 들어갈 틈",
+  "avoid_topics": ["이미 포화되어 새로 만들어도 묻힐 주제 3-4개 (구체적으로)"]
+}}
+
+hot_topics는 6-7개 작성하세요. urgency high 주제를 앞에 배치하세요."""
+
+        msg = await self.client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_text}],
         )
 
         return _safe_json(msg.content[0].text.strip())
