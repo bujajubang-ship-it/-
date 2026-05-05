@@ -69,6 +69,9 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .report-header-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
 .reset-btn { padding: 10px 20px; border: 1.5px solid var(--border); background: #fff; border-radius: 10px; cursor: pointer; font-size: 14px; white-space: nowrap; font-weight: 600; transition: all .15s; flex-shrink: 0; }
 .reset-btn:hover { border-color: var(--red); color: var(--red); }
+.pdf-btn { padding: 10px 18px; border: none; background: #2563eb; color: #fff; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 700; white-space: nowrap; transition: opacity .15s; flex-shrink: 0; }
+.pdf-btn:hover { opacity: .85; }
+.pdf-btn:disabled { opacity: .5; cursor: default; }
 .action-btn { padding: 10px 16px; border: none; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 700; white-space: nowrap; transition: opacity .15s; }
 .pdf-btn { background: var(--red); color: #fff; }
 .pdf-btn:hover { opacity: .85; }

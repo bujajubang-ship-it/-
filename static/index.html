@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
   <link rel="stylesheet" href="style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
   <header class="site-header">
@@ -266,7 +267,10 @@
             <h2>지금 찍어야 할 주제 추천</h2>
             <p class="report-subtitle" id="topic-report-subtitle"></p>
           </div>
-          <button class="reset-btn" onclick="resetToTopic()">← 다시 분석</button>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="pdf-btn" onclick="downloadTopicPdf()">⬇ PDF 저장</button>
+            <button class="reset-btn" onclick="resetToTopic()">← 다시 분석</button>
+          </div>
         </div>
 
         <!-- 트렌드 요약 -->
