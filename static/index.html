@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>유튜브 콘텐츠 리서처</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">▶</span>
+        <span class="logo-text">콘텐츠 리서처</span>
+      </div>
+      <div class="header-center">
+        <div class="tab-nav">
+          <button class="tab-btn active" id="tab-research" onclick="switchTab('research')">① 시장조사</button>
+          <button class="tab-btn" id="tab-planning" onclick="switchTab('planning')">② 기획</button>
+          <button class="tab-btn" id="tab-intro" onclick="switchTab('intro')">③ 도입부</button>
+          <button class="tab-btn" id="tab-script" onclick="switchTab('script')">④ 대본</button>
+          <button class="tab-btn" id="tab-edit" onclick="switchTab('edit')">⑤ 편집 피드백</button>
+          <button class="tab-btn" id="tab-history" onclick="switchTab('history')">히스토리</button>
+        </div>
+      </div>
+      <div id="api-status" class="api-status"></div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ===== ① 시장조사 탭 ===== -->
+    <div id="pane-research">
+      <section class="search-section" id="search-section">
+        <div class="search-card">
+          <h1>촬영 전 시청자 욕구를 먼저 파악하세요</h1>
+          <p class="search-desc">주제 키워드를 입력하면 유튜브 상위 영상 댓글과 네이버 카페를 분석해서<br>사람들이 뭘 원하는지, 경쟁 영상의 빈틈은 뭔지 알려드립니다.</p>
+          <div class="search-box">
+            <input type="text" id="keyword-input" placeholder="예: 가스레인지, 공기청정기, 홈트레이닝..." autocomplete="off" />
+            <button id="analyze-btn" onclick="startAnalysis()">분석 시작</button>
+          </div>
+          <div class="examples">
+            <span class="example-label">예시 키워드:</span>
+            <button class="example-chip" onclick="setKeyword('가스레인지')">가스레인지</button>
+            <button class="example-chip" onclick="setKeyword('공기청정기 추천')">공기청정기 추천</button>
+            <button class="example-chip" onclick="setKeyword('홈트레이닝')">홈트레이닝</button>
+            <button class="example-chip" onclick="setKeyword('다이어트 식단')">다이어트 식단</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="progress-section hidden" id="progress-section">
+        <div class="progress-card">
+          <div class="progress-spinner"></div>
+          <div class="progress-steps" id="progress-steps"></div>
+        </div>
+      </section>
+
+      <section class="report-section hidden" id="report-section">
+        <div class="report-header">
+          <div>
+            <h2 id="report-keyword-title"></h2>
+            <p id="report-subtitle" class="report-subtitle"></p>
+          </div>
+          <div class="report-header-actions">
+            <button class="action-btn copy-btn" onclick="copyReportText()" title="텍스트 복사">📋 텍스트 복사</button>
+            <button class="action-btn pdf-btn" onclick="downloadPDF()" title="PDF 저장">⬇ PDF 저장</button>
+            <button class="reset-btn" onclick="resetToSearch()">← 새 분석</button>
+          </div>
+        </div>
+
+        <div class="concept-banner" id="concept-banner"></div>
+
+        <div class="card" id="card-summary">
+          <div class="card-header"><span class="card-icon">📊</span> 시장 분석 요약</div>
+          <div class="card-body" id="summary-text"></div>
+        </div>
+
+        <div class="card" id="card-desire">
+          <div class="card-header"><span class="card-icon">💡</span> 시청자 욕구 분석</div>
+          <div class="desire-grid">
+            <div class="desire-col curiosity">
+              <div class="desire-col-title">🤔 사람들이 궁금한 것</div>
+              <ul id="desire-curiosity" class="desire-list"></ul>
+            </div>
+            <div class="desire-col complaints">
+              <div class="desire-col-title">😤 불만사항 / 페인포인트</div>
+              <ul id="desire-complaints" class="desire-list"></ul>
+            </div>
+            <div class="desire-col wants">
+              <div class="desire-col-title">✨ 원하는 것</div>
+              <ul id="desire-wants" class="desire-list"></ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="card-questions">
+          <div class="card-header"><span class="card-icon">❓</span> 시청자가 가장 많이 묻는 질문 TOP 10</div>
+          <ol id="top-questions" class="questions-list"></ol>
+        </div>
+
+        <div class="card" id="card-must">
+          <div class="card-header"><span class="card-icon">📝</span> 영상에 반드시 넣어야 할 내용</div>
+          <ul id="must-include" class="checklist"></ul>
+        </div>
+
+        <div class="card" id="card-diff">
+          <div class="card-header"><span class="card-icon">⚡</span> 차별화 포인트 (경쟁 영상의 빈틈)</div>
+          <div id="diff-points" class="diff-grid"></div>
+        </div>
+
+        <div class="card" id="card-competitor">
+          <div class="card-header"><span class="card-icon">🎯</span> 경쟁 영상 분석</div>
+          <div class="competitor-grid">
+            <div>
+              <div class="sub-title">제목 패턴</div>
+              <ul id="title-patterns" class="bullet-list"></ul>
+            </div>
+            <div>
+              <div class="sub-title">썸네일 스타일</div>
+              <ul id="thumb-styles" class="bullet-list"></ul>
+            </div>
+            <div>
+              <div class="sub-title">인기 키워드</div>
+              <div id="keywords-cloud" class="keyword-cloud"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="card-videos">
+          <div class="card-header"><span class="card-icon">📹</span> 상위 경쟁 영상</div>
+          <div id="top-videos-list" class="videos-scroll"></div>
+        </div>
+
+        <div class="card" id="card-structure">
+          <div class="card-header"><span class="card-icon">🎬</span> 추천 영상 구성</div>
+          <div id="video-structure" class="structure-steps"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===== ② 기획 탭 (문제 정의 + 제목 + 썸네일) ===== -->
+    <div id="pane-planning" class="hidden">
+      <section class="search-section" id="planning-input-section">
+        <div class="search-card edit-card">
+          <h1>문제 정의 → 제목 → 썸네일을 확정하세요</h1>
+          <p class="search-desc">촬영 전에 제목과 썸네일이 먼저 결정되어야 영상 방향이 흔들리지 않습니다.<br>키워드와 제품 설명을 입력하면 문제 정의부터 CTR 10%+ 제목·썸네일까지 뽑아드립니다.</p>
+          <div class="edit-inputs">
+            <input type="text" id="planning-keyword-input" placeholder="영상 키워드 (예: 가스레인지 청소)" autocomplete="off" />
+            <textarea id="planning-product-input" placeholder="내 제품 / 서비스 / 채널 설명&#10;&#10;예: 가정용 친환경 클리너 '클린올'을 판매하는 채널. 화학성분 없이 기름때를 제거하는 게 핵심." rows="3"></textarea>
+            <textarea id="planning-insights-input" placeholder="시장조사에서 파악한 시청자 욕구/불만 (선택사항 — 시장조사 탭 결과를 붙여넣으면 더 정확합니다)&#10;&#10;예: 기름때 청소가 힘들다, 시중 제품이 독하다, 간단한 방법 원함..." rows="4"></textarea>
+            <button id="planning-btn" onclick="startPlanning()">기획 분석하기</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="progress-section hidden" id="planning-progress-section">
+        <div class="progress-card">
+          <div class="progress-spinner"></div>
+          <div class="progress-steps" id="planning-progress-steps"></div>
+        </div>
+      </section>
+
+      <section class="report-section hidden" id="planning-report-section">
+        <div class="report-header">
+          <div>
+            <h2 id="planning-report-title"></h2>
+            <p class="report-subtitle">문제 정의 · 제목 · 썸네일 기획안</p>
+          </div>
+          <button class="reset-btn" onclick="resetToPlanning()">← 새 기획</button>
+        </div>
+
+        <!-- 문제 정의 -->
+        <div class="card" style="border:2px solid #f59e0b;">
+          <div class="card-header" style="background:linear-gradient(135deg,#fffbeb,#fef3c7)"><span class="card-icon">🎯</span> 문제 정의</div>
+          <div id="planning-problem" class="problem-def-grid"></div>
+        </div>
+
+        <!-- 제목 후보 -->
+        <div class="card">
+          <div class="card-header"><span class="card-icon">✍️</span> 추천 제목 5개 (CTR 10%+ 목표)</div>
+          <div id="planning-titles" class="titles-grid"></div>
+        </div>
+
+        <!-- 썸네일 컨셉 -->
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🖼️</span> 썸네일 컨셉 3개</div>
+          <div id="planning-thumbnails" class="thumb-concept-grid"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===== ③ 도입부 작성 탭 ===== -->
+    <div id="pane-intro" class="hidden">
+      <section class="search-section" id="intro-input-section">
+        <div class="search-card edit-card">
+          <h1>문제제기→공감→손해→이득→사례 도입부를 작성하세요</h1>
+          <p class="search-desc">5단계 공식으로 30초 안에 시청자를 사로잡는 도입부 대본을 만들어 드립니다.<br>기획 탭의 문제 정의 결과를 붙여넣으면 바로 쓸 수 있는 대본이 나옵니다.</p>
+          <div class="edit-inputs">
+            <input type="text" id="intro-keyword-input" placeholder="영상 키워드 (예: 가스레인지 청소)" autocomplete="off" />
+            <textarea id="intro-product-input" placeholder="내 제품 / 서비스 / 채널 설명" rows="2"></textarea>
+            <textarea id="intro-problem-input" placeholder="문제 정의 (기획 탭 결과를 붙여넣거나 직접 작성)&#10;&#10;예: 시청자는 가스레인지 기름때가 쌓여도 닦는 게 너무 힘들어서 포기한다. 간단하게 완전히 제거하는 방법을 원한다." rows="3"></textarea>
+            <textarea id="intro-desire-input" placeholder="시청자가 가장 원하는 것 / 해결하고 싶은 것&#10;&#10;예: 힘 안 쓰고 기름때를 깔끔하게 없애는 방법" rows="2"></textarea>
+            <button id="intro-btn" onclick="startIntro()">도입부 작성하기</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="progress-section hidden" id="intro-progress-section">
+        <div class="progress-card">
+          <div class="progress-spinner"></div>
+          <div class="progress-steps" id="intro-progress-steps"></div>
+        </div>
+      </section>
+
+      <section class="report-section hidden" id="intro-report-section">
+        <div class="report-header">
+          <div>
+            <h2 id="intro-report-title"></h2>
+            <p class="report-subtitle">5단계 공식 도입부 대본</p>
+          </div>
+          <div class="report-header-actions">
+            <button class="action-btn copy-btn" onclick="copyIntroScript()">📋 대본 복사</button>
+            <button class="reset-btn" onclick="resetToIntro()">← 새 작성</button>
+          </div>
+        </div>
+
+        <div class="card" style="border:2px solid #10b981;">
+          <div class="card-header" style="background:linear-gradient(135deg,#ecfdf5,#d1fae5)"><span class="card-icon">✍️</span> 완성 도입부 대본</div>
+          <div class="intro-script-output" id="intro-full-script"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">📐</span> 단계별 분석</div>
+          <div id="intro-breakdown" class="intro-breakdown-list"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🎲</span> 대안 훅 (A/B 테스트용)</div>
+          <ul id="intro-hook-variations" class="checklist"></ul>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🎥</span> 촬영 팁</div>
+          <ul id="intro-filming-tips" class="checklist"></ul>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===== ④ 대본 작성 탭 ===== -->
+    <div id="pane-script" class="hidden">
+      <section class="search-section" id="script-input-section">
+        <div class="search-card edit-card">
+          <h1>레퍼런스 대본을 내 영상으로 변형하세요</h1>
+          <p class="search-desc">잘 된 영상 대본을 붙여넣으면 구조를 분석하고 내 제품/주제에 맞게 변형합니다.<br>책·전문가·시연 요소 추가 제안과 댓글 유도 마무리까지 포함됩니다.</p>
+          <div class="edit-inputs">
+            <input type="text" id="script-keyword-input" placeholder="내 영상 키워드 (예: 가스레인지 청소)" autocomplete="off" />
+            <textarea id="script-product-input" placeholder="내 제품 / 서비스 / 채널 설명" rows="2"></textarea>
+            <textarea id="script-ref-input" placeholder="레퍼런스 대본을 여기에 붙여넣으세요 (잘 된 영상의 전체 대본 또는 주요 부분)" rows="14"></textarea>
+            <textarea id="script-context-input" placeholder="추가 컨텍스트 (선택사항) — 기획 탭 문제 정의, 시청자 욕구 등 붙여넣으면 더 정확합니다" rows="3"></textarea>
+            <button id="script-btn" onclick="startScript()">대본 작성하기</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="progress-section hidden" id="script-progress-section">
+        <div class="progress-card">
+          <div class="progress-spinner"></div>
+          <div class="progress-steps" id="script-progress-steps"></div>
+        </div>
+      </section>
+
+      <section class="report-section hidden" id="script-report-section">
+        <div class="report-header">
+          <div>
+            <h2 id="script-report-title"></h2>
+            <p class="report-subtitle">레퍼런스 기반 변형 대본</p>
+          </div>
+          <div class="report-header-actions">
+            <button class="action-btn copy-btn" onclick="copyAdaptedScript()">📋 대본 복사</button>
+            <button class="reset-btn" onclick="resetToScript()">← 새 작성</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🔍</span> 레퍼런스 구조 분석</div>
+          <ul id="script-ref-structure" class="checklist"></ul>
+        </div>
+
+        <div class="card" style="border:2px solid #3b82f6;">
+          <div class="card-header" style="background:linear-gradient(135deg,#eff6ff,#dbeafe)"><span class="card-icon">✍️</span> 변형된 전체 대본</div>
+          <div class="intro-script-output" id="script-adapted"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">📐</span> 섹션별 변형 내용</div>
+          <div id="script-sections" class="script-sections-list"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">📚</span> 추가하면 좋은 요소 (책·전문가·시연 등)</div>
+          <div id="script-enhancements" class="enhancement-grid"></div>
+        </div>
+
+        <div class="card" style="border:2px solid #ef4444;">
+          <div class="card-header" style="background:linear-gradient(135deg,#fef2f2,#fee2e2)"><span class="card-icon">💬</span> 댓글 유도 마무리</div>
+          <div id="script-comment" class="comment-inducing-box"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===== ⑤ 편집 피드백 탭 ===== -->
+    <div id="pane-edit" class="hidden">
+      <section class="search-section" id="edit-input-section">
+        <div class="search-card edit-card">
+          <h1>촬영한 영상의 편집 피드백을 받으세요</h1>
+          <p class="search-desc">키워드와 영상 대본을 입력하면 시장 데이터와 비교 분석해서<br>어디를 살리고 어디를 삭제할지, 제목과 썸네일은 어떻게 할지 알려드립니다.</p>
+          <div class="edit-inputs">
+            <div class="edit-keyword-row">
+              <input type="text" id="edit-keyword-input" placeholder="영상 키워드 (예: 가스레인지 청소)" autocomplete="off" />
+            </div>
+            <textarea id="edit-script-input" placeholder="영상 대본 또는 내용을 붙여넣으세요&#10;&#10;예시:&#10;안녕하세요 오늘은 가스레인지 청소하는 방법을 알려드릴게요&#10;먼저 버너를 분리하고..." rows="12"></textarea>
+            <button id="edit-analyze-btn" onclick="startEditAnalysis()">편집 피드백 받기</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="progress-section hidden" id="edit-progress-section">
+        <div class="progress-card">
+          <div class="progress-spinner"></div>
+          <div class="progress-steps" id="edit-progress-steps"></div>
+        </div>
+      </section>
+
+      <section class="report-section hidden" id="edit-report-section">
+        <div class="report-header">
+          <div>
+            <h2 id="edit-report-title"></h2>
+            <p class="report-subtitle">시장 데이터 기반 편집 피드백</p>
+          </div>
+          <button class="reset-btn" onclick="resetToEdit()">← 새 분석</button>
+        </div>
+
+        <div class="fit-score-banner" id="fit-score-banner"></div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">📋</span> 전반적 평가</div>
+          <div class="card-body" id="edit-overall"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">✅</span> 잘 된 점</div>
+          <ul id="edit-strengths" class="checklist edit-checklist"></ul>
+        </div>
+
+        <div class="edit-two-col">
+          <div class="card">
+            <div class="card-header keep-header"><span class="card-icon">💚</span> 살려야 할 구간</div>
+            <div id="edit-keep-sections" class="edit-sections-list"></div>
+          </div>
+          <div class="card">
+            <div class="card-header cut-header"><span class="card-icon">✂️</span> 삭제 추천 구간</div>
+            <div id="edit-cut-sections" class="edit-sections-list"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">⚡</span> 인트로 후킹 피드백</div>
+          <div class="card-body" id="edit-hook-feedback"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🔧</span> 편집 흐름 개선점</div>
+          <ul id="edit-flow-suggestions" class="checklist"></ul>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">📌</span> 시청자가 원하는데 빠진 내용</div>
+          <ul id="edit-missing" class="checklist missing-checklist"></ul>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">✍️</span> 추천 제목 (이 영상에 최적화)</div>
+          <div id="edit-titles" class="titles-grid"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🖼️</span> 썸네일 추천</div>
+          <div id="edit-thumbnails" class="thumb-reco-grid"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ===== 히스토리 탭 ===== -->
+  <div id="pane-history" class="hidden">
+    <div class="history-page">
+      <div class="history-header">
+        <div class="history-filters">
+          <button class="hist-filter active" onclick="loadHistory('')" id="hf-all">전체</button>
+          <button class="hist-filter" onclick="loadHistory('research')" id="hf-research">시장조사</button>
+          <button class="hist-filter" onclick="loadHistory('planning')" id="hf-planning">기획</button>
+          <button class="hist-filter" onclick="loadHistory('intro')" id="hf-intro">도입부</button>
+          <button class="hist-filter" onclick="loadHistory('script')" id="hf-script">대본</button>
+          <button class="hist-filter" onclick="loadHistory('edit')" id="hf-edit">편집 피드백</button>
+        </div>
+        <div id="history-count" class="history-count"></div>
+      </div>
+      <div id="history-list" class="history-list"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    fetch('/api/health').then(r => r.json()).then(data => {
+      const el = document.getElementById('api-status');
+      const items = [
+        { key: 'youtube', label: 'YouTube API' },
+        { key: 'anthropic', label: 'Claude AI' },
+        { key: 'naver', label: '네이버 카페' },
+      ];
+      el.innerHTML = items.map(i =>
+        `<span class="api-dot ${data[i.key] ? 'ok' : 'off'}" title="${i.label}: ${data[i.key] ? '연결됨' : '미설정'}">● ${i.label}</span>`
+      ).join('');
+    }).catch(() => {});
+  </script>
+</body>
+</html>
