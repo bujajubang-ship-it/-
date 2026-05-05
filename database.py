@@ -1,7 +1,7 @@
 import sqlite3
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "history.db")
+DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "history.db"))
 
 
 def get_db():
