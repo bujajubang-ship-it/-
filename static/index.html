@@ -20,6 +20,7 @@
           <button class="tab-btn" id="tab-intro" onclick="switchTab('intro')">③ 도입부</button>
           <button class="tab-btn" id="tab-script" onclick="switchTab('script')">④ 대본</button>
           <button class="tab-btn" id="tab-edit" onclick="switchTab('edit')">⑤ 편집 피드백</button>
+          <button class="tab-btn" id="tab-shortform" onclick="switchTab('shortform')">📱 숏폼</button>
           <button class="tab-btn" id="tab-history" onclick="switchTab('history')">히스토리</button>
         </div>
       </div>
@@ -391,6 +392,114 @@
     </div>
   </main>
 
+  <!-- ===== 📱 숏폼 기획 탭 ===== -->
+  <div id="pane-shortform" class="hidden">
+    <section class="search-section" id="shortform-input-section">
+      <div class="search-card edit-card">
+        <h1>인스타그램 릴스 기획안을 만드세요</h1>
+        <p class="search-desc">저장·공유·댓글을 극대화하는 숏폼을 AI가 기획합니다.<br>훅·스크립트·해시태그·캡션까지 바로 쓸 수 있게 완성해드려요.</p>
+        <div class="edit-inputs">
+          <input type="text" id="shortform-keyword-input" placeholder="주제/키워드 (예: 가스레인지 청소, 다이어트 식단)" autocomplete="off" />
+          <textarea id="shortform-product-input" placeholder="내 제품/서비스/채널 설명 (선택사항)&#10;예: 친환경 주방 클리너를 판매하는 채널" rows="2"></textarea>
+          <div class="shortform-duration-row">
+            <span class="shortform-duration-label">영상 길이</span>
+            <div class="shortform-duration-btns">
+              <button class="duration-btn active" data-dur="15" onclick="selectDuration(this)">15초</button>
+              <button class="duration-btn" data-dur="30" onclick="selectDuration(this)">30초</button>
+              <button class="duration-btn" data-dur="60" onclick="selectDuration(this)">60초</button>
+            </div>
+          </div>
+          <textarea id="shortform-insights-input" placeholder="시장조사 결과 붙여넣기 (선택사항 — 시장조사 탭 결과를 넣으면 더 정확합니다)" rows="3"></textarea>
+          <textarea id="shortform-ref-input" placeholder="참고 릴스 내용 붙여넣기 (선택사항 — 잘된 릴스의 스크립트나 내용)" rows="3"></textarea>
+          <button id="shortform-btn" onclick="startShortform()">릴스 기획하기</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="progress-section hidden" id="shortform-progress-section">
+      <div class="progress-card">
+        <div class="progress-spinner"></div>
+        <div class="progress-steps" id="shortform-progress-steps"></div>
+      </div>
+    </section>
+
+    <section class="report-section hidden" id="shortform-report-section">
+      <div class="report-header">
+        <div>
+          <h2 id="shortform-report-title"></h2>
+          <p class="report-subtitle">인스타그램 릴스 기획안</p>
+        </div>
+        <div class="report-header-actions">
+          <button class="action-btn copy-btn" onclick="copyShortformCaption()">📋 캡션 복사</button>
+          <button class="reset-btn" onclick="resetToShortform()">← 새 기획</button>
+        </div>
+      </div>
+
+      <!-- 핵심 메시지 -->
+      <div class="concept-banner" id="shortform-core-message"></div>
+
+      <!-- 훅 3개 -->
+      <div class="card">
+        <div class="card-header"><span class="card-icon">⚡</span> 스크롤 멈추는 훅 3개 (첫 1-3초)</div>
+        <div id="shortform-hooks" class="shortform-hooks-grid"></div>
+      </div>
+
+      <!-- 스크립트 -->
+      <div class="card">
+        <div class="card-header"><span class="card-icon">🎬</span> 장면별 스크립트</div>
+        <div id="shortform-script" class="shortform-script-list"></div>
+      </div>
+
+      <!-- 알고리즘 부스터 -->
+      <div class="shortform-algo-grid">
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🔖</span> 저장 유도 포인트</div>
+          <ul id="shortform-save-triggers" class="checklist"></ul>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-icon">↗️</span> 공유 유도 포인트</div>
+          <ul id="shortform-share-triggers" class="checklist"></ul>
+        </div>
+      </div>
+
+      <!-- 댓글 CTA -->
+      <div class="card" style="border:2px solid #ef4444;">
+        <div class="card-header" style="background:linear-gradient(135deg,#fef2f2,#fee2e2)"><span class="card-icon">💬</span> 댓글 유도 CTA</div>
+        <div id="shortform-comment-cta"></div>
+      </div>
+
+      <!-- 커버 프레임 -->
+      <div class="card" style="border:2px solid #8b5cf6;">
+        <div class="card-header" style="background:linear-gradient(135deg,#f5f3ff,#ede9fe)"><span class="card-icon">🖼️</span> 첫 화면 (커버 프레임)</div>
+        <div id="shortform-cover-frame"></div>
+      </div>
+
+      <!-- 캡션 -->
+      <div class="card" style="border:2px solid #10b981;">
+        <div class="card-header" style="background:linear-gradient(135deg,#ecfdf5,#d1fae5)"><span class="card-icon">✍️</span> 인스타그램 캡션</div>
+        <div id="shortform-caption"></div>
+      </div>
+
+      <!-- 해시태그 -->
+      <div class="card">
+        <div class="card-header"><span class="card-icon">#</span> 해시태그 전략</div>
+        <div id="shortform-hashtags"></div>
+      </div>
+
+      <!-- 자막 가이드 + 음악 -->
+      <div class="shortform-algo-grid">
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🔤</span> 자막/텍스트 오버레이 가이드</div>
+          <ul id="shortform-text-overlay" class="checklist"></ul>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🎵</span> 음악 & 루프 팁</div>
+          <div id="shortform-music-loop" class="card-body"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
   <!-- ===== 히스토리 탭 ===== -->
   <div id="pane-history" class="hidden">
     <div class="history-page">
@@ -402,6 +511,7 @@
           <button class="hist-filter" onclick="loadHistory('intro')" id="hf-intro">도입부</button>
           <button class="hist-filter" onclick="loadHistory('script')" id="hf-script">대본</button>
           <button class="hist-filter" onclick="loadHistory('edit')" id="hf-edit">편집 피드백</button>
+          <button class="hist-filter" onclick="loadHistory('shortform')" id="hf-shortform">숏폼</button>
         </div>
         <div id="history-count" class="history-count"></div>
       </div>

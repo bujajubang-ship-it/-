@@ -50,6 +50,14 @@ class ScriptRequest(BaseModel):
     context: str = ""
 
 
+class ShortformRequest(BaseModel):
+    keyword: str
+    product_desc: str = ""
+    duration: str = "30"
+    market_insights: str = ""
+    reference_reel: str = ""
+
+
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -259,6 +267,34 @@ async def script(req: ScriptRequest):
             analyzer = Analyzer()
             report = await analyzer.write_script(req.keyword, req.product_desc, req.reference_script, req.context)
             save_history("script", req.keyword, report)
+            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/shortform")
+async def shortform(req: ShortformRequest):
+    async def stream():
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
+            return
+        if not req.keyword.strip():
+            yield sse({"step": "error", "message": "주제/키워드를 입력해주세요."})
+            return
+        try:
+            yield sse({"step": "analyzing", "message": f"AI가 {req.duration}초 릴스 기획 중... (30초 내외)"})
+            analyzer = Analyzer()
+            report = await analyzer.analyze_shortform(
+                req.keyword, req.product_desc, req.duration,
+                req.market_insights, req.reference_reel
+            )
+            save_history("shortform", req.keyword, report)
             yield sse({"step": "done", "report": report, "keyword": req.keyword})
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})

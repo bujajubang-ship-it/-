@@ -3,8 +3,9 @@ let editAnalyzing = false;
 let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
+let shortformAnalyzing = false;
 
-const ALL_TABS = ['research', 'planning', 'intro', 'script', 'edit', 'history'];
+const ALL_TABS = ['research', 'planning', 'intro', 'script', 'edit', 'shortform', 'history'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -800,6 +801,187 @@ function renderEditReport(r, keyword) {
   });
 }
 
+// ===== 📱 숏폼 기획 =====
+
+let _selectedDuration = '30';
+let _currentShortformCaption = '';
+
+function selectDuration(btn) {
+  document.querySelectorAll('.duration-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _selectedDuration = btn.dataset.dur;
+}
+
+function resetToShortform() {
+  document.getElementById('shortform-report-section').classList.add('hidden');
+  document.getElementById('shortform-progress-section').classList.add('hidden');
+  document.getElementById('shortform-input-section').classList.remove('hidden');
+  document.getElementById('shortform-btn').disabled = false;
+  shortformAnalyzing = false;
+}
+
+function startShortform() {
+  if (shortformAnalyzing) return;
+  const keyword = document.getElementById('shortform-keyword-input').value.trim();
+  if (!keyword) { document.getElementById('shortform-keyword-input').focus(); return; }
+  const product_desc = document.getElementById('shortform-product-input').value.trim();
+  const market_insights = document.getElementById('shortform-insights-input').value.trim();
+  const reference_reel = document.getElementById('shortform-ref-input').value.trim();
+  runShortform(keyword, product_desc, _selectedDuration, market_insights, reference_reel);
+}
+
+async function runShortform(keyword, product_desc, duration, market_insights, reference_reel) {
+  shortformAnalyzing = true;
+  document.getElementById('shortform-btn').disabled = true;
+  document.getElementById('shortform-input-section').classList.add('hidden');
+  document.getElementById('shortform-report-section').classList.add('hidden');
+  document.getElementById('shortform-progress-steps').innerHTML = '';
+  document.getElementById('shortform-progress-section').classList.remove('hidden');
+
+  const addStep = makeProgressStepper('shortform-progress-steps');
+  addStep(`${duration}초 릴스 기획 중...`, 'active');
+
+  await streamSSE(
+    '/api/shortform', { keyword, product_desc, duration, market_insights, reference_reel },
+    addStep,
+    (data) => {
+      document.getElementById('shortform-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
+        s.className = 'progress-step done';
+        s.querySelector('.step-icon').textContent = '✅';
+      });
+      addStep('완성!', 'done');
+      setTimeout(() => {
+        document.getElementById('shortform-progress-section').classList.add('hidden');
+        renderShortformReport(data.report, keyword);
+        document.getElementById('shortform-report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        shortformAnalyzing = false;
+        document.getElementById('shortform-btn').disabled = false;
+      }, 600);
+    },
+    (msg) => {
+      document.getElementById('shortform-progress-steps').innerHTML = '';
+      makeProgressStepper('shortform-progress-steps')(msg, 'error');
+      shortformAnalyzing = false;
+      document.getElementById('shortform-btn').disabled = false;
+    }
+  );
+}
+
+function renderShortformReport(r, keyword) {
+  _currentShortformCaption = r.caption?.full_caption || '';
+  document.getElementById('shortform-report-title').textContent = `"${keyword}" 릴스 기획안`;
+
+  // 핵심 메시지
+  const cm = document.getElementById('shortform-core-message');
+  cm.textContent = r.core_message || '';
+  cm.style.display = r.core_message ? '' : 'none';
+
+  // 훅
+  const hooksEl = document.getElementById('shortform-hooks');
+  hooksEl.innerHTML = '';
+  (r.hooks || []).forEach((h, i) => {
+    const div = document.createElement('div');
+    div.className = 'shortform-hook-card';
+    div.innerHTML = `
+      <div class="shortform-hook-num">훅 ${i + 1} <span class="shortform-hook-type">${h.type || ''}</span></div>
+      <div class="shortform-hook-text">"${h.text || ''}"</div>
+      <div class="shortform-hook-why">${h.why || ''}</div>
+    `;
+    hooksEl.appendChild(div);
+  });
+
+  // 스크립트
+  const scriptEl = document.getElementById('shortform-script');
+  scriptEl.innerHTML = '';
+  (r.script || []).forEach((s, i) => {
+    const div = document.createElement('div');
+    div.className = 'shortform-scene';
+    div.innerHTML = `
+      <div class="shortform-scene-time">${s.time || ''}</div>
+      <div class="shortform-scene-body">
+        <div class="shortform-scene-scene">🎥 ${s.scene || ''}</div>
+        ${s.narration ? `<div class="shortform-scene-narration">🗣 "${s.narration}"</div>` : ''}
+        ${s.text_overlay ? `<div class="shortform-scene-overlay">📝 자막: <strong>${s.text_overlay}</strong></div>` : ''}
+        ${s.action ? `<div class="shortform-scene-action">💡 ${s.action}</div>` : ''}
+      </div>
+    `;
+    scriptEl.appendChild(div);
+  });
+
+  // 저장/공유
+  renderList('shortform-save-triggers', r.save_triggers);
+  renderList('shortform-share-triggers', r.share_triggers);
+
+  // 댓글 CTA
+  const ctaEl = document.getElementById('shortform-comment-cta');
+  const cta = r.comment_cta || {};
+  ctaEl.innerHTML = `
+    <div class="shortform-cta-question">"${cta.question || ''}"</div>
+    <div class="shortform-cta-why">${cta.why_comments || ''}</div>
+    ${(cta.alternatives || []).map((a, i) => `<div class="shortform-cta-alt">대안 ${i+1}: "${a}"</div>`).join('')}
+  `;
+
+  // 커버 프레임
+  const coverEl = document.getElementById('shortform-cover-frame');
+  const cf = r.cover_frame || {};
+  coverEl.innerHTML = `
+    <div class="shortform-cover-grid">
+      <div class="shortform-cover-preview">
+        <div class="shortform-cover-main">${cf.main_text || ''}</div>
+        ${cf.sub_text ? `<div class="shortform-cover-sub">${cf.sub_text}</div>` : ''}
+      </div>
+      <div class="shortform-cover-info">
+        <div class="shortform-cover-detail"><strong>📸 비주얼:</strong> ${cf.visual || ''}</div>
+        <div class="shortform-cover-detail"><strong>✅ 클릭 이유:</strong> ${cf.why_clicks || ''}</div>
+      </div>
+    </div>
+  `;
+
+  // 캡션
+  const capEl = document.getElementById('shortform-caption');
+  const cap = r.caption || {};
+  capEl.innerHTML = `
+    <div class="shortform-caption-box">
+      <div class="shortform-caption-label">첫 줄 훅</div>
+      <div class="shortform-caption-hook">${cap.hook_line || ''}</div>
+    </div>
+    <div class="shortform-caption-full">
+      <div class="shortform-caption-label">완성 캡션 <button class="shortform-copy-mini" onclick="copyShortformCaption()">복사</button></div>
+      <pre class="shortform-caption-text">${cap.full_caption || ''}</pre>
+    </div>
+  `;
+
+  // 해시태그
+  const hashEl = document.getElementById('shortform-hashtags');
+  const ht = r.hashtags || {};
+  const renderTags = (tags, cls) => (tags || []).map(t => `<span class="hash-tag ${cls}">${t}</span>`).join('');
+  hashEl.innerHTML = `
+    <div class="hash-group"><div class="hash-group-label">핵심 (검색량 높음)</div><div class="hash-tags">${renderTags(ht.core, 'hash-core')}</div></div>
+    <div class="hash-group"><div class="hash-group-label">틈새 (경쟁 낮음)</div><div class="hash-tags">${renderTags(ht.niche, 'hash-niche')}</div></div>
+    <div class="hash-group"><div class="hash-group-label">트렌딩</div><div class="hash-tags">${renderTags(ht.trending, 'hash-trending')}</div></div>
+    ${ht.strategy ? `<div class="hash-strategy">${ht.strategy}</div>` : ''}
+  `;
+
+  // 자막 가이드
+  renderList('shortform-text-overlay', r.text_overlay_guide);
+
+  // 음악 & 루프
+  const mlEl = document.getElementById('shortform-music-loop');
+  mlEl.innerHTML = `
+    <div style="margin-bottom:12px"><strong>🎵 음악:</strong> ${r.music_mood || ''}</div>
+    <div><strong>🔁 루프 팁:</strong> ${r.loop_tip || ''}</div>
+  `;
+}
+
+function copyShortformCaption() {
+  if (!_currentShortformCaption) return;
+  navigator.clipboard.writeText(_currentShortformCaption).then(() => {
+    const btns = document.querySelectorAll('#shortform-report-section .copy-btn, .shortform-copy-mini');
+    btns.forEach(btn => { btn.textContent = '✅ 복사됨!'; setTimeout(() => btn.textContent = btn.classList.contains('copy-btn') ? '📋 캡션 복사' : '복사', 2000); });
+  }).catch(() => alert('복사 실패'));
+}
+
 // ===== 히스토리 =====
 
 async function downloadHistoryPDF(id) {
@@ -810,7 +992,7 @@ async function downloadHistoryPDF(id) {
 }
 
 async function loadHistory(type) {
-  ['all','research','planning','intro','script','edit'].forEach(t => {
+  ['all','research','planning','intro','script','edit','shortform'].forEach(t => {
     const el = document.getElementById(`hf-${t}`);
     if (el) el.classList.toggle('active', (type || '') === (t === 'all' ? '' : t));
   });
@@ -825,8 +1007,8 @@ async function loadHistory(type) {
     return;
   }
 
-  const typeLabels = { research: '시장조사', edit: '편집 피드백', planning: '기획', intro: '도입부', script: '대본' };
-  const typeColors = { research: '#3b82f6', edit: '#8b5cf6', planning: '#f59e0b', intro: '#10b981', script: '#ef4444' };
+  const typeLabels = { research: '시장조사', edit: '편집 피드백', planning: '기획', intro: '도입부', script: '대본', shortform: '숏폼' };
+  const typeColors = { research: '#3b82f6', edit: '#8b5cf6', planning: '#f59e0b', intro: '#10b981', script: '#ef4444', shortform: '#ec4899' };
 
   list.innerHTML = '';
   data.forEach(item => {
@@ -897,6 +1079,15 @@ async function loadHistoryItem(id) {
         renderEditReport(data.report, data.keyword);
         document.getElementById('edit-report-section').classList.remove('hidden');
         document.getElementById('edit-input-section').classList.add('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
+    shortform: () => {
+      switchTab('shortform'); resetToShortform();
+      setTimeout(() => {
+        renderShortformReport(data.report, data.keyword);
+        document.getElementById('shortform-report-section').classList.remove('hidden');
+        document.getElementById('shortform-input-section').classList.add('hidden');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }, 100);
     },

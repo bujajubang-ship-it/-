@@ -340,6 +340,89 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
 
         return _safe_json(msg.content[0].text.strip())
 
+    async def analyze_shortform(self, keyword: str, product_desc: str, duration: str, market_insights: str, reference_reel: str) -> Dict:
+        system_prompt = (
+            "당신은 인스타그램 릴스 전문 콘텐츠 전략가입니다. "
+            "인스타그램 알고리즘에서 저장·공유·댓글이 노출을 결정한다는 것을 알고, "
+            "이 세 가지 지표를 극대화하는 숏폼 콘텐츠를 기획합니다. "
+            "첫 1-3초 훅이 스크롤을 멈추게 해야 하며, 자막/텍스트 오버레이로 음소거 시청도 소화 가능해야 합니다. "
+            "반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만."
+        )
+
+        user_text = f"""주제/키워드: "{keyword}"
+내 제품/서비스/채널: {product_desc or "없음"}
+영상 길이: {duration}초
+시장조사 인사이트: {market_insights or "없음 — 키워드 기반으로 분석"}
+참고 릴스 내용: {reference_reel or "없음"}
+
+인스타그램 릴스 알고리즘 핵심: 저장 > 공유 > 댓글 > 좋아요 순으로 노출에 영향.
+위 정보를 바탕으로 아래 JSON 형식으로 숏폼 기획안을 작성하세요.
+
+{{
+  "core_message": "이 릴스 하나로 전달할 핵심 메시지 한 문장 (시청자가 저장하고 싶어지는 유용한 내용)",
+  "hooks": [
+    {{
+      "text": "첫 1-3초 훅 문장 (스크롤을 멈추게 하는 강렬한 한 줄)",
+      "type": "훅 유형 (충격/공감/질문/비밀공개/반전 중 하나)",
+      "why": "왜 스크롤을 멈추게 하는지 이유"
+    }}
+  ],
+  "script": [
+    {{
+      "time": "00:00-00:03",
+      "scene": "장면 설명 (무엇을 찍는지)",
+      "narration": "나레이션/말 (없으면 빈 문자열)",
+      "text_overlay": "화면에 올릴 텍스트 자막 (굵고 짧게, 음소거 시청자용)",
+      "action": "행동/연출 팁"
+    }}
+  ],
+  "save_triggers": [
+    "저장을 유도하는 요소 3-4개 (예: 나중에 써먹을 수 있는 팁 형식으로 구성)"
+  ],
+  "share_triggers": [
+    "공유를 유도하는 요소 2-3개 (예: 주변에 알려주고 싶어지는 공감 포인트)"
+  ],
+  "comment_cta": {{
+    "question": "댓글을 유도하는 마무리 질문 (시청자가 대답하고 싶어지는 것)",
+    "why_comments": "왜 이 질문이 댓글을 유도하는지",
+    "alternatives": ["댓글 유도 질문 대안 2개"]
+  }},
+  "cover_frame": {{
+    "main_text": "첫 화면 텍스트 (피드에서 클릭하게 만드는 강렬한 문구, 10자 내외)",
+    "sub_text": "서브 텍스트 (있다면)",
+    "visual": "첫 화면 비주얼 설명 (무엇이 보여야 하는지)",
+    "why_clicks": "왜 이 커버가 클릭을 유도하는지"
+  }},
+  "caption": {{
+    "hook_line": "캡션 첫 줄 (더보기 전에 보이는 줄 — 클릭 유도)",
+    "body": "캡션 본문 (간결하게, 줄바꿈 포함)",
+    "cta": "캡션 마지막 CTA (저장/공유/댓글 유도 문구)",
+    "full_caption": "완성된 캡션 전체 (바로 복사해서 쓸 수 있게)"
+  }},
+  "hashtags": {{
+    "core": ["핵심 해시태그 5개 (주제 직결, 검색량 높음)"],
+    "niche": ["틈새 해시태그 5개 (경쟁 낮고 타겟 명확)"],
+    "trending": ["트렌딩/시즌 해시태그 3개"],
+    "strategy": "이 해시태그 조합 전략 설명"
+  }},
+  "text_overlay_guide": [
+    "자막/텍스트 오버레이 스타일 가이드 3-4개 (폰트/위치/강조 방법 등)"
+  ],
+  "music_mood": "배경음악 분위기 추천 (예: 에너지 넘치는 업비트, 감성적인 인디팝 등) + 이유",
+  "loop_tip": "루프 시청을 유도하는 마무리 연출 팁 (끝과 시작이 연결되게 하는 방법)"
+}}
+
+hooks는 3개, script는 {duration}초에 맞게 장면을 나눠 작성하세요."""
+
+        msg = await self.client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_text}],
+        )
+
+        return _safe_json(msg.content[0].text.strip())
+
     async def analyze_edit_feedback(self, keyword: str, script: str, videos: List[Dict], naver: List[Dict]) -> Dict:
         videos_text = self._build_videos_text(videos)
         naver_text = self._build_naver_text(naver)
