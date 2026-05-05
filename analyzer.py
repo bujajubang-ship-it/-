@@ -31,8 +31,11 @@ def _safe_json(raw: str) -> dict:
     except json.JSONDecodeError:
         m = re.search(r"\{.*\}", ''.join(fixed), re.DOTALL)
         if m:
-            return json.loads(m.group())
-        raise ValueError(f"JSON 파싱 실패: {raw[:200]}")
+            try:
+                return json.loads(m.group())
+            except json.JSONDecodeError:
+                pass
+        raise ValueError("AI 응답이 도중에 잘렸습니다. 다시 시도해주세요.")
 
 
 class Analyzer:
