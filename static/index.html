@@ -64,7 +64,10 @@
             <h2 id="midform-report-title"></h2>
             <p class="report-subtitle">원클릭 영상 기획 완성본</p>
           </div>
-          <button class="reset-btn" onclick="resetToMidform()">← 새 기획</button>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="pdf-btn" onclick="downloadPdf('midform-report-section','부자주방_미드폼기획')">⬇ PDF 저장</button>
+            <button class="reset-btn" onclick="resetToMidform()">← 새 기획</button>
+          </div>
         </div>
 
         <div class="midform-ct-banner" id="midform-content-type-banner" style="display:none"></div>
@@ -181,6 +184,7 @@
           </div>
           <div class="report-header-actions">
             <button class="action-btn copy-btn" onclick="copyShortformCaption()">📋 캡션 복사</button>
+            <button class="pdf-btn" onclick="downloadPdf('shortform-report-section','부자주방_숏폼기획')">⬇ PDF 저장</button>
             <button class="reset-btn" onclick="resetToShortform()">← 새 기획</button>
           </div>
         </div>
@@ -331,7 +335,10 @@
             <h2 id="edit-report-title"></h2>
             <p class="report-subtitle">시장 데이터 기반 편집 피드백</p>
           </div>
-          <button class="reset-btn" onclick="resetToEdit()">← 새 분석</button>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="pdf-btn" onclick="downloadPdf('edit-report-section','부자주방_편집피드백')">⬇ PDF 저장</button>
+            <button class="reset-btn" onclick="resetToEdit()">← 새 분석</button>
+          </div>
         </div>
 
         <div class="fit-score-banner" id="fit-score-banner"></div>

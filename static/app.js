@@ -93,14 +93,12 @@ async function streamSSE(url, body, addStep, onDone, onError) {
 
 let topicAnalyzing = false;
 
-function downloadTopicPdf() {
-  const el = document.getElementById('topic-report-section');
-  const subtitle = document.getElementById('topic-report-subtitle').textContent || '주제추천';
-  const date = new Date().toLocaleDateString('ko-KR').replace(/\. /g, '-').replace('.', '');
-  const filename = `부자주방_주제추천_${date}.pdf`;
-  const btn = document.querySelector('.pdf-btn');
-  btn.textContent = '⏳ 생성 중...';
-  btn.disabled = true;
+function downloadPdf(sectionId, baseName) {
+  const el = document.getElementById(sectionId);
+  const date = new Date().toLocaleDateString('ko-KR').replace(/\. ?/g, '-').replace(/-$/, '');
+  const filename = `${baseName}_${date}.pdf`;
+  const btn = el.querySelector('.pdf-btn');
+  if (btn) { btn.textContent = '⏳ 생성 중...'; btn.disabled = true; }
   html2pdf().set({
     margin: [10, 10, 10, 10],
     filename,
@@ -109,9 +107,12 @@ function downloadTopicPdf() {
     jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
     pagebreak: { mode: ['avoid-all', 'css'] }
   }).from(el).save().then(() => {
-    btn.textContent = '⬇ PDF 저장';
-    btn.disabled = false;
+    if (btn) { btn.textContent = '⬇ PDF 저장'; btn.disabled = false; }
   });
+}
+
+function downloadTopicPdf() {
+  downloadPdf('topic-report-section', '부자주방_주제추천');
 }
 
 function resetToTopic() {
