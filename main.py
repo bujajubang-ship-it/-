@@ -186,7 +186,7 @@ async def edit_feedback(req: EditFeedbackRequest):
 
             yield sse({"step": "analyzing", "message": "AI가 대본 분석 중... (보통 20~40초 소요)"})
             analyzer = Analyzer()
-            report = await analyzer.analyze_edit_feedback(req.keyword, req.script, videos_with_comments[:5], naver_results)
+            report = await analyzer.analyze_edit_feedback(req.keyword, req.script, videos_with_comments, naver_results)
 
             save_history("edit", req.keyword, report)
             yield sse({"step": "done", "report": report, "keyword": req.keyword})
