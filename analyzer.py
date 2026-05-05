@@ -530,7 +530,7 @@ hot_topics는 7개 작성하세요: 풀링+키 겸용 3개 이상, 풀링 2-3개
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=4096,
+            max_tokens=8192,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
