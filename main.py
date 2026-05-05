@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 
@@ -186,7 +187,11 @@ async def edit_feedback(req: EditFeedbackRequest):
 
             yield sse({"step": "analyzing", "message": "AI가 대본 분석 중... (보통 20~40초 소요)"})
             analyzer = Analyzer()
-            report = await analyzer.analyze_edit_feedback(req.keyword, req.script, videos_with_comments, naver_results)
+            _task = asyncio.create_task(analyzer.analyze_edit_feedback(req.keyword, req.script, videos_with_comments, naver_results))
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            report = _task.result()
 
             save_history("edit", req.keyword, report)
             yield sse({"step": "done", "report": report, "keyword": req.keyword})
@@ -317,10 +322,14 @@ async def shortform(req: ShortformRequest):
 
             yield sse({"step": "analyzing", "message": f"AI가 {req.duration}초 릴스 기획 중... (30~60초 소요)"})
             analyzer = Analyzer()
-            report = await analyzer.analyze_shortform(
+            _task = asyncio.create_task(analyzer.analyze_shortform(
                 req.keyword, req.product_desc, req.duration,
                 videos_with_comments or None, naver_results or None
-            )
+            ))
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            report = _task.result()
             save_history("shortform", req.keyword, report)
             yield sse({"step": "done", "report": report, "keyword": req.keyword})
         except Exception as e:
@@ -373,7 +382,11 @@ async def midform(req: MidformRequest):
 
             yield sse({"step": "analyzing", "message": "AI가 전체 영상 기획 작성 중... (1~2분 소요)"})
             analyzer = Analyzer()
-            report = await analyzer.analyze_midform(req.keyword, req.product_desc, videos_with_comments, naver_results)
+            _task = asyncio.create_task(analyzer.analyze_midform(req.keyword, req.product_desc, videos_with_comments, naver_results))
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            report = _task.result()
             save_history("midform", req.keyword, report)
             yield sse({"step": "done", "report": report, "keyword": req.keyword})
 
@@ -450,7 +463,11 @@ async def topic_suggest():
 
             yield sse({"step": "analyzing", "message": "AI가 트렌드 분석 + 주제 추천 중... (30~60초 소요)"})
             analyzer = Analyzer()
-            report = await analyzer.analyze_topic_trends(unique_videos, all_naver)
+            _task = asyncio.create_task(analyzer.analyze_topic_trends(unique_videos, all_naver))
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            report = _task.result()
             save_history("topic", "트렌드 주제 추천", report)
             yield sse({"step": "done", "report": report})
 
