@@ -184,9 +184,9 @@ async def edit_feedback(req: EditFeedbackRequest):
                 await naver.close()
                 yield sse({"step": "naver_done", "message": f"네이버 카페 {len(naver_results)}개 게시글 수집 완료!"})
 
-            yield sse({"step": "analyzing", "message": "AI가 대본 분석 중... (보통 30~60초 소요)"})
+            yield sse({"step": "analyzing", "message": "AI가 대본 분석 중... (보통 20~40초 소요)"})
             analyzer = Analyzer()
-            report = await analyzer.analyze_edit_feedback(req.keyword, req.script, videos_with_comments, naver_results)
+            report = await analyzer.analyze_edit_feedback(req.keyword, req.script, videos_with_comments[:5], naver_results)
 
             save_history("edit", req.keyword, report)
             yield sse({"step": "done", "report": report, "keyword": req.keyword})

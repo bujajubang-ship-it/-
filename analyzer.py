@@ -47,12 +47,12 @@ class Analyzer:
         except Exception:
             return None
 
-    def _build_videos_text(self, videos: List[Dict]) -> str:
+    def _build_videos_text(self, videos: List[Dict], max_videos: int = 10, max_comments: int = 30) -> str:
         parts = []
-        for i, v in enumerate(videos[:10], 1):
+        for i, v in enumerate(videos[:max_videos], 1):
             comments_block = "\n".join(
                 f"  [{c['like_count']}좋아요] {c['text']}"
-                for c in v.get("comments", [])[:30]
+                for c in v.get("comments", [])[:max_comments]
             )
             parts.append(
                 f"[영상{i}] {v['title']}\n"
@@ -628,7 +628,7 @@ hooks는 3개, script는 {duration}초에 맞게 장면을 나눠 작성하세�
         return _safe_json(msg.content[0].text.strip())
 
     async def analyze_edit_feedback(self, keyword: str, script: str, videos: List[Dict], naver: List[Dict]) -> Dict:
-        videos_text = self._build_videos_text(videos)
+        videos_text = self._build_videos_text(videos, max_videos=5, max_comments=15)
         naver_text = self._build_naver_text(naver)
 
         system_prompt = (
@@ -692,7 +692,7 @@ hooks는 3개, script는 {duration}초에 맞게 장면을 나눠 작성하세�
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=4096,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
