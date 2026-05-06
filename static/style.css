@@ -27,7 +27,7 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .logo-icon { font-size: 22px; color: var(--red); }
 .logo-text { font-size: 18px; font-weight: 700; color: var(--text); }
 .api-status { display: flex; gap: 8px; flex-shrink: 0; margin-left: auto; }
-.api-dot { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
+.api-dot { font-size: 10px; padding: 3px 8px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
 .api-dot.ok { background: #d1fae5; color: #065f46; }
 .api-dot.off { background: #fee2e2; color: #991b1b; }
 
@@ -160,10 +160,10 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .step-text { font-size: 14px; line-height: 1.6; }
 
 /* Tab Nav */
-.header-center { flex: 1; min-width: 0; display: flex; justify-content: center; }
-.tab-nav { display: flex; gap: 2px; background: #f0f2f5; border-radius: 10px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
+.header-center { flex: 1; min-width: 0; overflow: hidden; display: flex; align-items: center; }
+.tab-nav { display: flex; gap: 1px; background: #f0f2f5; border-radius: 10px; padding: 3px; overflow-x: auto; scrollbar-width: none; margin: 0 auto; }
 .tab-nav::-webkit-scrollbar { display: none; }
-.tab-btn { padding: 7px 14px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; background: transparent; color: var(--text-sub); transition: all .2s; white-space: nowrap; }
+.tab-btn { padding: 6px 11px; border: none; border-radius: 7px; font-size: 12.5px; font-weight: 600; cursor: pointer; background: transparent; color: var(--text-sub); transition: all .2s; white-space: nowrap; }
 .tab-btn.active { background: #fff; color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,0.12); }
 .tab-btn:hover:not(.active) { color: var(--text); }
 
