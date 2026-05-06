@@ -427,6 +427,12 @@ function renderMidformReport(r, keyword) {
     dg.appendChild(div);
   });
 
+  // 유튜브 설명글 / 인스타 캡션
+  const ytDesc = document.getElementById('midform-yt-desc');
+  if (ytDesc) ytDesc.textContent = r.youtube_description || '';
+  const instaEl = document.getElementById('midform-insta-cap');
+  if (instaEl) instaEl.textContent = r.instagram_caption || '';
+
   // 예상 길이
   const dur = document.getElementById('midform-duration');
   if (r.estimated_duration) {
@@ -596,6 +602,16 @@ function renderShortformReport(r, keyword) {
     <div style="margin-bottom:12px"><strong>🎵 음악:</strong> ${r.music_mood || ''}</div>
     <div><strong>🔁 루프 팁:</strong> ${r.loop_tip || ''}</div>
   `;
+}
+
+function copyText(elId) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(() => {
+    const btn = el.previousElementSibling?.querySelector('.shortform-copy-mini') ||
+                el.parentElement?.querySelector('.shortform-copy-mini');
+    if (btn) { btn.textContent = '✅ 복사됨!'; setTimeout(() => btn.textContent = '복사', 2000); }
+  }).catch(() => alert('복사 실패'));
 }
 
 function copyShortformCaption() {

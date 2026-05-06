@@ -496,10 +496,13 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
   "cta": "영상 마지막 댓글/구독 유도 대본 (구어체)",
   "estimated_duration": "예상 영상 길이 (예: 5-7분)",
   "must_include": ["반드시 넣어야 할 내용 6-8개"],
-  "differentiation": ["차별화 포인트 4-5개 (근거 포함)"]
+  "differentiation": ["차별화 포인트 4-5개 (근거 포함)"],
+  "youtube_description": "유튜브 영상 설명글. 반드시 첫 줄을 #키워드 (핵심 명사만, 예: #자동숯불구이기) 로 시작. 그 다음 줄부터 키워드를 8회 이상 자연스럽게 반복한 본문 5-7문장. 이후 고정 링크 블록을 그대로 포함:\\n\\n🔗 {keyword} 자세히 보기\\n👉 부자주방 자사몰 : https://bujaikm.com/\\n\\n🛒 네이버에서 바로 보기\\n👉 부자주방 스마트스토어 : https://smartstore.naver.com/bujakitchen\\n\\n📞 문의가 필요하시면\\n부자주방 1600-6787 으로 편하게 연락 주세요.",
+  "instagram_caption": "인스타그램 캡션. 반드시 첫 줄을 #키워드 (핵심 명사만) 로 시작. 그 다음 줄부터 키워드를 8회 이상 자연스럽게 반복한 본문 5-7문장 (유튜브 설명글과 다른 문장으로). 이후 고정 링크 블록:\\n\\n🔗 {keyword} 자세히 보기\\n👉 부자주방 자사몰 : https://bujaikm.com/\\n\\n🛒 네이버에서 바로 보기\\n👉 부자주방 스마트스토어 : https://smartstore.naver.com/bujakitchen\\n\\n📞 문의가 필요하시면\\n부자주방 1600-6787 으로 편하게 연락 주세요."
 }}
 
-titles는 5개, thumbnails는 3개, script_sections는 영상 흐름에 맞게 4-7개 작성하세요."""
+titles는 5개, thumbnails는 3개, script_sections는 영상 흐름에 맞게 4-7개 작성하세요.
+youtube_description과 instagram_caption은 키워드({keyword})를 본문에 최소 8회 이상 자연스럽게 포함하고 첫 줄은 반드시 #키워드 형태로 시작하세요."""
 
         content: list = []
         if thumb_blocks:
