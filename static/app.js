@@ -8,7 +8,7 @@ let introAnalyzing = false;
 let scriptAnalyzing = false;
 
 // includes old tabs so history items still render into their panes
-const ALL_TABS = ['midform', 'shortform', 'topic', 'edit', 'decision', 'channel', 'history', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'topic', 'edit', 'decision', 'channel', 'chat', 'history', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -1237,4 +1237,132 @@ function renderChannelReport(r) {
 
   // 다음 영상 전략
   document.getElementById('channel-next-strategy').textContent = r.next_video_strategy || '';
+}
+
+// ===== 💬 AI 상담 =====
+
+let chatHistory = [];
+let chatSending = false;
+
+const CHAT_WELCOME = `<div class="chat-bubble assistant">
+  <div class="chat-bubble-inner">
+    안녕하세요! 부자주방 채널 전담 콘텐츠 전략 파트너입니다. 👋<br><br>
+    미드폼·숏폼 기획, 제목·썸네일 전략, 업로드 타이밍, 채널 성장까지 궁금한 것은 무엇이든 물어보세요.<br><br>
+    채널 목표(CTR 10%+, 30초 이탈률 40% 미만)와 풀링·키 콘텐츠 전략을 기반으로 구체적으로 답변드립니다.
+    <div class="chat-suggestion-chips">
+      <span class="chat-chip" onclick="sendChatChip(this)">릴스 훅 잡는 법</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">조회수 오르는 제목 공식</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">풀링 vs 키 콘텐츠 차이</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">업로드 최적 요일·시간</span>
+    </div>
+  </div>
+</div>`;
+
+function clearChat() {
+  chatHistory = [];
+  document.getElementById('chat-messages').innerHTML = CHAT_WELCOME;
+}
+
+function sendChatChip(el) {
+  const input = document.getElementById('chat-input');
+  input.value = el.textContent;
+  sendChat();
+}
+
+function chatInputResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+}
+
+function chatKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendChat();
+  }
+}
+
+function _escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function _formatChat(text) {
+  return _escapeHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+}
+
+async function sendChat() {
+  if (chatSending) return;
+  const input = document.getElementById('chat-input');
+  const message = input.value.trim();
+  if (!message) return;
+
+  chatSending = true;
+  document.getElementById('chat-send-btn').disabled = true;
+  input.value = '';
+  input.style.height = 'auto';
+
+  const messages = document.getElementById('chat-messages');
+
+  // 사용자 메시지 추가
+  const userBubble = document.createElement('div');
+  userBubble.className = 'chat-bubble user';
+  userBubble.innerHTML = `<div class="chat-bubble-inner">${_escapeHtml(message)}</div>`;
+  messages.appendChild(userBubble);
+
+  // 로딩 버블
+  const aiBubble = document.createElement('div');
+  aiBubble.className = 'chat-bubble assistant';
+  aiBubble.innerHTML = `<div class="chat-bubble-inner"><div class="chat-typing"><span></span><span></span><span></span></div></div>`;
+  messages.appendChild(aiBubble);
+  messages.scrollTop = messages.scrollHeight;
+
+  let fullText = '';
+  const inner = aiBubble.querySelector('.chat-bubble-inner');
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, history: chatHistory }),
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let started = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.token) {
+            if (!started) { inner.innerHTML = ''; started = true; }
+            fullText += data.token;
+            inner.innerHTML = _formatChat(fullText);
+            messages.scrollTop = messages.scrollHeight;
+          }
+          if (data.done) {
+            chatHistory.push({ role: 'user', content: message });
+            chatHistory.push({ role: 'assistant', content: fullText });
+          }
+          if (data.error) {
+            inner.innerHTML = `<span style="color:var(--red)">오류: ${_escapeHtml(data.error)}</span>`;
+          }
+        } catch (e) {}
+      }
+    }
+  } catch (err) {
+    inner.innerHTML = `<span style="color:var(--red)">연결 오류. 다시 시도해주세요.</span>`;
+  }
+
+  chatSending = false;
+  document.getElementById('chat-send-btn').disabled = false;
+  input.focus();
 }

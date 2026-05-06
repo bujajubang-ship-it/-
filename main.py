@@ -71,6 +71,11 @@ class VideoDecisionRequest(BaseModel):
     videos: list
 
 
+class ChatRequest(BaseModel):
+    message: str
+    history: list = []
+
+
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -583,6 +588,30 @@ async def video_decision(req: VideoDecisionRequest):
             yield sse({"step": "done", "report": report})
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    async def stream():
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            yield sse({"error": "ANTHROPIC_API_KEY가 설정되지 않았습니다."})
+            return
+        if not req.message.strip():
+            yield sse({"error": "메시지를 입력해주세요."})
+            return
+        try:
+            analyzer = Analyzer()
+            async for token in analyzer.chat_stream(req.message, req.history):
+                yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         stream(),

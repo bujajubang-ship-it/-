@@ -22,6 +22,7 @@
           <button class="tab-btn" id="tab-edit" onclick="switchTab('edit')">✏️ 편집 피드백</button>
           <button class="tab-btn" id="tab-decision" onclick="switchTab('decision')">📋 업로드 결정</button>
           <button class="tab-btn" id="tab-channel" onclick="switchTab('channel')">📊 채널 분석</button>
+          <button class="tab-btn" id="tab-chat" onclick="switchTab('chat')">💬 AI 상담</button>
           <button class="tab-btn" id="tab-history" onclick="switchTab('history')">📚 히스토리</button>
         </div>
       </div>
@@ -516,6 +517,41 @@
           <div class="card-body" id="channel-next-strategy"></div>
         </div>
       </section>
+    </div>
+
+    <!-- ===== 💬 AI 상담 탭 ===== -->
+    <div id="pane-chat" class="hidden">
+      <div class="chat-page">
+        <div class="chat-header-bar">
+          <div class="chat-ai-info">
+            <div class="chat-ai-avatar">AI</div>
+            <div>
+              <div class="chat-ai-name">부자주방 콘텐츠 전략가</div>
+              <div class="chat-ai-desc">미드폼·숏폼·제목·썸네일·업로드 전략 전담 AI 파트너</div>
+            </div>
+          </div>
+          <button class="chat-clear-btn" onclick="clearChat()">대화 초기화</button>
+        </div>
+        <div class="chat-messages" id="chat-messages">
+          <div class="chat-bubble assistant">
+            <div class="chat-bubble-inner">
+              안녕하세요! 부자주방 채널 전담 콘텐츠 전략 파트너입니다. 👋<br><br>
+              미드폼·숏폼 기획, 제목·썸네일 전략, 업로드 타이밍, 채널 성장까지 궁금한 것은 무엇이든 물어보세요.<br><br>
+              채널 목표(CTR 10%+, 30초 이탈률 40% 미만)와 풀링·키 콘텐츠 전략을 기반으로 구체적으로 답변드립니다.
+              <div class="chat-suggestion-chips">
+                <span class="chat-chip" onclick="sendChatChip(this)">릴스 훅 잡는 법</span>
+                <span class="chat-chip" onclick="sendChatChip(this)">조회수 오르는 제목 공식</span>
+                <span class="chat-chip" onclick="sendChatChip(this)">풀링 vs 키 콘텐츠 차이</span>
+                <span class="chat-chip" onclick="sendChatChip(this)">업로드 최적 요일·시간</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <textarea id="chat-input" placeholder="질문을 입력하세요... (Shift+Enter: 줄바꿈)" rows="1" onkeydown="chatKeydown(event)" oninput="chatInputResize(this)"></textarea>
+          <button id="chat-send-btn" onclick="sendChat()">전송</button>
+        </div>
+      </div>
     </div>
 
     <!-- ===== 📚 히스토리 탭 ===== -->
