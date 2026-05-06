@@ -513,7 +513,7 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
         analytics = AnalyticsService()
         try:
             yield sse({"step": "channel_info", "message": "채널 정보 불러오는 중..."})
-            channel_info, videos = await yt.get_channel_videos(req.channel_id.strip(), max_videos=200)
+            channel_info, videos = await yt.get_channel_videos(req.channel_id.strip(), max_videos=100)
             yield sse({"step": "videos_loaded", "message": f"영상 {len(videos)}개 데이터 수집 완료!"})
 
             analytics_data = []
