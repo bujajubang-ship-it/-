@@ -20,6 +20,8 @@
           <button class="tab-btn" id="tab-shortform" onclick="switchTab('shortform')">📱 숏폼</button>
           <button class="tab-btn tab-btn-trend" id="tab-topic" onclick="switchTab('topic')">🔍 주제 추천</button>
           <button class="tab-btn" id="tab-edit" onclick="switchTab('edit')">✏️ 편집 피드백</button>
+          <button class="tab-btn" id="tab-decision" onclick="switchTab('decision')">📋 업로드 결정</button>
+          <button class="tab-btn" id="tab-channel" onclick="switchTab('channel')">📊 채널 분석</button>
           <button class="tab-btn" id="tab-history" onclick="switchTab('history')">📚 히스토리</button>
         </div>
       </div>
@@ -391,6 +393,131 @@
       </section>
     </div>
 
+    <!-- ===== 📋 업로드 결정 탭 ===== -->
+    <div id="pane-decision" class="hidden">
+      <section class="search-section" id="decision-input-section">
+        <div class="search-card edit-card" style="max-width:760px">
+          <h1>찍어놓은 영상, 어떤 걸 먼저 올릴까?</h1>
+          <p class="search-desc">촬영 완료된 영상 정보를 입력하면 AI가 어떤 영상이 더 잘될지 순위 매기고<br>언제 올리면 좋은지 업로드 타이밍까지 구체적으로 알려드립니다.</p>
+          <div id="decision-video-list" class="decision-video-list"></div>
+          <button class="decision-add-btn" onclick="addDecisionVideo()">+ 영상 추가</button>
+          <button id="decision-btn" onclick="startVideoDecision()" style="margin-top:16px;width:100%">AI 분석 시작</button>
+        </div>
+      </section>
+
+      <section class="progress-section hidden" id="decision-progress-section">
+        <div class="progress-card">
+          <div class="progress-spinner"></div>
+          <div class="progress-steps" id="decision-progress-steps"></div>
+        </div>
+      </section>
+
+      <section class="report-section hidden" id="decision-report-section">
+        <div class="report-header">
+          <div>
+            <h2>업로드 순서 분석 결과</h2>
+            <p class="report-subtitle">AI 기반 영상별 성과 예측 + 업로드 타이밍 추천</p>
+          </div>
+          <button class="reset-btn" onclick="resetToDecision()">← 새 분석</button>
+        </div>
+
+        <div class="card" style="border:2px solid #3b82f6;">
+          <div class="card-header" style="background:linear-gradient(135deg,#eff6ff,#dbeafe)"><span class="card-icon">📅</span> 전체 업로드 스케줄</div>
+          <div class="card-body" id="decision-schedule"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🏆</span> 영상별 순위 분석</div>
+          <div id="decision-ranking" style="padding:16px 24px 20px"></div>
+        </div>
+
+        <div class="card" style="border:2px solid #10b981;">
+          <div class="card-header" style="background:linear-gradient(135deg,#ecfdf5,#d1fae5)"><span class="card-icon">🎯</span> 전체 전략</div>
+          <div class="card-body" id="decision-strategy"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===== 📊 채널 분석 탭 ===== -->
+    <div id="pane-channel" class="hidden">
+      <section class="search-section" id="channel-input-section">
+        <div class="search-card" style="max-width:560px">
+          <h1>내 채널 영상 패턴 분석</h1>
+          <p class="search-desc">채널 ID를 입력하면 최근 영상 200개를 분석해서<br>잘되는 주제·최적 업로드 요일·시간대·영상 길이·제목 패턴을 알려드립니다.<br><small style="color:#9ca3af">일반 API 키 기준 — 조회수·좋아요·댓글 데이터로 분석</small></p>
+          <div class="search-box" style="flex-direction:column;gap:12px">
+            <input type="text" id="channel-id-input" placeholder="채널 ID 입력 (예: UCxxxxxxxxxxxxxx)" autocomplete="off" style="width:100%" />
+            <p style="font-size:12px;color:#9ca3af;text-align:left">채널 ID 확인: YouTube 채널 페이지 → 주소창에서 /channel/ 뒤 문자열</p>
+            <button id="channel-btn" onclick="startChannelAnalyze()" style="width:100%">채널 분석 시작</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="progress-section hidden" id="channel-progress-section">
+        <div class="progress-card">
+          <div class="progress-spinner"></div>
+          <div class="progress-steps" id="channel-progress-steps"></div>
+        </div>
+      </section>
+
+      <section class="report-section hidden" id="channel-report-section">
+        <div class="report-header">
+          <div>
+            <h2 id="channel-report-title">채널 분석 결과</h2>
+            <p class="report-subtitle" id="channel-report-subtitle"></p>
+          </div>
+          <button class="reset-btn" onclick="resetToChannel()">← 새 분석</button>
+        </div>
+
+        <div class="concept-banner" id="channel-summary"></div>
+
+        <div class="ch-two-col">
+          <div class="card">
+            <div class="card-header"><span class="card-icon">🔥</span> 잘되는 주제 TOP 5</div>
+            <div id="channel-top-topics" style="padding:16px 24px 20px"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-icon">📉</span> 안되는 주제</div>
+            <div id="channel-under-topics" style="padding:16px 24px 20px"></div>
+          </div>
+        </div>
+
+        <div class="ch-three-col">
+          <div class="card">
+            <div class="card-header"><span class="card-icon">📅</span> 최적 업로드 요일</div>
+            <div id="channel-best-days" style="padding:16px 24px 20px"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-icon">🕐</span> 최적 시간대</div>
+            <div id="channel-best-hours" style="padding:16px 24px 20px"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-icon">⏱️</span> 최적 영상 길이</div>
+            <div class="card-body" id="channel-optimal-length"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-icon">✍️</span> 잘되는 제목 패턴</div>
+          <div id="channel-title-patterns" style="padding:16px 24px 20px"></div>
+        </div>
+
+        <div class="card" style="border:2px solid #ef4444;">
+          <div class="card-header" style="background:linear-gradient(135deg,#fef2f2,#fee2e2)"><span class="card-icon">🚧</span> 채널 성장 병목</div>
+          <div class="card-body" id="channel-bottleneck"></div>
+        </div>
+
+        <div class="card" style="border:2px solid #10b981;">
+          <div class="card-header" style="background:linear-gradient(135deg,#ecfdf5,#d1fae5)"><span class="card-icon">💡</span> 지금 바로 실행할 개선 방안</div>
+          <ul id="channel-recommendations" class="checklist" style="grid-template-columns:1fr;padding:16px 24px 20px"></ul>
+        </div>
+
+        <div class="card" style="border:2px solid #f59e0b;">
+          <div class="card-header" style="background:linear-gradient(135deg,#fffbeb,#fef3c7)"><span class="card-icon">🎯</span> 다음 영상 전략</div>
+          <div class="card-body" id="channel-next-strategy"></div>
+        </div>
+      </section>
+    </div>
+
     <!-- ===== 📚 히스토리 탭 ===== -->
     <div id="pane-history" class="hidden">
       <div class="history-page">
@@ -401,6 +528,8 @@
             <button class="hist-filter" onclick="loadHistory('midform')" id="hf-midform">미드폼</button>
             <button class="hist-filter" onclick="loadHistory('shortform')" id="hf-shortform">숏폼</button>
             <button class="hist-filter" onclick="loadHistory('edit')" id="hf-edit">편집 피드백</button>
+            <button class="hist-filter" onclick="loadHistory('decision')" id="hf-decision">업로드 결정</button>
+            <button class="hist-filter" onclick="loadHistory('channel')" id="hf-channel">채널 분석</button>
           </div>
           <div id="history-count" class="history-count"></div>
         </div>
@@ -462,10 +591,15 @@
         { key: 'youtube', label: 'YouTube API' },
         { key: 'anthropic', label: 'Claude AI' },
         { key: 'naver', label: '네이버 카페' },
+        { key: 'analytics', label: 'Analytics' },
       ];
       el.innerHTML = items.map(i =>
         `<span class="api-dot ${data[i.key] ? 'ok' : 'off'}" title="${i.label}: ${data[i.key] ? '연결됨' : '미설정'}">● ${i.label}</span>`
       ).join('');
+      if (data.my_channel_id) {
+        const inp = document.getElementById('channel-id-input');
+        if (inp) inp.value = data.my_channel_id;
+      }
     }).catch(() => {});
   </script>
 </body>

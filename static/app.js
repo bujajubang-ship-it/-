@@ -8,7 +8,7 @@ let introAnalyzing = false;
 let scriptAnalyzing = false;
 
 // includes old tabs so history items still render into their panes
-const ALL_TABS = ['midform', 'shortform', 'topic', 'edit', 'history', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'topic', 'edit', 'decision', 'channel', 'history', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -966,4 +966,274 @@ function renderScriptReport(r, keyword) {
   _currentAdaptedScript = r.adapted_script || '';
   document.getElementById('script-report-title').textContent = `"${keyword}" 변형 대본`;
   document.getElementById('script-adapted').textContent = r.adapted_script || '';
+}
+
+// ===== 📋 업로드 결정 =====
+
+let decisionAnalyzing = false;
+let decisionVideoCount = 0;
+
+function addDecisionVideo() {
+  const list = document.getElementById('decision-video-list');
+  if (decisionVideoCount >= 8) { alert('최대 8개까지 추가할 수 있습니다.'); return; }
+  decisionVideoCount++;
+  const idx = decisionVideoCount;
+  const card = document.createElement('div');
+  card.className = 'decision-video-card';
+  card.id = `decision-video-${idx}`;
+  card.innerHTML = `
+    <div class="decision-video-header">
+      <span class="decision-video-num">#${idx}</span>
+      <button class="decision-remove-btn" onclick="removeDecisionVideo(${idx})">✕ 삭제</button>
+    </div>
+    <input type="text" placeholder="제목 아이디어 (예: 업소용 가스레인지 청소 꿀팁)" class="decision-input" id="dv-title-${idx}" />
+    <textarea placeholder="영상 내용 설명 (어떤 내용을 다루는지, 어떤 제품/주제인지)" class="decision-textarea" rows="2" id="dv-desc-${idx}"></textarea>
+    <textarea placeholder="대본 또는 아웃라인 (선택 — 있으면 더 정확하게 분석)" class="decision-textarea" rows="3" id="dv-script-${idx}"></textarea>
+    <input type="text" placeholder="썸네일 컨셉 (선택 — 어떤 이미지/문구를 생각 중인지)" class="decision-input" id="dv-thumb-${idx}" />
+  `;
+  list.appendChild(card);
+}
+
+function removeDecisionVideo(idx) {
+  const card = document.getElementById(`decision-video-${idx}`);
+  if (card) card.remove();
+}
+
+function resetToDecision() {
+  document.getElementById('decision-report-section').classList.add('hidden');
+  document.getElementById('decision-progress-section').classList.add('hidden');
+  document.getElementById('decision-input-section').classList.remove('hidden');
+  document.getElementById('decision-btn').disabled = false;
+  decisionAnalyzing = false;
+}
+
+function startVideoDecision() {
+  if (decisionAnalyzing) return;
+
+  const cards = document.querySelectorAll('.decision-video-card');
+  if (cards.length === 0) { alert('영상을 하나 이상 추가해주세요.'); return; }
+
+  const videos = [];
+  let hasContent = false;
+  cards.forEach(card => {
+    const id = card.id.replace('decision-video-', '');
+    const title = (document.getElementById(`dv-title-${id}`) || {}).value || '';
+    const description = (document.getElementById(`dv-desc-${id}`) || {}).value || '';
+    const script = (document.getElementById(`dv-script-${id}`) || {}).value || '';
+    const thumbnail_concept = (document.getElementById(`dv-thumb-${id}`) || {}).value || '';
+    if (title.trim() || description.trim()) hasContent = true;
+    videos.push({ title, description, script, thumbnail_concept });
+  });
+
+  if (!hasContent) { alert('최소 하나의 영상에 제목 또는 내용을 입력해주세요.'); return; }
+
+  decisionAnalyzing = true;
+  document.getElementById('decision-btn').disabled = true;
+  document.getElementById('decision-input-section').classList.add('hidden');
+  document.getElementById('decision-report-section').classList.add('hidden');
+  document.getElementById('decision-progress-steps').innerHTML = '';
+  document.getElementById('decision-progress-section').classList.remove('hidden');
+
+  const addStep = makeProgressStepper('decision-progress-steps');
+  addStep(`영상 ${videos.length}개 분석 준비 중...`, 'active');
+
+  streamSSE(
+    '/api/video-decision',
+    { videos },
+    addStep,
+    (data) => {
+      document.getElementById('decision-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
+        s.className = 'progress-step done';
+        s.querySelector('.step-icon').textContent = '✅';
+      });
+      addStep('분석 완료!', 'done');
+      setTimeout(() => {
+        document.getElementById('decision-progress-section').classList.add('hidden');
+        renderDecisionReport(data.report);
+        document.getElementById('decision-report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        decisionAnalyzing = false;
+        document.getElementById('decision-btn').disabled = false;
+      }, 600);
+    },
+    (msg) => {
+      document.getElementById('decision-progress-steps').innerHTML = '';
+      makeProgressStepper('decision-progress-steps')(msg, 'error');
+      decisionAnalyzing = false;
+      document.getElementById('decision-btn').disabled = false;
+      document.getElementById('decision-input-section').classList.remove('hidden');
+      document.getElementById('decision-progress-section').classList.add('hidden');
+    }
+  );
+}
+
+const SCORE_COLOR = (s) => s >= 80 ? '#10b981' : s >= 60 ? '#f59e0b' : '#ef4444';
+const RANK_MEDAL = ['🥇', '🥈', '🥉'];
+
+function renderDecisionReport(r) {
+  document.getElementById('decision-schedule').textContent = r.upload_schedule || '';
+  document.getElementById('decision-strategy').textContent = r.overall_strategy || '';
+
+  const el = document.getElementById('decision-ranking');
+  el.innerHTML = '';
+  (r.ranking || []).forEach(item => {
+    const medal = RANK_MEDAL[item.rank - 1] || `#${item.rank}`;
+    const score = item.performance_score || 0;
+    const div = document.createElement('div');
+    div.className = 'decision-rank-card';
+    div.innerHTML = `
+      <div class="decision-rank-header">
+        <span class="decision-rank-medal">${medal}</span>
+        <span class="decision-rank-title">${item.original_title || `영상 ${item.video_index}`}</span>
+        <span class="decision-rank-score" style="color:${SCORE_COLOR(score)}">${score}점</span>
+      </div>
+      <div class="decision-rank-body">
+        <div class="decision-rank-section"><strong>📅 업로드 타이밍</strong><p>${item.timing_recommendation || ''}</p></div>
+        <div class="decision-rank-section"><strong>💡 추천 이유</strong><p>${item.reason || ''}</p></div>
+        <div class="decision-rank-section decision-improved">
+          <strong>✍️ 개선 제목</strong><p class="decision-improved-title">${item.improved_title || ''}</p>
+        </div>
+        <div class="decision-rank-section"><strong>🖼️ 썸네일 팁</strong><p>${item.thumbnail_tip || ''}</p></div>
+        ${item.risk ? `<div class="decision-rank-section decision-risk"><strong>⚠️ 주의</strong><p>${item.risk}</p></div>` : ''}
+      </div>
+    `;
+    el.appendChild(div);
+  });
+}
+
+// ===== 📊 채널 분석 =====
+
+let channelAnalyzing = false;
+
+function resetToChannel() {
+  document.getElementById('channel-report-section').classList.add('hidden');
+  document.getElementById('channel-progress-section').classList.add('hidden');
+  document.getElementById('channel-input-section').classList.remove('hidden');
+  document.getElementById('channel-btn').disabled = false;
+  channelAnalyzing = false;
+}
+
+function startChannelAnalyze() {
+  if (channelAnalyzing) return;
+  const channelId = document.getElementById('channel-id-input').value.trim();
+  if (!channelId) { alert('채널 ID를 입력해주세요.'); return; }
+
+  channelAnalyzing = true;
+  document.getElementById('channel-btn').disabled = true;
+  document.getElementById('channel-input-section').classList.add('hidden');
+  document.getElementById('channel-report-section').classList.add('hidden');
+  document.getElementById('channel-progress-steps').innerHTML = '';
+  document.getElementById('channel-progress-section').classList.remove('hidden');
+
+  const addStep = makeProgressStepper('channel-progress-steps');
+  addStep('채널 정보 불러오는 중...', 'active');
+
+  streamSSE(
+    '/api/channel-analyze',
+    { channel_id: channelId },
+    addStep,
+    (data) => {
+      document.getElementById('channel-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
+        s.className = 'progress-step done';
+        s.querySelector('.step-icon').textContent = '✅';
+      });
+      addStep('분석 완료!', 'done');
+      setTimeout(() => {
+        document.getElementById('channel-progress-section').classList.add('hidden');
+        renderChannelReport(data.report);
+        document.getElementById('channel-report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        channelAnalyzing = false;
+        document.getElementById('channel-btn').disabled = false;
+      }, 600);
+    },
+    (msg) => {
+      document.getElementById('channel-progress-steps').innerHTML = '';
+      makeProgressStepper('channel-progress-steps')(msg, 'error');
+      channelAnalyzing = false;
+      document.getElementById('channel-btn').disabled = false;
+      document.getElementById('channel-input-section').classList.remove('hidden');
+      document.getElementById('channel-progress-section').classList.add('hidden');
+    }
+  );
+}
+
+function renderChannelReport(r) {
+  const ci = r.channel_info || {};
+  document.getElementById('channel-report-title').textContent = ci.title ? `${ci.title} 채널 분석` : '채널 분석 결과';
+  document.getElementById('channel-report-subtitle').textContent =
+    ci.subscriber_count ? `구독자 ${ci.subscriber_count.toLocaleString()}명 · 영상 ${r.total_analyzed || 0}개 분석` : '';
+
+  const summary = document.getElementById('channel-summary');
+  summary.textContent = r.channel_summary || '';
+  summary.style.display = r.channel_summary ? '' : 'none';
+
+  // 잘되는 주제
+  const topEl = document.getElementById('channel-top-topics');
+  topEl.innerHTML = '';
+  (r.top_performing_topics || []).forEach(t => {
+    const d = document.createElement('div');
+    d.className = 'ch-topic-item ch-topic-good';
+    d.innerHTML = `<div class="ch-topic-name">${t.topic}</div>
+      <div class="ch-topic-views">평균 ${(t.avg_views || 0).toLocaleString()}회</div>
+      <div class="ch-topic-reason">${t.reason}</div>
+      ${t.example ? `<div class="ch-topic-example">예: ${t.example}</div>` : ''}`;
+    topEl.appendChild(d);
+  });
+
+  // 안되는 주제
+  const underEl = document.getElementById('channel-under-topics');
+  underEl.innerHTML = '';
+  (r.underperforming_topics || []).forEach(t => {
+    const d = document.createElement('div');
+    d.className = 'ch-topic-item ch-topic-bad';
+    d.innerHTML = `<div class="ch-topic-name">${t.topic}</div>
+      <div class="ch-topic-views">평균 ${(t.avg_views || 0).toLocaleString()}회</div>
+      <div class="ch-topic-reason">${t.reason}</div>`;
+    underEl.appendChild(d);
+  });
+
+  // 최적 요일
+  const daysEl = document.getElementById('channel-best-days');
+  daysEl.innerHTML = (r.best_upload_days || []).map((d, i) =>
+    `<div class="ch-day-item ${i === 0 ? 'ch-day-best' : ''}">${i === 0 ? '🥇' : '🥈'} ${d}</div>`
+  ).join('') + (r.worst_upload_days || []).map(d =>
+    `<div class="ch-day-item ch-day-worst">🚫 ${d}</div>`
+  ).join('');
+
+  // 최적 시간대
+  const hoursEl = document.getElementById('channel-best-hours');
+  hoursEl.innerHTML = (r.best_upload_hours || []).map(h =>
+    `<div class="ch-day-item">${h}</div>`
+  ).join('');
+
+  // 최적 영상 길이
+  document.getElementById('channel-optimal-length').textContent = r.optimal_video_length || '';
+
+  // 제목 패턴
+  const patternsEl = document.getElementById('channel-title-patterns');
+  patternsEl.innerHTML = '';
+  (r.successful_title_patterns || []).forEach(p => {
+    const d = document.createElement('div');
+    d.className = 'ch-pattern-item';
+    d.innerHTML = `<div class="ch-pattern-name">${p.pattern}</div>
+      <div class="ch-pattern-example">"${p.example}"</div>
+      <div class="ch-pattern-why">${p.why}</div>`;
+    patternsEl.appendChild(d);
+  });
+
+  // 병목
+  document.getElementById('channel-bottleneck').textContent = r.growth_bottleneck || '';
+
+  // 개선 방안
+  const recEl = document.getElementById('channel-recommendations');
+  recEl.innerHTML = '';
+  (r.channel_recommendations || []).forEach(rec => {
+    const li = document.createElement('li');
+    li.textContent = rec;
+    recEl.appendChild(li);
+  });
+
+  // 다음 영상 전략
+  document.getElementById('channel-next-strategy').textContent = r.next_video_strategy || '';
 }

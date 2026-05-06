@@ -14,6 +14,7 @@ load_dotenv()
 from analyzer import Analyzer
 from naver_service import NaverService
 from youtube_service import YouTubeService
+from analytics_service import AnalyticsService
 from database import init_db, save_history, list_history, get_history, delete_history
 
 init_db()
@@ -62,6 +63,14 @@ class MidformRequest(BaseModel):
     product_desc: str = ""
 
 
+class ChannelAnalyzeRequest(BaseModel):
+    channel_id: str
+
+
+class VideoDecisionRequest(BaseModel):
+    videos: list
+
+
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -72,6 +81,8 @@ async def health():
         "youtube": bool(os.getenv("YOUTUBE_API_KEY")),
         "anthropic": bool(os.getenv("ANTHROPIC_API_KEY")),
         "naver": bool(os.getenv("NAVER_CLIENT_ID")),
+        "analytics": bool(os.getenv("OAUTH_REFRESH_TOKEN")),
+        "my_channel_id": os.getenv("MY_CHANNEL_ID", ""),
     }
 
 
@@ -475,6 +486,103 @@ async def topic_suggest():
             yield sse({"step": "error", "message": str(e)})
         finally:
             await yt.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/channel-analyze")
+async def channel_analyze(req: ChannelAnalyzeRequest):
+    youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+
+    async def stream():
+        if not youtube_key:
+            yield sse({"step": "error", "message": ".env 파일에 YOUTUBE_API_KEY를 설정해주세요."})
+            return
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
+            return
+        if not req.channel_id.strip():
+            yield sse({"step": "error", "message": "채널 ID를 입력해주세요."})
+            return
+
+        yt = YouTubeService(youtube_key)
+        analytics = AnalyticsService()
+        try:
+            yield sse({"step": "channel_info", "message": "채널 정보 불러오는 중..."})
+            channel_info, videos = await yt.get_channel_videos(req.channel_id.strip(), max_videos=200)
+            yield sse({"step": "videos_loaded", "message": f"영상 {len(videos)}개 데이터 수집 완료!"})
+
+            analytics_data = []
+            if analytics.is_configured():
+                yield sse({"step": "analytics", "message": "Analytics 데이터 수집 중 (CTR, 시청 유지율)..."})
+                try:
+                    analytics_data = await analytics.get_video_analytics()
+                    # video_id 기준으로 videos에 병합
+                    analytics_map = {a["video_id"]: a for a in analytics_data}
+                    for v in videos:
+                        a = analytics_map.get(v["id"], {})
+                        v["ctr"] = a.get("ctr", None)
+                        v["avg_view_percentage"] = a.get("avg_view_percentage", None)
+                        v["watch_minutes"] = a.get("watch_minutes", None)
+                        v["subscribers_gained"] = a.get("subscribers_gained", None)
+                    yield sse({"step": "analytics_done", "message": f"Analytics {len(analytics_data)}개 영상 데이터 수집 완료!"})
+                except Exception as ae:
+                    yield sse({"step": "analytics_warn", "message": f"Analytics 데이터 수집 실패 (공개 데이터로 진행): {ae}"})
+
+            yield sse({"step": "analyzing", "message": "AI 분석 중... (30~60초 소요)"})
+            analyzer = Analyzer()
+            _task = asyncio.create_task(analyzer.analyze_channel(channel_info, videos))
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            report = _task.result()
+            report["channel_info"] = channel_info
+            report["total_analyzed"] = len(videos)
+            report["has_analytics"] = bool(analytics_data)
+            save_history("channel", channel_info.get("title", req.channel_id), report)
+            yield sse({"step": "done", "report": report})
+
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
+        finally:
+            await yt.close()
+            await analytics.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/video-decision")
+async def video_decision(req: VideoDecisionRequest):
+    from datetime import date
+
+    async def stream():
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
+            return
+        if not req.videos:
+            yield sse({"step": "error", "message": "영상 정보를 하나 이상 입력해주세요."})
+            return
+        try:
+            yield sse({"step": "analyzing", "message": f"영상 {len(req.videos)}개 분석 중... (30~60초 소요)"})
+            analyzer = Analyzer()
+            current_date = date.today().strftime("%Y년 %m월 %d일")
+            _task = asyncio.create_task(analyzer.analyze_video_decision(req.videos, current_date))
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            report = _task.result()
+            save_history("decision", f"업로드 결정 ({len(req.videos)}개 영상)", report)
+            yield sse({"step": "done", "report": report})
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
 
     return StreamingResponse(
         stream(),
