@@ -538,7 +538,7 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
             _task = asyncio.create_task(analyzer.analyze_channel(channel_info, videos))
             while not _task.done():
                 yield sse({"step": "ping"})
-                await asyncio.sleep(8)
+                await asyncio.sleep(3)
             report = _task.result()
             report["channel_info"] = channel_info
             report["total_analyzed"] = len(videos)
@@ -577,7 +577,7 @@ async def video_decision(req: VideoDecisionRequest):
             _task = asyncio.create_task(analyzer.analyze_video_decision(req.videos, current_date))
             while not _task.done():
                 yield sse({"step": "ping"})
-                await asyncio.sleep(8)
+                await asyncio.sleep(3)
             report = _task.result()
             save_history("decision", f"업로드 결정 ({len(req.videos)}개 영상)", report)
             yield sse({"step": "done", "report": report})

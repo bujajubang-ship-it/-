@@ -70,7 +70,7 @@ async function streamSSE(url, body, addStep, onDone, onError) {
     const decoder = new TextDecoder();
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) { onError('서버 연결이 끊어졌습니다. 다시 시도해주세요.'); return; }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop();
@@ -80,6 +80,7 @@ async function streamSSE(url, body, addStep, onDone, onError) {
           const data = JSON.parse(line.slice(6));
           if (data.step === 'error') { onError(data.message); return; }
           if (data.step === 'done') { onDone(data); return; }
+          if (data.step === 'ping') continue;
           if (data.message) addStep(data.message, 'active');
         } catch (e) {}
       }

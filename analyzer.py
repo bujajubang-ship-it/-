@@ -830,7 +830,7 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=3000,
+            max_tokens=8192,
             system=f"당신은 유튜브 채널 성장 전략 전문가입니다. 데이터 기반으로 구체적인 인사이트를 제공합니다. {CHANNEL_GOALS} 반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만.",
             messages=[{"role": "user", "content": prompt}],
         )
@@ -882,7 +882,7 @@ ranking 배열에 입력받은 영상 전체를 순위 매겨 포함하세요.""
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=3000,
+            max_tokens=8192,
             system=f"당신은 유튜브 크리에이터 전략 컨설턴트입니다. 데이터와 트렌드 기반으로 구체적인 업로드 전략을 제시합니다. {CHANNEL_GOALS} 반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만.",
             messages=[{"role": "user", "content": prompt}],
         )
