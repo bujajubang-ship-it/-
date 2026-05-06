@@ -7,7 +7,6 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-// includes old tabs so history items still render into their panes
 const ALL_TABS = ['midform', 'shortform', 'topic', 'edit', 'decision', 'channel', 'chat', 'history', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {

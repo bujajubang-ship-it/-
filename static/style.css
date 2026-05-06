@@ -26,8 +26,8 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .logo { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .logo-icon { font-size: 22px; color: var(--red); }
 .logo-text { font-size: 18px; font-weight: 700; color: var(--text); }
-.api-status { display: flex; gap: 8px; flex-shrink: 0; margin-left: auto; }
-.api-dot { font-size: 10px; padding: 3px 8px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
+.api-status { display: flex; flex-wrap: wrap; gap: 4px; flex-shrink: 0; margin-left: auto; max-width: 180px; justify-content: flex-end; }
+.api-dot { font-size: 9px; padding: 2px 6px; border-radius: 20px; font-weight: 600; white-space: nowrap; opacity: 0.7; }
 .api-dot.ok { background: #d1fae5; color: #065f46; }
 .api-dot.off { background: #fee2e2; color: #991b1b; }
 
@@ -432,6 +432,8 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 /* ===== 🔍 주제 추천 탭 ===== */
 .tab-btn-trend { border: 1.5px solid #fca5a5 !important; color: #ef4444 !important; }
 .tab-btn-trend.active { background: #fef2f2 !important; color: #ef4444 !important; box-shadow: 0 1px 4px rgba(239,68,68,.2) !important; }
+.tab-btn-chat { border: 1.5px solid #6366f1 !important; color: #6366f1 !important; }
+.tab-btn-chat.active { background: #eef2ff !important; color: #4f46e5 !important; box-shadow: 0 1px 4px rgba(99,102,241,.2) !important; }
 
 .topic-cards-list { display: flex; flex-direction: column; gap: 0; }
 .topic-card { padding: 20px 24px; border-bottom: 1px solid var(--border); }
