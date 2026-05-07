@@ -1258,6 +1258,7 @@ function renderChannelReport(r) {
 
 let chatHistory = [];
 let chatSending = false;
+let chatAttachments = [];
 
 const CHAT_WELCOME = `<div class="chat-bubble assistant">
   <div class="chat-bubble-inner">
@@ -1275,7 +1276,69 @@ const CHAT_WELCOME = `<div class="chat-bubble assistant">
 
 function clearChat() {
   chatHistory = [];
+  chatAttachments = [];
   document.getElementById('chat-messages').innerHTML = CHAT_WELCOME;
+  document.getElementById('chat-attach-preview').innerHTML = '';
+  document.getElementById('chat-attach-preview').classList.add('hidden');
+}
+
+function handleChatFiles(input) {
+  const preview = document.getElementById('chat-attach-preview');
+  const files = Array.from(input.files);
+  if (!files.length) return;
+
+  const toRead = files.map(file => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const dataUrl = e.target.result;
+      const [header, data] = dataUrl.split(',');
+      const media_type = header.match(/:(.*?);/)[1];
+      resolve({ name: file.name, media_type, data });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  }));
+
+  Promise.all(toRead).then(results => {
+    chatAttachments.push(...results);
+    preview.classList.remove('hidden');
+    preview.innerHTML = chatAttachments.map((a, i) => {
+      if (a.media_type.startsWith('image/')) {
+        return `<div class="attach-thumb-wrap">
+          <img class="attach-thumb" src="data:${a.media_type};base64,${a.data}" title="${a.name}" />
+          <button class="attach-remove" onclick="removeChatAttach(${i})">✕</button>
+        </div>`;
+      }
+      return `<div class="attach-thumb-wrap">
+        <div class="attach-pdf-badge">📄 ${a.name}</div>
+        <button class="attach-remove" onclick="removeChatAttach(${i})">✕</button>
+      </div>`;
+    }).join('');
+  });
+
+  input.value = '';
+}
+
+function removeChatAttach(idx) {
+  chatAttachments.splice(idx, 1);
+  const preview = document.getElementById('chat-attach-preview');
+  if (!chatAttachments.length) {
+    preview.innerHTML = '';
+    preview.classList.add('hidden');
+    return;
+  }
+  preview.innerHTML = chatAttachments.map((a, i) => {
+    if (a.media_type.startsWith('image/')) {
+      return `<div class="attach-thumb-wrap">
+        <img class="attach-thumb" src="data:${a.media_type};base64,${a.data}" title="${a.name}" />
+        <button class="attach-remove" onclick="removeChatAttach(${i})">✕</button>
+      </div>`;
+    }
+    return `<div class="attach-thumb-wrap">
+      <div class="attach-pdf-badge">📄 ${a.name}</div>
+      <button class="attach-remove" onclick="removeChatAttach(${i})">✕</button>
+    </div>`;
+  }).join('');
 }
 
 function sendChatChip(el) {
@@ -1310,19 +1373,31 @@ async function sendChat() {
   if (chatSending) return;
   const input = document.getElementById('chat-input');
   const message = input.value.trim();
-  if (!message) return;
+  if (!message && !chatAttachments.length) return;
 
   chatSending = true;
   document.getElementById('chat-send-btn').disabled = true;
   input.value = '';
   input.style.height = 'auto';
 
+  const attachmentsToSend = [...chatAttachments];
+  chatAttachments = [];
+  const preview = document.getElementById('chat-attach-preview');
+  preview.innerHTML = '';
+  preview.classList.add('hidden');
+
   const messages = document.getElementById('chat-messages');
 
   // 사용자 메시지 추가
   const userBubble = document.createElement('div');
   userBubble.className = 'chat-bubble user';
-  userBubble.innerHTML = `<div class="chat-bubble-inner">${_escapeHtml(message)}</div>`;
+  let thumbsHtml = attachmentsToSend.map(a => {
+    if (a.media_type.startsWith('image/')) {
+      return `<img class="attach-thumb sent" src="data:${a.media_type};base64,${a.data}" />`;
+    }
+    return `<div class="attach-pdf-badge sent">📄 ${a.name}</div>`;
+  }).join('');
+  userBubble.innerHTML = `<div class="chat-bubble-inner">${thumbsHtml ? `<div class="bubble-attachments">${thumbsHtml}</div>` : ''}${message ? _escapeHtml(message) : ''}</div>`;
   messages.appendChild(userBubble);
 
   // 로딩 버블
@@ -1339,7 +1414,7 @@ async function sendChat() {
     const resp = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, history: chatHistory }),
+      body: JSON.stringify({ message, history: chatHistory, attachments: attachmentsToSend }),
     });
 
     const reader = resp.body.getReader();
