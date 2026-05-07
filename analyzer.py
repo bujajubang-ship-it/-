@@ -875,12 +875,33 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
         )
         return _safe_json(msg.content[0].text.strip())
 
-    async def chat_stream(self, message: str, history: List[Dict]):
+    async def chat_stream(self, message: str, history: List[Dict], attachments: List[Dict] = None):
         messages = [{"role": m["role"], "content": m["content"]} for m in history[-20:]]
-        messages.append({"role": "user", "content": message})
+
+        # 첨부파일이 있으면 content를 리스트(멀티모달)로 구성
+        if attachments:
+            content: list = []
+            for att in attachments:
+                mt = att.get("media_type", "")
+                if mt.startswith("image/"):
+                    content.append({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": mt, "data": att["data"]},
+                    })
+                elif mt == "application/pdf":
+                    content.append({
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": mt, "data": att["data"]},
+                    })
+            if message.strip():
+                content.append({"type": "text", "text": message})
+            messages.append({"role": "user", "content": content})
+        else:
+            messages.append({"role": "user", "content": message})
+
         async with self.client.messages.stream(
             model="claude-sonnet-4-6",
-            max_tokens=2048,
+            max_tokens=4096,
             system=CHAT_SYSTEM,
             messages=messages,
         ) as stream:

@@ -71,9 +71,15 @@ class VideoDecisionRequest(BaseModel):
     videos: list
 
 
+class AttachmentItem(BaseModel):
+    media_type: str   # image/jpeg, image/png, image/webp, application/pdf
+    data: str         # base64
+
+
 class ChatRequest(BaseModel):
     message: str
     history: list = []
+    attachments: list = []  # List[AttachmentItem]
 
 
 def sse(data: dict) -> str:
@@ -607,7 +613,7 @@ async def chat(req: ChatRequest):
             return
         try:
             analyzer = Analyzer()
-            async for token in analyzer.chat_stream(req.message, req.history):
+            async for token in analyzer.chat_stream(req.message, req.history, req.attachments):
                 yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
