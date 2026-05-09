@@ -423,12 +423,12 @@
             <span class="chat-chip" onclick="sendEditChip(this)">빠진 내용 어떻게 추가하지?</span>
             <span class="chat-chip" onclick="sendEditChip(this)">제목 중에 어떤 게 제일 좋아?</span>
           </div>
+          <div id="edit-chat-attach-preview" class="chat-attach-preview hidden"></div>
           <div class="edit-chat-input-row">
             <label class="chat-attach-btn" title="이미지·PDF 첨부">
               📎
               <input type="file" id="edit-chat-file-input" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" multiple style="display:none" onchange="handleEditChatFiles(this)" />
             </label>
-            <div id="edit-chat-attach-preview" class="chat-attach-preview hidden"></div>
             <textarea id="edit-chat-input" class="edit-chat-textarea" rows="1" placeholder="편집 방향에 대해 자유롭게 질문하세요..." oninput="chatInputResize(this)" onkeydown="editChatKeydown(event)"></textarea>
             <button id="edit-chat-send-btn" class="edit-chat-send-btn" onclick="sendEditChat()">전송</button>
           </div>
