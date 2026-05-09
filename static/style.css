@@ -591,3 +591,16 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .bubble-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .attach-thumb.sent { width: 120px; height: 120px; object-fit: cover; border-radius: 10px; border: none; }
 .attach-pdf-badge.sent { background: rgba(255,255,255,0.2); border: 1.5px solid rgba(255,255,255,0.4); color: #fff; }
+
+/* 편집 피드백 AI 채팅 */
+.edit-chat-card { margin-top: 8px; border-top: 3px solid #8b5cf6; }
+.edit-chat-card .card-header { background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%); color: #5b21b6; border-radius: var(--radius) var(--radius) 0 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.edit-chat-desc { font-size: 12px; color: #7c3aed; font-weight: 400; margin-left: auto; }
+.edit-chat-messages { min-height: 120px; max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 16px 0 8px; }
+.edit-chat-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0 12px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.edit-chat-input-row { display: flex; gap: 10px; align-items: flex-end; padding-top: 4px; }
+.edit-chat-textarea { flex: 1; padding: 12px 16px; border: 2px solid var(--border); border-radius: 16px; font-size: 15px; font-family: inherit; outline: none; resize: none; transition: border-color .2s; line-height: 1.6; max-height: 120px; overflow-y: auto; background: #fff; }
+.edit-chat-textarea:focus { border-color: #8b5cf6; }
+.edit-chat-send-btn { padding: 12px 20px; background: #8b5cf6; color: #fff; border: none; border-radius: 16px; font-size: 15px; font-weight: 700; cursor: pointer; transition: opacity .2s; flex-shrink: 0; }
+.edit-chat-send-btn:hover { opacity: .9; }
+.edit-chat-send-btn:disabled { opacity: .45; cursor: not-allowed; }

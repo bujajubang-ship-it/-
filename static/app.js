@@ -1,6 +1,9 @@
 let midformAnalyzing = false;
 let shortformAnalyzing = false;
 let editAnalyzing = false;
+let editChatHistory = [];
+let editChatSending = false;
+let editChatAttachments = [];
 // kept for history backwards compatibility
 let analyzing = false;
 let planningAnalyzing = false;
@@ -753,6 +756,178 @@ function renderEditReport(r, keyword) {
     `;
     th.appendChild(div);
   });
+
+  // 편집 채팅 컨텍스트 초기화
+  initEditChat(r, keyword);
+}
+
+function initEditChat(r, keyword) {
+  editChatHistory = [];
+  editChatAttachments = [];
+
+  const keeps = (r.keep_sections || []).map(s => `• ${s.section}: ${s.reason}`).join('\n');
+  const cuts = (r.cut_sections || []).map(s => `• ${s.section}: ${s.reason}${s.alternative ? ` (대안: ${s.alternative})` : ''}`).join('\n');
+  const missing = (r.missing_content || []).join(', ');
+  const titles = (r.recommended_titles || []).map((t, i) => `${i+1}. ${t.title || t}`).join('\n');
+
+  const contextMsg = `[편집 피드백 분석 결과 — "${keyword}"]
+시장 적합도: ${r.market_fit_score || 0}점
+전반적 평가: ${r.overall_assessment || ''}
+잘 된 점: ${(r.strengths || []).join(', ')}
+살려야 할 구간:\n${keeps}
+삭제 추천 구간:\n${cuts}
+인트로 후킹 피드백: ${r.hook_feedback || ''}
+편집 흐름 개선점: ${(r.edit_flow_suggestions || []).join(', ')}
+시청자가 원하는데 빠진 내용: ${missing}
+추천 제목:\n${titles}`;
+
+  editChatHistory.push({ role: 'user', content: contextMsg });
+  editChatHistory.push({ role: 'assistant', content: `네, "${keyword}" 편집 피드백을 확인했습니다. 시장 적합도 ${r.market_fit_score || 0}점이고, 살릴 구간과 수정 포인트가 정리됐어요. 어떤 부분부터 작업할지, 구체적으로 어떻게 편집할지 궁금한 게 있으면 뭐든지 질문해 주세요!` });
+
+  const messagesEl = document.getElementById('edit-chat-messages');
+  messagesEl.innerHTML = '';
+  const welcome = document.createElement('div');
+  welcome.className = 'chat-bubble assistant';
+  welcome.innerHTML = `<div class="chat-bubble-inner">피드백 분석 완료! <strong>"${keyword}"</strong> 편집 방향에 대해 자유롭게 질문해 주세요.<br>어떤 구간부터 잘라야 할지, 훅을 어떻게 고쳐야 할지 등 구체적으로 도와드릴 수 있어요.</div>`;
+  messagesEl.appendChild(welcome);
+}
+
+function sendEditChip(el) {
+  document.getElementById('edit-chat-input').value = el.textContent;
+  sendEditChat();
+}
+
+function editChatKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendEditChat();
+  }
+}
+
+function handleEditChatFiles(input) {
+  const preview = document.getElementById('edit-chat-attach-preview');
+  const files = Array.from(input.files);
+  if (!files.length) return;
+
+  const toRead = files.map(file => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const dataUrl = e.target.result;
+      const [header, data] = dataUrl.split(',');
+      const media_type = header.match(/:(.*?);/)[1];
+      resolve({ name: file.name, media_type, data });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  }));
+
+  Promise.all(toRead).then(results => {
+    editChatAttachments.push(...results);
+    preview.classList.remove('hidden');
+    preview.innerHTML = editChatAttachments.map((a, i) => {
+      if (a.media_type.startsWith('image/')) {
+        return `<div class="attach-thumb-wrap"><img class="attach-thumb" src="data:${a.media_type};base64,${a.data}" title="${a.name}" /><button class="attach-remove" onclick="removeEditAttach(${i})">✕</button></div>`;
+      }
+      return `<div class="attach-thumb-wrap"><div class="attach-pdf-badge">📄 ${a.name}</div><button class="attach-remove" onclick="removeEditAttach(${i})">✕</button></div>`;
+    }).join('');
+  });
+  input.value = '';
+}
+
+function removeEditAttach(idx) {
+  editChatAttachments.splice(idx, 1);
+  const preview = document.getElementById('edit-chat-attach-preview');
+  if (!editChatAttachments.length) { preview.innerHTML = ''; preview.classList.add('hidden'); return; }
+  preview.innerHTML = editChatAttachments.map((a, i) => {
+    if (a.media_type.startsWith('image/')) {
+      return `<div class="attach-thumb-wrap"><img class="attach-thumb" src="data:${a.media_type};base64,${a.data}" title="${a.name}" /><button class="attach-remove" onclick="removeEditAttach(${i})">✕</button></div>`;
+    }
+    return `<div class="attach-thumb-wrap"><div class="attach-pdf-badge">📄 ${a.name}</div><button class="attach-remove" onclick="removeEditAttach(${i})">✕</button></div>`;
+  }).join('');
+}
+
+async function sendEditChat() {
+  if (editChatSending) return;
+  const input = document.getElementById('edit-chat-input');
+  const message = input.value.trim();
+  if (!message && !editChatAttachments.length) return;
+
+  editChatSending = true;
+  document.getElementById('edit-chat-send-btn').disabled = true;
+  input.value = '';
+  input.style.height = 'auto';
+
+  const attachmentsToSend = [...editChatAttachments];
+  editChatAttachments = [];
+  const preview = document.getElementById('edit-chat-attach-preview');
+  preview.innerHTML = '';
+  preview.classList.add('hidden');
+
+  const messages = document.getElementById('edit-chat-messages');
+
+  const userBubble = document.createElement('div');
+  userBubble.className = 'chat-bubble user';
+  let thumbsHtml = attachmentsToSend.map(a => a.media_type.startsWith('image/')
+    ? `<img class="attach-thumb sent" src="data:${a.media_type};base64,${a.data}" />`
+    : `<div class="attach-pdf-badge sent">📄 ${a.name}</div>`
+  ).join('');
+  userBubble.innerHTML = `<div class="chat-bubble-inner">${thumbsHtml ? `<div class="bubble-attachments">${thumbsHtml}</div>` : ''}${message ? _escapeHtml(message) : ''}</div>`;
+  messages.appendChild(userBubble);
+
+  const aiBubble = document.createElement('div');
+  aiBubble.className = 'chat-bubble assistant';
+  aiBubble.innerHTML = `<div class="chat-bubble-inner"><div class="chat-typing"><span></span><span></span><span></span></div></div>`;
+  messages.appendChild(aiBubble);
+  messages.scrollTop = messages.scrollHeight;
+
+  let fullText = '';
+  const inner = aiBubble.querySelector('.chat-bubble-inner');
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, history: editChatHistory, attachments: attachmentsToSend }),
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let started = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.token) {
+            if (!started) { inner.innerHTML = ''; started = true; }
+            fullText += data.token;
+            inner.innerHTML = _formatChat(fullText);
+            messages.scrollTop = messages.scrollHeight;
+          }
+          if (data.done) {
+            editChatHistory.push({ role: 'user', content: message });
+            editChatHistory.push({ role: 'assistant', content: fullText });
+          }
+          if (data.error) {
+            inner.innerHTML = `<span style="color:var(--red)">오류: ${_escapeHtml(data.error)}</span>`;
+          }
+        } catch (e) {}
+      }
+    }
+  } catch (err) {
+    inner.innerHTML = `<span style="color:var(--red)">연결 오류. 다시 시도해주세요.</span>`;
+  }
+
+  editChatSending = false;
+  document.getElementById('edit-chat-send-btn').disabled = false;
+  input.focus();
 }
 
 // ===== 📚 히스토리 =====
