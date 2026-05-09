@@ -71,6 +71,11 @@ class VideoDecisionRequest(BaseModel):
     videos: list
 
 
+class SnsConvertRequest(BaseModel):
+    keyword: str
+    script: str
+
+
 class AttachmentItem(BaseModel):
     media_type: str   # image/jpeg, image/png, image/webp, application/pdf
     data: str         # base64
@@ -592,6 +597,35 @@ async def video_decision(req: VideoDecisionRequest):
             report = _task.result()
             save_history("decision", f"업로드 결정 ({len(req.videos)}개 영상)", report)
             yield sse({"step": "done", "report": report})
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/sns-convert")
+async def sns_convert(req: SnsConvertRequest):
+    async def stream():
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            yield sse({"step": "error", "message": "ANTHROPIC_API_KEY가 설정되지 않았습니다."})
+            return
+        if not req.keyword.strip() or not req.script.strip():
+            yield sse({"step": "error", "message": "키워드와 원본 내용을 입력해주세요."})
+            return
+        try:
+            yield sse({"step": "converting", "message": "블로그·스레드·숏폼 스크립트 생성 중... (30초~1분 소요)"})
+            analyzer = Analyzer()
+            _task = asyncio.create_task(analyzer.analyze_sns_convert(req.keyword, req.script))
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            report = _task.result()
+            save_history("sns", req.keyword, report)
+            yield sse({"step": "done", "report": report, "keyword": req.keyword})
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
 

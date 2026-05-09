@@ -959,3 +959,87 @@ ranking 배열에 입력받은 영상 전체를 순위 매겨 포함하세요.""
             messages=[{"role": "user", "content": prompt}],
         )
         return _safe_json(msg.content[0].text.strip())
+
+    async def analyze_sns_convert(self, keyword: str, script: str) -> Dict:
+        system_prompt = (
+            "당신은 SNS 콘텐츠 마케팅 전문가입니다. "
+            "부자주방 채널의 유튜브 대본이나 콘텐츠를 블로그, 스레드, 숏폼 스크립트로 변환합니다. "
+            "채널: 부자주방 — 외식업 운영자(식당·분식집·한식당 사장님) 대상 업소용 주방용품 전문 채널. "
+            "각 플랫폼의 특성에 맞는 말투와 구조로 변환하세요. "
+            "반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만."
+        )
+
+        user_text = f"""키워드(주제): "{keyword}"
+
+== 원본 대본/내용 ==
+{script}
+
+위 내용을 아래 3가지 SNS 형식으로 변환하세요.
+
+[블로그 포스팅 규칙]
+- 블로그 말투 (~했어요, ~이에요, ~해보세요 등 친근한 경어체)
+- "{keyword}" 키워드를 본문에 최소 10회 이상 자연스럽게 반복
+- 구조: 제목 → 도입부(공감) → 본문(3-5 소제목) → 마무리(요약+CTA)
+- 2000자 내외, 읽기 좋은 단락 구성
+- SEO용 첫 문단에 키워드 2회 포함
+- 맨 앞줄: #{keyword} (해시태그 형식)
+
+[스레드 포스트 규칙]
+- 5~7개의 연결된 짧은 포스트
+- 각 포스트는 200자 이내
+- 첫 포스트: 강렬한 훅 (스크롤 멈추게)
+- 중간: 핵심 정보를 번호나 이모지로 정리
+- 마지막: 공유/댓글 유도 질문
+- 스레드 특유의 짧고 끊기는 문체
+
+[숏폼 스크립트 규칙]
+- 총 45-60초 분량
+- 훅(0-3초): 스크롤 멈추는 강렬한 첫 문장
+- 본문(4-45초): 핵심 포인트 3가지, 빠른 템포
+- CTA(마지막 5초): 저장/팔로우/댓글 유도
+- 인스타그램 릴스·유튜브 쇼츠·틱톡 공통 사용 가능
+- 실제 말하는 구어체
+
+{{
+  "blog": {{
+    "title": "블로그 포스팅 제목 (검색 최적화, 30자 내외)",
+    "meta_description": "검색 결과에 노출될 요약문 (150자 내외, 키워드 포함)",
+    "content": "완성된 블로그 포스팅 전체 (맨 앞에 #{keyword} 해시태그, 키워드 10회+ 반복, 소제목은 ## 사용, 2000자 내외)",
+    "keyword_count_note": "키워드가 몇 번 사용됐는지",
+    "seo_tags": ["SEO 태그 5-7개"]
+  }},
+  "threads": {{
+    "posts": [
+      {{
+        "order": 1,
+        "content": "첫 번째 포스트 내용 (훅)",
+        "type": "hook"
+      }}
+    ],
+    "total_posts": 포스트수
+  }},
+  "shortform": {{
+    "hook": "0-3초 훅 문장",
+    "hook_type": "훅 유형 (충격/공감/질문/비밀공개 중 하나)",
+    "body_points": [
+      {{
+        "time": "00:04-00:20",
+        "narration": "실제 말할 내용 (구어체)",
+        "text_overlay": "화면에 띄울 텍스트 (짧고 굵게)"
+      }}
+    ],
+    "cta": "마지막 5초 CTA 대사",
+    "total_seconds": 예상초,
+    "platforms": ["인스타그램 릴스", "유튜브 쇼츠", "틱톡"]
+  }}
+}}
+
+threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개 작성하세요."""
+
+        msg = await self.client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_text}],
+        )
+        return _safe_json(msg.content[0].text.strip())

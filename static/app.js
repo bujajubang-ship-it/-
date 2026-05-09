@@ -10,7 +10,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'topic', 'edit', 'decision', 'channel', 'chat', 'history', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'topic', 'edit', 'sns', 'decision', 'channel', 'chat', 'history', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -930,6 +930,136 @@ async function sendEditChat() {
   input.focus();
 }
 
+// ===== 📣 SNS 변환 =====
+
+let snsAnalyzing = false;
+
+function resetToSns() {
+  document.getElementById('sns-report-section').classList.add('hidden');
+  document.getElementById('sns-progress-section').classList.add('hidden');
+  document.getElementById('sns-input-section').classList.remove('hidden');
+  document.getElementById('sns-analyze-btn').disabled = false;
+  snsAnalyzing = false;
+}
+
+function startSnsConvert() {
+  if (snsAnalyzing) return;
+  const keyword = document.getElementById('sns-keyword-input').value.trim();
+  const script = document.getElementById('sns-script-input').value.trim();
+  if (!keyword) { alert('키워드를 입력해주세요.'); return; }
+  if (!script) { alert('대본 또는 내용을 입력해주세요.'); return; }
+  runSnsConvert(keyword, script);
+}
+
+function runSnsConvert(keyword, script) {
+  snsAnalyzing = true;
+  document.getElementById('sns-analyze-btn').disabled = true;
+  document.getElementById('sns-input-section').classList.add('hidden');
+  document.getElementById('sns-progress-section').classList.remove('hidden');
+
+  const addStep = makeProgressStepper('sns-progress-steps');
+
+  streamSSE(
+    '/api/sns-convert',
+    { keyword, script },
+    addStep,
+    (data) => {
+      addStep('변환 완료!', 'done');
+      setTimeout(() => renderSnsReport(data.report, data.keyword), 400);
+    },
+    (msg) => {
+      addStep(`오류: ${msg}`, 'error');
+      document.getElementById('sns-analyze-btn').disabled = false;
+      snsAnalyzing = false;
+    }
+  );
+}
+
+function renderSnsReport(r, keyword) {
+  document.getElementById('sns-progress-section').classList.add('hidden');
+  document.getElementById('sns-report-section').classList.remove('hidden');
+  document.getElementById('sns-report-title').textContent = `"${keyword}" SNS 변환`;
+
+  // 블로그
+  const blog = r.blog || {};
+  document.getElementById('sns-blog-title').textContent = blog.title || '';
+  document.getElementById('sns-blog-meta').textContent = blog.meta_description || '';
+  document.getElementById('sns-blog-keyword-note').textContent = blog.keyword_count_note || '';
+  document.getElementById('sns-blog-content').textContent = blog.content || '';
+  const tagsEl = document.getElementById('sns-blog-tags');
+  tagsEl.innerHTML = (blog.seo_tags || []).map(t => `<span class="sns-tag">${t}</span>`).join('');
+
+  // 스레드
+  const threads = r.threads || {};
+  const postsEl = document.getElementById('sns-threads-posts');
+  postsEl.innerHTML = '';
+  (threads.posts || []).forEach((p, i) => {
+    const div = document.createElement('div');
+    div.className = `sns-thread-post ${p.type === 'hook' ? 'thread-hook' : ''}`;
+    div.innerHTML = `
+      <div class="thread-post-num">${i + 1}</div>
+      <div class="thread-post-content">${_escapeHtml(p.content)}</div>
+      <button class="thread-copy-btn" onclick="copyText2('${encodeURIComponent(p.content)}')">복사</button>
+    `;
+    postsEl.appendChild(div);
+  });
+
+  // 숏폼
+  const sf = r.shortform || {};
+  document.getElementById('sns-shortform-hook-box').innerHTML = `
+    <div class="sns-hook-label">훅 (0~3초) <span class="sns-hook-type">${sf.hook_type || ''}</span></div>
+    <div class="sns-hook-text">${_escapeHtml(sf.hook || '')}</div>
+  `;
+
+  const bodyEl = document.getElementById('sns-shortform-body');
+  bodyEl.innerHTML = '';
+  (sf.body_points || []).forEach(bp => {
+    const div = document.createElement('div');
+    div.className = 'sns-body-point';
+    div.innerHTML = `
+      <div class="sns-body-time">${bp.time}</div>
+      <div class="sns-body-narration">${_escapeHtml(bp.narration || '')}</div>
+      <div class="sns-body-overlay">📺 ${_escapeHtml(bp.text_overlay || '')}</div>
+    `;
+    bodyEl.appendChild(div);
+  });
+
+  document.getElementById('sns-shortform-cta-box').innerHTML = `
+    <div class="sns-cta-label">CTA (마지막 5초)</div>
+    <div class="sns-cta-text">${_escapeHtml(sf.cta || '')}</div>
+  `;
+
+  const platforms = document.getElementById('sns-shortform-platforms');
+  platforms.innerHTML = (sf.platforms || []).map(p => `<span class="sns-platform-badge">${p}</span>`).join('');
+
+  // 복사용 전체 스크립트 조합
+  const fullScript = [
+    `[훅] ${sf.hook || ''}`,
+    ...(sf.body_points || []).map(bp => `[${bp.time}]\n${bp.narration}\n자막: ${bp.text_overlay}`),
+    `[CTA] ${sf.cta || ''}`,
+  ].join('\n\n');
+  document.getElementById('sns-shortform-full').textContent = fullScript;
+}
+
+function copyText2(encoded) {
+  const text = decodeURIComponent(encoded);
+  navigator.clipboard.writeText(text).then(() => {
+    // brief visual feedback handled by button styling
+  });
+}
+
+function copySnsText(elId) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent || el.value || '');
+}
+
+function copyAllThreads() {
+  const posts = document.querySelectorAll('#sns-threads-posts .thread-post-content');
+  const text = Array.from(posts).map((p, i) => `${i + 1}.\n${p.textContent}`).join('\n\n---\n\n');
+  navigator.clipboard.writeText(text);
+}
+
 // ===== 📚 히스토리 =====
 
 async function loadHistory(type) {
@@ -950,11 +1080,11 @@ async function loadHistory(type) {
 
   const typeLabels = {
     topic: '주제 추천', midform: '미드폼', shortform: '숏폼', edit: '편집 피드백',
-    research: '시장조사', planning: '기획', intro: '도입부', script: '대본'
+    sns: 'SNS 변환', research: '시장조사', planning: '기획', intro: '도입부', script: '대본'
   };
   const typeColors = {
     topic: '#ef4444', midform: '#3b82f6', shortform: '#ec4899', edit: '#8b5cf6',
-    research: '#6366f1', planning: '#f59e0b', intro: '#10b981', script: '#ef4444'
+    sns: '#f97316', research: '#6366f1', planning: '#f59e0b', intro: '#10b981', script: '#ef4444'
   };
 
   list.innerHTML = '';
