@@ -380,8 +380,11 @@ function renderMidformReport(r, keyword) {
       <div class="thumb-concept-num">썸네일 ${i + 1} ${etLabel}</div>
       <div class="thumb-main-text">"${t.main_text || ''}"</div>
       ${t.sub_text ? `<div class="thumb-sub-text">${t.sub_text}</div>` : ''}
+      ${t.zoom_subject ? `<div class="thumb-concept-detail"><strong>🔍 줌 피사체:</strong> ${t.zoom_subject}</div>` : ''}
+      ${t.visual_evidence ? `<div class="thumb-concept-detail"><strong>📷 시각적 근거:</strong> ${t.visual_evidence}</div>` : ''}
+      ${t.target_image_style ? `<div class="thumb-concept-detail"><strong>👥 타겟 이미지 스타일:</strong> ${t.target_image_style}</div>` : ''}
+      <div class="thumb-concept-detail"><strong>🎬 촬영 방법:</strong> ${t.visual || ''}</div>
       <div class="thumb-concept-detail"><strong>🎨 색상/분위기:</strong> ${t.color_mood || ''}</div>
-      <div class="thumb-concept-detail"><strong>📸 이미지/구도:</strong> ${t.visual || ''}</div>
       ${t.expression ? `<div class="thumb-concept-detail"><strong>😊 표정/포즈:</strong> ${t.expression}</div>` : ''}
       <div class="thumb-concept-why">${t.why_clicks || ''}</div>
     `;
