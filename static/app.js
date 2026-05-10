@@ -335,14 +335,33 @@ function renderMidformReport(r, keyword) {
   renderList('midform-complaints', desires.complaints);
   renderList('midform-wants', desires.wants);
 
+  // 벤치마크 영상
+  const bv = r.benchmark_video;
+  const bmEl = document.getElementById('midform-benchmark');
+  if (bmEl) {
+    if (bv && bv.title) {
+      bmEl.style.display = '';
+      bmEl.innerHTML = `
+        <div class="benchmark-label">📊 벤치마크 영상</div>
+        <div class="benchmark-title">${bv.title}</div>
+        <div class="benchmark-detail"><strong>선택 이유:</strong> ${bv.reason || ''}</div>
+        <div class="benchmark-detail"><strong>썸네일 패턴:</strong> ${bv.thumbnail_pattern || ''}</div>
+        <div class="benchmark-our"><strong>부자주방 버전:</strong> ${bv.our_version || ''}</div>
+      `;
+    } else {
+      bmEl.style.display = 'none';
+    }
+  }
+
   // 제목
   const tg = document.getElementById('midform-titles');
   tg.innerHTML = '';
   (r.titles || []).forEach((t, i) => {
+    const typeLabel = t.title_keyword_type ? `<span class="title-keyword-type ${t.title_keyword_type}">${t.title_keyword_type}</span>` : '';
     const div = document.createElement('div');
     div.className = 'title-card';
     div.innerHTML = `
-      <div class="title-num">제목 ${i + 1}</div>
+      <div class="title-num">제목 ${i + 1} ${typeLabel}</div>
       <div class="title-text">${t.title || t}</div>
       ${t.strategy ? `<div class="title-hook" style="color:#f59e0b">전략: ${t.strategy}</div>` : ''}
       ${t.hook_reason ? `<div class="title-hook">${t.hook_reason}</div>` : ''}
@@ -354,10 +373,11 @@ function renderMidformReport(r, keyword) {
   const thg = document.getElementById('midform-thumbnails');
   thg.innerHTML = '';
   (r.thumbnails || []).forEach((t, i) => {
+    const etLabel = t.emotion_type ? `<span class="thumb-emotion-badge">${t.emotion_type}</span>` : '';
     const div = document.createElement('div');
     div.className = 'thumb-concept-card';
     div.innerHTML = `
-      <div class="thumb-concept-num">썸네일 ${i + 1}</div>
+      <div class="thumb-concept-num">썸네일 ${i + 1} ${etLabel}</div>
       <div class="thumb-main-text">"${t.main_text || ''}"</div>
       ${t.sub_text ? `<div class="thumb-sub-text">${t.sub_text}</div>` : ''}
       <div class="thumb-concept-detail"><strong>🎨 색상/분위기:</strong> ${t.color_mood || ''}</div>
@@ -393,6 +413,8 @@ function renderMidformReport(r, keyword) {
       <span class="midform-formula-reason">${intro.reason || ''}</span>
     </div>
     ${intro.hook_line ? `<div class="midform-hook-line">"${intro.hook_line}"</div>` : ''}
+    ${intro.thumbnail_callback ? `<div class="intro-callback-box"><span class="intro-callback-label">📌 썸네일 콜백</span>${intro.thumbnail_callback}</div>` : ''}
+    ${intro.impact_scene_first ? `<div class="intro-impact-box"><span class="intro-impact-label">⚡ 앞으로 당길 임팩트 장면</span>${intro.impact_scene_first}</div>` : ''}
     <div class="intro-script-output" style="margin:12px 24px 20px">${intro.script || ''}</div>
   `;
 
