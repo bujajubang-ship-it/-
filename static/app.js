@@ -10,7 +10,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'topic', 'edit', 'sns', 'decision', 'channel', 'chat', 'history', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'topic', 'detail', 'edit', 'sns', 'decision', 'channel', 'chat', 'history', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -659,6 +659,194 @@ function resetToEdit() {
   document.getElementById('edit-analyze-btn').disabled = false;
   editAnalyzing = false;
 }
+
+// ===== 🛒 상세페이지 기획 =====
+
+function resetDetailPage() {
+  document.getElementById('detail-report-section').classList.add('hidden');
+  document.getElementById('detail-progress-section').classList.add('hidden');
+  document.getElementById('detail-input-section').classList.remove('hidden');
+  document.getElementById('detail-btn').disabled = false;
+}
+
+async function startDetailPage() {
+  const keyword = document.getElementById('detail-keyword').value.trim();
+  if (!keyword) { alert('제품 키워드를 입력해주세요.'); return; }
+
+  const btn = document.getElementById('detail-btn');
+  btn.disabled = true;
+  document.getElementById('detail-input-section').classList.add('hidden');
+  document.getElementById('detail-report-section').classList.add('hidden');
+
+  const progressSection = document.getElementById('detail-progress-section');
+  const progressSteps = document.getElementById('detail-progress-steps');
+  progressSection.classList.remove('hidden');
+  progressSteps.innerHTML = '';
+
+  function addStep(msg, type = 'active') {
+    const old = progressSteps.querySelector('.step.active');
+    if (old) old.className = 'step done';
+    const el = document.createElement('div');
+    el.className = `step ${type}`;
+    el.innerHTML = `<span class="step-icon">${type === 'done' ? '✅' : type === 'error' ? '❌' : '⏳'}</span><span>${msg}</span>`;
+    progressSteps.appendChild(el);
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    return el;
+  }
+
+  let buffer = '';
+  try {
+    const resp = await fetch('/api/detail-page', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        keyword,
+        product_desc: document.getElementById('detail-product-desc').value.trim(),
+        price: document.getElementById('detail-price').value.trim(),
+        target_customer: document.getElementById('detail-target').value.trim(),
+      }),
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.step === 'ping') continue;
+          if (data.step === 'error') { addStep(data.message, 'error'); btn.disabled = false; return; }
+          if (data.step === 'done') {
+            progressSteps.querySelectorAll('.step.active').forEach(s => s.className = 'step done');
+            addStep('기획안 완성!', 'done');
+            setTimeout(() => {
+              progressSection.classList.add('hidden');
+              renderDetailPageReport(data.report, data.keyword);
+            }, 600);
+          } else {
+            addStep(data.message || data.step);
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    addStep(`오류: ${e.message}`, 'error');
+    btn.disabled = false;
+  }
+}
+
+function renderDetailPageReport(r, keyword) {
+  const now = new Date().toLocaleDateString('ko-KR');
+  document.getElementById('detail-report-title').textContent = `${keyword} 상세페이지 기획안`;
+  document.getElementById('detail-report-subtitle').textContent = `${now} 기준 시장 데이터 분석`;
+
+  const body = document.getElementById('detail-report-body');
+  body.innerHTML = '';
+
+  // 시장 요약
+  if (r.market_summary) {
+    body.innerHTML += `<div class="report-card"><h3>📊 시장 분석 요약</h3><p>${r.market_summary}</p></div>`;
+  }
+
+  // 고객 페인포인트 + 구매 트리거
+  const grid1 = `
+    <div class="report-grid-2">
+      <div class="report-card">
+        <h3>😤 고객 페인포인트</h3>
+        <ul>${(r.customer_pain_points || []).map(t => `<li>${t}</li>`).join('')}</ul>
+      </div>
+      <div class="report-card">
+        <h3>💡 구매 결정 요인</h3>
+        <ul>${(r.purchase_triggers || []).map(t => `<li>${t}</li>`).join('')}</ul>
+      </div>
+    </div>`;
+  body.innerHTML += grid1;
+
+  // 경쟁 제품 패턴
+  if (r.competitor_patterns?.length) {
+    body.innerHTML += `<div class="report-card"><h3>🔍 잘 팔리는 유사 제품 상세페이지 패턴</h3><ul>${r.competitor_patterns.map(t => `<li>${t}</li>`).join('')}</ul></div>`;
+  }
+
+  // 핵심 카피
+  if (r.key_copies) {
+    const kc = r.key_copies;
+    body.innerHTML += `
+      <div class="report-card detail-copy-card">
+        <h3>✍️ 핵심 카피</h3>
+        <div class="copy-block main-headline">"${kc.main_headline || ''}"</div>
+        <div class="copy-label">서브 헤드라인</div>
+        <div class="copy-block">"${kc.sub_headline || ''}"</div>
+        <div class="copy-label">공감 오프너</div>
+        <div class="copy-block empathy">"${kc.empathy_opener || ''}"</div>
+        <div class="copy-label">솔루션 등장 문구</div>
+        <div class="copy-block solution">"${kc.solution_reveal || ''}"</div>
+        ${kc.problem_agitation?.length ? `<div class="copy-label">문제 심화 문구</div><ul>${kc.problem_agitation.map(t => `<li class="copy-agitation">${t}</li>`).join('')}</ul>` : ''}
+        ${kc.core_benefits?.length ? `<div class="copy-label">핵심 베네핏</div><ul>${kc.core_benefits.map(t => `<li class="copy-benefit">✅ ${t}</li>`).join('')}</ul>` : ''}
+      </div>`;
+
+    // CTA
+    if (kc.cta_options?.length) {
+      body.innerHTML += `<div class="report-card"><h3>🛒 CTA 옵션</h3><div class="cta-grid">${kc.cta_options.map(c => `
+        <div class="cta-item">
+          <div class="cta-btn-preview">${c.text}</div>
+          <div class="cta-urgency">${c.urgency_element || ''}</div>
+          <div class="cta-reason">${c.reason || ''}</div>
+        </div>`).join('')}</div></div>`;
+    }
+  }
+
+  // 페이지 섹션 흐름
+  if (r.page_sections?.length) {
+    const sections = r.page_sections.map(s => `
+      <div class="page-section-item">
+        <div class="section-order">${s.order}</div>
+        <div class="section-body">
+          <div class="section-name">${s.section_name} <span class="section-technique">${s.hook_technique || ''}</span></div>
+          <div class="section-headline">"${s.headline}"</div>
+          <div class="section-copy">${s.body_copy}</div>
+          <div class="section-visual">📸 ${s.visual_suggestion}</div>
+        </div>
+      </div>`).join('');
+    body.innerHTML += `<div class="report-card"><h3>📋 페이지 섹션 흐름</h3><div class="page-sections-list">${sections}</div></div>`;
+  }
+
+  // 신뢰 구축
+  if (r.trust_building) {
+    const tb = r.trust_building;
+    body.innerHTML += `
+      <div class="report-grid-2">
+        <div class="report-card">
+          <h3>⭐ 신뢰 구축 전략</h3>
+          ${tb.before_after ? `<p><strong>Before/After:</strong> ${tb.before_after}</p>` : ''}
+          ${tb.review_keywords?.length ? `<div class="copy-label">강조할 리뷰 키워드</div><div class="tag-list">${tb.review_keywords.map(k => `<span class="tag">${k}</span>`).join('')}</div>` : ''}
+          ${tb.certification_suggestions?.length ? `<div class="copy-label">인증·보증 요소</div><ul>${tb.certification_suggestions.map(t => `<li>${t}</li>`).join('')}</ul>` : ''}
+        </div>
+        <div class="report-card">
+          <h3>🏆 차별화 포인트</h3>
+          <ul>${(r.differentiation || []).map(t => `<li>${t}</li>`).join('')}</ul>
+        </div>
+      </div>`;
+  }
+
+  // 추천 타이틀
+  if (r.recommended_titles?.length) {
+    body.innerHTML += `<div class="report-card"><h3>📌 추천 상세페이지 타이틀</h3>${r.recommended_titles.map(t => `
+      <div class="title-rec">
+        <div class="title-text">${t.title}</div>
+        <div class="title-reason">${t.hook_reason}</div>
+      </div>`).join('')}</div>`;
+  }
+
+  document.getElementById('detail-report-section').classList.remove('hidden');
+  document.getElementById('detail-report-section').scrollIntoView({ behavior: 'smooth' });
+}
+
+// ===== ✏️ 편집 피드백 =====
 
 function startEditAnalysis() {
   if (editAnalyzing) return;

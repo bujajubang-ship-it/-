@@ -19,6 +19,7 @@
           <button class="tab-btn active" id="tab-midform" onclick="switchTab('midform')">미드폼</button>
           <button class="tab-btn" id="tab-shortform" onclick="switchTab('shortform')">숏폼</button>
           <button class="tab-btn tab-btn-trend" id="tab-topic" onclick="switchTab('topic')">주제 추천</button>
+          <button class="tab-btn" id="tab-detail" onclick="switchTab('detail')">🛒 상세페이지</button>
           <button class="tab-btn" id="tab-edit" onclick="switchTab('edit')">편집 피드백</button>
           <button class="tab-btn" id="tab-channel" onclick="switchTab('channel')">채널 분석</button>
           <button class="tab-btn" id="tab-sns" onclick="switchTab('sns')">📣 SNS 변환</button>
@@ -327,6 +328,51 @@
           <div class="card-header"><span class="card-icon">🚫</span> 피해야 할 주제 (이미 포화)</div>
           <ul id="topic-avoid" class="checklist missing-checklist"></ul>
         </div>
+      </section>
+    </div>
+
+    <!-- ===== 🛒 상세페이지 기획 탭 ===== -->
+    <div id="pane-detail" class="hidden">
+      <section class="search-section" id="detail-input-section">
+        <div class="search-card edit-card">
+          <h1>쇼핑몰 상세페이지 기획안을 만드세요</h1>
+          <p class="search-desc">유사 제품의 리뷰·댓글을 분석해 고객이 구매 버튼을 누르게 만드는 상세페이지 구조를 설계합니다.<br>영상 기획과 동일한 원리 — 후킹 → 공감 → 문제 → 솔루션 → 신뢰 → 구매유도</p>
+          <div class="form-group">
+            <label>제품 키워드 <span class="required">*</span></label>
+            <input type="text" id="detail-keyword" placeholder="예: 업소용 가스레인지, 스테인레스 작업대" />
+          </div>
+          <div class="form-group">
+            <label>제품 설명</label>
+            <textarea id="detail-product-desc" rows="3" placeholder="예: 4구 가스레인지, 화력 강, 청소 쉬운 구조, 업소·가정용 겸용"></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>가격대</label>
+              <input type="text" id="detail-price" placeholder="예: 35만원" />
+            </div>
+            <div class="form-group">
+              <label>타겟 고객</label>
+              <input type="text" id="detail-target" placeholder="예: 식당 사장님, 자취생" />
+            </div>
+          </div>
+          <button id="detail-btn" onclick="startDetailPage()">상세페이지 기획 시작</button>
+        </div>
+      </section>
+      <section class="progress-section hidden" id="detail-progress-section">
+        <div class="progress-card"><div id="detail-progress-steps"></div></div>
+      </section>
+      <section class="report-section hidden" id="detail-report-section">
+        <div class="report-header">
+          <div>
+            <h2 id="detail-report-title">상세페이지 기획안</h2>
+            <p class="report-subtitle" id="detail-report-subtitle"></p>
+          </div>
+          <div class="report-actions">
+            <button class="pdf-btn" onclick="downloadPdf('detail-report-section','상세페이지기획')">⬇ PDF 저장</button>
+            <button class="reset-btn" onclick="resetDetailPage()">← 새 기획</button>
+          </div>
+        </div>
+        <div id="detail-report-body"></div>
       </section>
     </div>
 

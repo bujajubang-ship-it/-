@@ -1151,3 +1151,85 @@ threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개
             messages=[{"role": "user", "content": user_text}],
         )
         return _safe_json(msg.content[0].text.strip(), msg)
+
+    async def analyze_detail_page(self, keyword: str, product_desc: str, price: str,
+                                   target_customer: str, videos: List[Dict], naver: List[Dict]) -> Dict:
+        videos_text = self._build_videos_text(videos, max_videos=10, max_comments=30)
+        naver_text = self._build_naver_text(naver)
+
+        system_prompt = (
+            "당신은 쇼핑몰 상세페이지 전략 전문가입니다. "
+            "유튜브 영상 기획과 동일한 원리로 — 도입부 후킹 → 공감 → 문제 심화 → 솔루션 제시 → 신뢰 구축 → 구매 유도 — "
+            "고객이 구매 버튼을 누르게 만드는 상세페이지를 설계합니다. "
+            "시장 데이터(유사 제품 리뷰·댓글)에서 고객의 실제 욕구와 불만을 파악하여 반영하세요. "
+            "반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만."
+        )
+
+        user_text = f"""제품 키워드: "{keyword}"
+제품 설명: {product_desc}
+가격대: {price or '미기재'}
+타겟 고객: {target_customer or '미기재'}
+
+== 시장 데이터: 유사 제품 유튜브 리뷰·반응 ==
+{videos_text}
+
+== 시장 데이터: 네이버 카페·커뮤니티 반응 ==
+{naver_text}
+
+위 시장 데이터를 기반으로 이 제품의 쇼핑몰 상세페이지 기획안을 작성하세요.
+유튜브 영상 기획과 동일한 구조(후킹→공감→문제→솔루션→신뢰→구매유도)를 상세페이지에 적용하세요.
+잘 팔리는 유사 제품의 패턴을 분석해 인용하세요.
+모든 카피는 실제 바로 쓸 수 있을 정도로 구체적으로 작성하세요.
+
+{{
+  "market_summary": "유사 제품 시장 분석 요약 2-3문장 (고객이 무엇을 원하고 무엇에 지쳐있는지)",
+  "customer_pain_points": ["고객의 핵심 페인포인트 6-8개 (실제 댓글/리뷰 데이터 기반, 구체적으로)"],
+  "purchase_triggers": ["구매 결정 요인 5-7개 (이 제품 카테고리에서 실제로 구매를 결정하게 만드는 요소)"],
+  "competitor_patterns": ["잘 팔리는 유사 제품 상세페이지에서 공통적으로 나타나는 패턴 5-7개"],
+  "page_sections": [
+    {{
+      "order": 1,
+      "section_name": "섹션 이름 (예: 도입부 후킹)",
+      "purpose": "이 섹션의 역할 한 줄",
+      "headline": "이 섹션의 헤드라인 카피 (실제 사용 가능하게)",
+      "body_copy": "본문 카피 (2-4문장, 실제 사용 가능하게)",
+      "visual_suggestion": "이미지/영상 제안 (구체적으로)",
+      "hook_technique": "여기서 쓰는 설득 기법 (공감/문제제시/증거/희소성 등)"
+    }}
+  ],
+  "key_copies": {{
+    "main_headline": "메인 헤드라인 (페이지 상단 첫 문장, 스크롤을 멈추게 만드는)",
+    "sub_headline": "서브 헤드라인 (메인 아래, 구체적 혜택 또는 공감)",
+    "empathy_opener": "공감 오프너 (고객이 '맞아 내 얘기다' 하는 첫 문장)",
+    "problem_agitation": ["문제 심화 문구 4-5개 (고통을 더 선명하게 만드는)"],
+    "solution_reveal": "솔루션 등장 문구 (반전 느낌으로)",
+    "core_benefits": ["핵심 베네핏 5-7개 (기능 말고 결과·감정 중심으로)"],
+    "cta_options": [
+      {{
+        "text": "CTA 버튼 문구",
+        "urgency_element": "긴급성/희소성 요소",
+        "reason": "왜 지금 사야 하는지"
+      }}
+    ]
+  }},
+  "trust_building": {{
+    "review_keywords": ["리뷰에서 강조해야 할 키워드 5-7개"],
+    "certification_suggestions": ["신뢰도 높이는 인증·보증 요소 3-5개"],
+    "before_after": "Before/After 구성 제안 (어떤 변화를 보여줄지)"
+  }},
+  "differentiation": ["경쟁 제품 대비 차별화 포인트 4-6개 (근거 포함)"],
+  "recommended_titles": [
+    {{
+      "title": "상세페이지 상단 메인 타이틀 (검색 노출 + 클릭 최적화)",
+      "hook_reason": "왜 클릭·구매 욕구를 자극하는지"
+    }}
+  ]
+}}"""
+
+        msg = await self.client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=16000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_text}],
+        )
+        return _safe_json(msg.content[0].text.strip(), msg)

@@ -666,3 +666,34 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .sns-cta-text { font-size: 15px; color: #fff; font-weight: 600; }
 .sns-platform-badges { display: flex; gap: 6px; flex-wrap: wrap; }
 .sns-platform-badge { padding: 3px 8px; background: rgba(255,255,255,0.3); border-radius: 10px; font-size: 11px; font-weight: 600; }
+
+/* ===== 🛒 상세페이지 기획 ===== */
+.detail-copy-card { background: #fafafa; }
+.copy-block { background: #fff; border: 1.5px solid var(--border); border-radius: 10px; padding: 14px 18px; font-size: 16px; font-weight: 600; color: var(--text); margin: 8px 0; line-height: 1.6; }
+.copy-block.main-headline { font-size: 20px; border-color: #f59e0b; background: #fffbeb; color: #92400e; }
+.copy-block.empathy { border-color: #10b981; background: #ecfdf5; color: #065f46; }
+.copy-block.solution { border-color: #3b82f6; background: #eff6ff; color: #1e40af; }
+.copy-label { font-size: 11px; font-weight: 700; color: var(--text-sub); text-transform: uppercase; letter-spacing: 0.05em; margin: 14px 0 4px; }
+.copy-agitation { color: #dc2626; margin: 4px 0; font-size: 14px; }
+.copy-benefit { color: #059669; margin: 4px 0; font-size: 14px; }
+.cta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-top: 8px; }
+.cta-item { border: 1.5px solid var(--border); border-radius: 12px; padding: 16px; }
+.cta-btn-preview { background: #ef4444; color: #fff; border-radius: 8px; padding: 10px 16px; font-size: 15px; font-weight: 700; text-align: center; margin-bottom: 8px; }
+.cta-urgency { font-size: 12px; font-weight: 600; color: #dc2626; margin-bottom: 4px; }
+.cta-reason { font-size: 12px; color: var(--text-sub); }
+.page-sections-list { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.page-section-item { display: flex; gap: 16px; align-items: flex-start; background: #f9fafb; border-radius: 12px; padding: 16px; border-left: 4px solid #6366f1; }
+.section-order { width: 28px; height: 28px; border-radius: 50%; background: #6366f1; color: #fff; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.section-body { flex: 1; }
+.section-name { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+.section-technique { font-size: 11px; background: #e0e7ff; color: #4338ca; padding: 2px 7px; border-radius: 10px; margin-left: 6px; font-weight: 600; }
+.section-headline { font-size: 15px; font-weight: 600; color: #1e40af; margin-bottom: 6px; }
+.section-copy { font-size: 13px; color: var(--text); line-height: 1.7; margin-bottom: 6px; }
+.section-visual { font-size: 12px; color: var(--text-sub); background: #f3f4f6; padding: 6px 10px; border-radius: 6px; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.tag { background: #fef3c7; color: #92400e; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+.title-rec { background: #f9fafb; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; border-left: 4px solid #f59e0b; }
+.title-text { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+.title-reason { font-size: 13px; color: var(--text-sub); }
+.report-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+@media (max-width: 700px) { .report-grid-2 { grid-template-columns: 1fr; } .cta-grid { grid-template-columns: 1fr; } }

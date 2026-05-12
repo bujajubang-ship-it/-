@@ -87,6 +87,13 @@ class ChatRequest(BaseModel):
     attachments: list = []  # List[AttachmentItem]
 
 
+class DetailPageRequest(BaseModel):
+    keyword: str
+    product_desc: str = ""
+    price: str = ""
+    target_customer: str = ""
+
+
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -415,6 +422,61 @@ async def midform(req: MidformRequest):
                 await asyncio.sleep(8)
             report = _task.result()
             save_history("midform", req.keyword, report)
+            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
+        finally:
+            await yt.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/detail-page")
+async def detail_page(req: DetailPageRequest):
+    youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+    naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
+    naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+
+    async def stream():
+        if not youtube_key:
+            yield sse({"step": "error", "message": ".env 파일에 YOUTUBE_API_KEY를 설정해주세요."})
+            return
+
+        yt = YouTubeService(youtube_key)
+        try:
+            yield sse({"step": "searching", "message": f'"{req.keyword}" 유사 제품 리뷰 검색 중...'})
+            videos = await yt.search_videos(req.keyword + " 리뷰", max_results=20)
+            if not videos:
+                videos = await yt.search_videos(req.keyword, max_results=20)
+
+            yield sse({"step": "found", "message": f"유사 제품 영상 {len(videos)}개 발견! 반응 수집 중..."})
+            videos_with_comments = await yt.get_comments_for_videos(videos[:10])
+            total = sum(len(v.get("comments", [])) for v in videos_with_comments)
+            yield sse({"step": "comments_done", "message": f"고객 반응 {total}개 수집 완료!"})
+
+            naver_results = []
+            if naver_id and naver_secret:
+                yield sse({"step": "naver", "message": "네이버 후기·커뮤니티 반응 수집 중..."})
+                naver = NaverService(naver_id, naver_secret)
+                naver_results = await naver.search_cafe(req.keyword)
+                await naver.close()
+                yield sse({"step": "naver_done", "message": f"네이버 {len(naver_results)}개 수집 완료!"})
+
+            yield sse({"step": "analyzing", "message": "AI가 상세페이지 기획안 작성 중... (1~2분 소요)"})
+            analyzer = Analyzer()
+            _task = asyncio.create_task(
+                analyzer.analyze_detail_page(req.keyword, req.product_desc, req.price, req.target_customer, videos_with_comments, naver_results)
+            )
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            report = _task.result()
+            save_history("detail_page", req.keyword, report)
             yield sse({"step": "done", "report": report, "keyword": req.keyword})
 
         except Exception as e:
