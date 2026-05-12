@@ -697,3 +697,5 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .title-reason { font-size: 13px; color: var(--text-sub); }
 .report-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
 @media (max-width: 700px) { .report-grid-2 { grid-template-columns: 1fr; } .cta-grid { grid-template-columns: 1fr; } }
+.detail-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 600px) { .detail-row { grid-template-columns: 1fr; } }
