@@ -6,7 +6,9 @@ import anthropic
 from typing import List, Dict, Optional
 
 
-def _safe_json(raw: str) -> dict:
+def _safe_json(raw: str, msg=None) -> dict:
+    if msg is not None and getattr(msg, "stop_reason", None) == "max_tokens":
+        raise ValueError("AI 응답이 너무 길어 잘렸습니다. 입력 내용을 줄이고 다시 시도해주세요.")
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     raw = re.sub(r"\s*```$", "", raw)
     try:
@@ -252,7 +254,7 @@ class Analyzer:
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": content}],
         )
@@ -310,12 +312,12 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
 
-        return _safe_json(msg.content[0].text.strip())
+        return _safe_json(msg.content[0].text.strip(), msg)
 
     async def write_intro(self, keyword: str, product_desc: str, problem_definition: str, viewer_desire: str) -> Dict:
         system_prompt = (
@@ -378,12 +380,12 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
 
-        return _safe_json(msg.content[0].text.strip())
+        return _safe_json(msg.content[0].text.strip(), msg)
 
     async def write_script(self, keyword: str, product_desc: str, reference_script: str, context: str) -> Dict:
         system_prompt = (
@@ -437,12 +439,12 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
 
-        return _safe_json(msg.content[0].text.strip())
+        return _safe_json(msg.content[0].text.strip(), msg)
 
     async def analyze_midform(self, keyword: str, product_desc: str, videos: List[Dict], naver: List[Dict]) -> Dict:
         videos_text = self._build_videos_text(videos)
@@ -597,12 +599,12 @@ youtube_description과 instagram_caption은 키워드({keyword})를 본문에 �
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": content}],
         )
 
-        return _safe_json(msg.content[0].text.strip())
+        return _safe_json(msg.content[0].text.strip(), msg)
 
     async def analyze_topic_trends(self, youtube_data: List[Dict], naver_data: List[Dict]) -> Dict:
         videos_text = self._build_videos_simple(youtube_data)
@@ -668,12 +670,12 @@ hot_topics는 5개 작성하세요: 풀링+키 겸용 2개 이상, 풀링 2개, 
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
 
-        return _safe_json(msg.content[0].text.strip())
+        return _safe_json(msg.content[0].text.strip(), msg)
 
     async def analyze_shortform(self, keyword: str, product_desc: str, duration: str, videos: List[Dict] = None, naver: List[Dict] = None) -> Dict:
         market_section = ""
@@ -759,12 +761,12 @@ hooks는 3개, script는 {duration}초에 맞게 장면을 나눠 작성하세�
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
 
-        return _safe_json(msg.content[0].text.strip())
+        return _safe_json(msg.content[0].text.strip(), msg)
 
     async def analyze_edit_feedback(self, keyword: str, script: str, videos: List[Dict], naver: List[Dict]) -> Dict:
         videos_text = self._build_videos_text(videos, max_videos=10, max_comments=30)
@@ -860,7 +862,7 @@ hooks는 3개, script는 {duration}초에 맞게 장면을 나눠 작성하세�
         if msg.stop_reason == "max_tokens":
             raise ValueError("AI 응답이 너무 길어 잘렸습니다. 대본을 조금 줄이고 다시 시도해주세요.")
 
-        return _safe_json(msg.content[0].text.strip())
+        return _safe_json(msg.content[0].text.strip(), msg)
 
     async def analyze_channel(self, channel_info: Dict, videos: List[Dict]) -> Dict:
         from collections import defaultdict
@@ -975,11 +977,11 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=16000,
             system=f"당신은 유튜브 채널 성장 전략 전문가입니다. 데이터 기반으로 구체적인 인사이트를 제공합니다. {CHANNEL_GOALS} 반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만.",
             messages=[{"role": "user", "content": prompt}],
         )
-        return _safe_json(msg.content[0].text.strip())
+        return _safe_json(msg.content[0].text.strip(), msg)
 
     async def chat_stream(self, message: str, history: List[Dict], attachments: List[Dict] = None):
         messages = [{"role": m["role"], "content": m["content"]} for m in history[-20:]]
@@ -1060,11 +1062,11 @@ ranking 배열에 입력받은 영상 전체를 순위 매겨 포함하세요.""
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=16000,
             system=f"당신은 유튜브 크리에이터 전략 컨설턴트입니다. 데이터와 트렌드 기반으로 구체적인 업로드 전략을 제시합니다. {CHANNEL_GOALS} 반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만.",
             messages=[{"role": "user", "content": prompt}],
         )
-        return _safe_json(msg.content[0].text.strip())
+        return _safe_json(msg.content[0].text.strip(), msg)
 
     async def analyze_sns_convert(self, keyword: str, script: str) -> Dict:
         system_prompt = (
@@ -1144,8 +1146,8 @@ threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=8192,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
-        return _safe_json(msg.content[0].text.strip())
+        return _safe_json(msg.content[0].text.strip(), msg)
