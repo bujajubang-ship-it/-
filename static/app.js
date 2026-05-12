@@ -1011,7 +1011,7 @@ function sendEditChip(el) {
 }
 
 function editChatKeydown(e) {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     sendEditChat();
   }
@@ -1871,7 +1871,7 @@ function chatInputResize(el) {
 }
 
 function chatKeydown(e) {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     sendChat();
   }
