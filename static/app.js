@@ -10,7 +10,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'topic', 'detail', 'edit', 'sns', 'decision', 'channel', 'chat', 'history', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'topic', 'detail', 'edit', 'sns', 'decision', 'channel', 'blog', 'chat', 'history', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -1973,4 +1973,171 @@ async function sendChat() {
   chatSending = false;
   document.getElementById('chat-send-btn').disabled = false;
   input.focus();
+}
+
+// ===== 📝 블로그 기획 =====
+
+function resetBlog() {
+  document.getElementById('blog-keyword').value = '';
+  document.getElementById('blog-product').value = '';
+  document.getElementById('blog-region').value = '';
+  document.getElementById('blog-progress').innerHTML = '';
+  document.getElementById('blog-progress').classList.add('hidden');
+  document.getElementById('blog-report-section').classList.add('hidden');
+  document.getElementById('blog-start-btn').disabled = false;
+  document.getElementById('blog-start-btn').textContent = '블로그 초안 생성';
+}
+
+async function startBlog() {
+  const keyword = document.getElementById('blog-keyword').value.trim();
+  const product = document.getElementById('blog-product').value.trim();
+  const region  = document.getElementById('blog-region').value.trim();
+
+  if (!keyword) { alert('타겟 키워드를 입력해주세요.'); return; }
+  if (!product)  { alert('내 제품/서비스 설명을 입력해주세요.'); return; }
+
+  const btn = document.getElementById('blog-start-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ 생성 중...';
+
+  const progress = document.getElementById('blog-progress');
+  progress.innerHTML = '';
+  progress.classList.remove('hidden');
+  document.getElementById('blog-report-section').classList.add('hidden');
+
+  const addStep = (msg, type = 'active') => {
+    const icons = { active: '⏳', done: '✅', error: '❌' };
+    const el = document.createElement('div');
+    el.className = 'progress-step';
+    el.innerHTML = `<span class="step-icon">${icons[type]}</span><span>${msg}</span>`;
+    const prev = progress.querySelector('.progress-step:last-child');
+    if (prev) prev.querySelector('.step-icon').textContent = icons.done;
+    progress.appendChild(el);
+  };
+
+  try {
+    const resp = await fetch('/api/blog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keyword, product_desc: product, region }),
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.step === 'error') { addStep(data.message, 'error'); btn.disabled = false; btn.textContent = '블로그 초안 생성'; return; }
+          if (data.step === 'ping') continue;
+          if (data.message) addStep(data.message);
+          if (data.step === 'done') {
+            progress.querySelectorAll('.step-icon').forEach(el => el.textContent = '✅');
+            renderBlogReport(data.report, data.keyword);
+            btn.disabled = false;
+            btn.textContent = '블로그 초안 생성';
+          }
+        } catch(e) {}
+      }
+    }
+  } catch(e) {
+    addStep(`오류: ${e.message}`, 'error');
+    btn.disabled = false;
+    btn.textContent = '블로그 초안 생성';
+  }
+}
+
+function renderBlogReport(r, keyword) {
+  document.getElementById('blog-report-title').textContent = `"${keyword}" 블로그 기획안`;
+  document.getElementById('blog-report-subtitle').textContent = `네이버 SEO 최적화 · 상위노출 전략`;
+  document.getElementById('blog-report-section').classList.remove('hidden');
+
+  // 키워드 전략
+  const ks = r.keyword_strategy || {};
+  const compColor = { '낮음': '#065f46', '중간': '#92400e', '높음': '#991b1b' };
+  const compBg    = { '낮음': '#d1fae5', '중간': '#fef3c7', '높음': '#fee2e2' };
+  const lvl = ks.competition_level || '';
+  document.getElementById('blog-keyword-strategy').innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:14px">
+      <div><div style="font-size:11px;font-weight:700;color:#6b7280;margin-bottom:4px">메인 키워드</div>
+        <div style="font-size:18px;font-weight:800">${ks.main_keyword || ''}</div></div>
+      <div style="margin-left:auto"><span style="background:${compBg[lvl]||'#f3f4f6'};color:${compColor[lvl]||'#374151'};border-radius:20px;padding:4px 14px;font-size:13px;font-weight:700">경쟁도 ${lvl}</span>
+        <div style="font-size:12px;color:#6b7280;margin-top:4px">${ks.competition_reason||''}</div></div>
+    </div>
+    <div style="margin-bottom:10px">
+      <div style="font-size:11px;font-weight:700;color:#6b7280;margin-bottom:6px">서브 키워드</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${(ks.sub_keywords||[]).map(k=>`<span style="background:#f3f4f6;border-radius:6px;padding:4px 10px;font-size:13px">${k}</span>`).join('')}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;font-weight:700;color:#6b7280;margin-bottom:6px">롱테일 키워드</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${(ks.longtail_keywords||[]).map(k=>`<span style="background:#eff6ff;color:#1d4ed8;border-radius:6px;padding:4px 10px;font-size:13px">${k}</span>`).join('')}</div>
+    </div>`;
+
+  // 제목 후보
+  const titlesEl = document.getElementById('blog-titles');
+  titlesEl.innerHTML = (r.title_candidates || []).map((t, i) => `
+    <div style="border:1.5px solid #e5e7eb;border-radius:10px;padding:14px 16px">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <span style="background:#1a1a2e;color:#fff;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;flex-shrink:0">제목 ${i+1}</span>
+        <div style="flex:1">
+          <div style="font-size:15px;font-weight:800;margin-bottom:6px">${t.title}</div>
+          <div style="font-size:12px;color:#6b7280">${t.strategy}</div>
+        </div>
+        <button onclick="navigator.clipboard.writeText('${t.title.replace(/'/g,"\\'")}').then(()=>{this.textContent='✅';setTimeout(()=>this.textContent='복사',1500)})" style="background:#f3f4f6;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;flex-shrink:0">복사</button>
+      </div>
+    </div>`).join('');
+
+  // 해시태그
+  const ht = r.hashtags || {};
+  const tags = ht.tags || [];
+  document.getElementById('blog-hashtags').innerHTML = tags.map(t =>
+    `<span style="background:#eff6ff;color:#1d4ed8;border-radius:6px;padding:4px 10px;font-size:13px;font-weight:600">#${t}</span>`
+  ).join(' ');
+  document.getElementById('blog-hashtag-reason').textContent = ht.count_reason || '';
+
+  // 이미지 전략
+  const img = r.image_strategy || {};
+  document.getElementById('blog-image-strategy').innerHTML = `
+    <div style="font-size:22px;font-weight:800;color:#1a1a2e;margin-bottom:8px">${img.count}</div>
+    <ul style="padding-left:16px;font-size:13px;color:#374151;display:flex;flex-direction:column;gap:6px">
+      ${(img.suggestions||[]).map(s=>`<li>${s}</li>`).join('')}
+    </ul>`;
+
+  // 발행 전략
+  const pub = r.publish_strategy || {};
+  document.getElementById('blog-publish-strategy').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:10px;font-size:13px">
+      <div><div style="font-size:11px;font-weight:700;color:#6b7280;margin-bottom:2px">최적 발행 시간</div><div style="font-weight:700">${pub.best_time||''}</div></div>
+      <div><div style="font-size:11px;font-weight:700;color:#6b7280;margin-bottom:2px">초기 반응 유도</div><div>${pub.seeding||''}</div></div>
+      <div><div style="font-size:11px;font-weight:700;color:#6b7280;margin-bottom:2px">업데이트 주기</div><div>${pub.update_cycle||''}</div></div>
+    </div>`;
+
+  // 초안
+  const draft = r.draft || {};
+  document.getElementById('blog-meta-text').textContent = ' ' + (draft.meta_description || '');
+  document.getElementById('blog-draft-text').textContent = draft.full_text || '';
+}
+
+function copyBlogHashtags() {
+  const tags = document.getElementById('blog-hashtags');
+  const text = [...tags.querySelectorAll('span')].map(s => s.textContent).join(' ');
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target; btn.textContent = '✅ 복사됨'; setTimeout(() => btn.textContent = '복사', 1500);
+  });
+}
+
+function copyBlogDraft() {
+  const meta = document.getElementById('blog-meta-text').textContent.trim();
+  const draft = document.getElementById('blog-draft-text').textContent;
+  navigator.clipboard.writeText(draft).then(() => {
+    const btn = event.target; btn.textContent = '✅ 복사됨'; setTimeout(() => btn.textContent = '전체 복사', 1500);
+  });
 }

@@ -1233,3 +1233,87 @@ threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개
             messages=[{"role": "user", "content": user_text}],
         )
         return _safe_json(msg.content[0].text.strip(), msg)
+
+    async def analyze_blog(self, keyword: str, product_desc: str, region: str, naver_results: list) -> Dict:
+        NAVER_SEO_GUIDE = """
+[네이버 블로그 상위노출 핵심 규칙]
+1. 제목: 메인 키워드를 앞쪽(15자 이내)에 배치, 전체 25~35자, 숫자+명사형 조합이 CTR에 유리
+2. 글자수: 최소 1,500자, 이상적 2,000~3,500자 (초안은 2,500자 이상 작성)
+3. 키워드 밀도: 메인 키워드 1,000자당 5~8회 자연스럽게, 전체 2~4% 유지
+4. 키워드 위치: 첫 단락·중간·마지막 단락에 각 1회씩 필수 포함
+5. 서브 키워드: 메인 키워드의 변형·연관어 2~4회 삽입 (롱테일 키워드 활용)
+6. 본문 구조: [도입-문제제시] → [소제목1] → [본문1] → [소제목2] → [본문2] → [마무리+CTA]
+7. 이미지: 최소 3장, 이상적 5~8장, 파일명을 키워드로 저장, 직접 촬영/편집 이미지 우대
+8. 해시태그: 경쟁 낮음(~5만건)=10~20개, 중간(5~20만)=5~10개, 높음(20만+)=3~5개
+9. 롱테일 전략: "지역+제품" 조합 키워드가 단기 성과에 유리 (예: "대구 업소용 냉장고 추천")
+10. C-Rank: 같은 주제로 꾸준히 발행할수록 분야 전문성 지수 상승
+11. 발행 후: 48시간 내 공감·댓글·스크랩 유도, 오전 10~12시 or 저녁 8~10시 발행 최적
+"""
+
+        naver_context = ""
+        if naver_results:
+            naver_context = "\n\n== 네이버 카페/커뮤니티 반응 (경쟁 현황 참고) ==\n"
+            for n in naver_results[:8]:
+                naver_context += f"- {n.get('title','')}: {n.get('description','')[:120]}\n"
+
+        system_prompt = (
+            "당신은 네이버 블로그 SEO 전문가입니다. "
+            "주어진 SEO 가이드를 철저히 적용해 상위노출에 최적화된 블로그 초안과 전략을 작성합니다. "
+            "초안은 실제 발행 가능한 수준으로 자연스러운 한국어로 작성하되, "
+            "키워드를 억지스럽지 않게 배치하세요. "
+            "반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만."
+        )
+
+        user_text = f"""타겟 키워드: "{keyword}"
+내 제품/서비스/업체: {product_desc}
+지역 (롱테일 키워드용): {region or "미입력"}
+{naver_context}
+
+{NAVER_SEO_GUIDE}
+
+위 SEO 가이드를 적용해 아래 JSON 형식으로 블로그 기획안과 초안을 작성하세요.
+
+{{
+  "keyword_strategy": {{
+    "main_keyword": "메인 키워드 (검색량 집중 타겟)",
+    "sub_keywords": ["서브 키워드 4~6개 (연관어·변형어)"],
+    "longtail_keywords": ["롱테일 키워드 3~5개 (지역+제품 조합 포함)"],
+    "competition_level": "낮음/중간/높음",
+    "competition_reason": "경쟁도 판단 근거 한 줄"
+  }},
+  "title_candidates": [
+    {{
+      "title": "제목 (25~35자, 메인 키워드 앞에 배치)",
+      "keyword_position": "키워드가 몇 번째 글자부터 시작하는지",
+      "strategy": "클릭 유도 전략 (숫자/비교/긴급성/이득 등)"
+    }}
+  ],
+  "hashtags": {{
+    "tags": ["해시태그 목록 (# 없이)"],
+    "count_reason": "이 개수로 선택한 이유 (경쟁도 기반)"
+  }},
+  "image_strategy": {{
+    "count": "추천 이미지 장수",
+    "suggestions": ["이미지 소재 제안 4~6개 (직접 촬영 가능한 것 위주)"]
+  }},
+  "publish_strategy": {{
+    "best_time": "최적 발행 시간대",
+    "seeding": "48시간 내 초기 반응 유도 방법",
+    "update_cycle": "글 업데이트 주기 추천"
+  }},
+  "draft": {{
+    "meta_description": "검색 결과에 뜨는 요약 설명 (160자 이내, 키워드 포함)",
+    "full_text": "완성 블로그 초안 (2,500자 이상, 소제목 포함, 자연스러운 구어체, 키워드 SEO 최적화 적용)"
+  }}
+}}
+
+title_candidates 3개, hashtags.tags는 경쟁도에 맞는 개수로 작성하세요.
+draft.full_text는 실제 블로그에 바로 붙여넣을 수 있도록 소제목(■ 또는 ▶ 사용)과 단락 구분을 명확히 하세요."""
+
+        msg = await self.client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=16000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_text}],
+        )
+        return _safe_json(msg.content[0].text.strip(), msg)

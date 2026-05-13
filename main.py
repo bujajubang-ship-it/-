@@ -94,6 +94,12 @@ class DetailPageRequest(BaseModel):
     target_customer: str = ""
 
 
+class BlogRequest(BaseModel):
+    keyword: str
+    product_desc: str = ""
+    region: str = ""
+
+
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -688,6 +694,53 @@ async def sns_convert(req: SnsConvertRequest):
             report = _task.result()
             save_history("sns", req.keyword, report)
             yield sse({"step": "done", "report": report, "keyword": req.keyword})
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/blog")
+async def blog(req: BlogRequest):
+    naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
+    naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+
+    async def stream():
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
+            return
+        if not req.keyword.strip():
+            yield sse({"step": "error", "message": "타겟 키워드를 입력해주세요."})
+            return
+        if not req.product_desc.strip():
+            yield sse({"step": "error", "message": "내 제품/서비스 설명을 입력해주세요."})
+            return
+
+        naver_results = []
+        try:
+            if naver_id and naver_secret:
+                yield sse({"step": "naver", "message": "네이버 경쟁 글 현황 수집 중..."})
+                naver = NaverService(naver_id, naver_secret)
+                naver_results = await naver.search_cafe(req.keyword)
+                await naver.close()
+                yield sse({"step": "naver_done", "message": f"네이버 {len(naver_results)}개 글 수집 완료!"})
+
+            yield sse({"step": "analyzing", "message": "AI가 SEO 최적화 블로그 초안 작성 중... (30~60초 소요)"})
+            analyzer = Analyzer()
+            _task = asyncio.create_task(
+                analyzer.analyze_blog(req.keyword, req.product_desc, req.region, naver_results)
+            )
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            report = _task.result()
+            save_history("blog", req.keyword, report)
+            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
 

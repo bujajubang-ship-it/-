@@ -699,3 +699,15 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 @media (max-width: 700px) { .report-grid-2 { grid-template-columns: 1fr; } .cta-grid { grid-template-columns: 1fr; } }
 .detail-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 @media (max-width: 600px) { .detail-row { grid-template-columns: 1fr; } }
+
+/* Blog planning */
+.hashtag-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.blog-draft-pre {
+  white-space: pre-wrap; word-break: break-word; font-family: inherit;
+  font-size: 14px; line-height: 1.8; color: #1a1a2e;
+  background: #f9fafb; border-radius: 8px; padding: 20px;
+  margin-top: 8px; max-height: 600px; overflow-y: auto;
+}
+@media (max-width: 700px) {
+  #pane-blog .report-section > div[style*="grid-template-columns"] { display: flex; flex-direction: column; }
+}
