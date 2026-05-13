@@ -689,86 +689,80 @@
     </div>
 
     <!-- ===== 📝 블로그 기획 탭 ===== -->
+    <!-- ===== 📝 블로그 기획 탭 ===== -->
     <div id="pane-blog" class="hidden">
-      <div class="edit-inputs">
-        <h2 class="section-title">📝 네이버 블로그 기획</h2>
-        <p class="section-desc">키워드와 제품 정보를 입력하면 SEO 최적화된 제목·해시태그·블로그 초안을 한 번에 생성합니다.</p>
-        <div class="input-group">
-          <label class="input-label">타겟 키워드 <span class="req">*</span></label>
-          <input type="text" id="blog-keyword" class="text-input" placeholder="예: 업소용 냉장고 추천"/>
+      <section class="search-section" id="blog-input-section">
+        <div class="search-card edit-card">
+          <h1>네이버 블로그 SEO 최적화 초안을 만드세요</h1>
+          <p class="search-desc">키워드와 업체 정보를 입력하면 상위노출 제목·해시태그·사진 8장 분량 블로그 초안을 한 번에 완성해드립니다.</p>
+          <div class="edit-inputs">
+            <input type="text" id="blog-keyword" placeholder="타겟 키워드 * (예: 업소용 냉장고 추천, 식당 가스레인지 교체)" autocomplete="off"/>
+            <textarea id="blog-product" rows="4" placeholder="내 제품/서비스/업체 소개 * (예: 부자주방 — 식당·카페·급식소에 업소용 주방기기를 납품하는 전문업체. 냉장고·가스레인지·식기세척기 취급.)"></textarea>
+            <input type="text" id="blog-region" placeholder="지역 (선택 — 롱테일 키워드 강화용, 예: 대구, 경북)" autocomplete="off"/>
+            <button id="blog-btn" onclick="startBlog()">블로그 초안 생성</button>
+          </div>
         </div>
-        <div class="input-group">
-          <label class="input-label">내 제품/서비스/업체 소개 <span class="req">*</span></label>
-          <textarea id="blog-product" class="text-input" rows="3" placeholder="예: 부자주방 — 식당·카페·급식소에 업소용 주방기기를 납품하는 전문업체. 냉장고·가스레인지·식기세척기 취급."></textarea>
+      </section>
+
+      <section class="progress-section hidden" id="blog-progress-section">
+        <div class="progress-card">
+          <div class="progress-spinner"></div>
+          <div class="progress-steps" id="blog-progress-steps"></div>
         </div>
-        <div class="input-group">
-          <label class="input-label">지역 (롱테일 키워드 강화용, 선택)</label>
-          <input type="text" id="blog-region" class="text-input" placeholder="예: 대구, 경북"/>
-        </div>
-        <div class="input-row">
-          <button class="primary-btn" id="blog-start-btn" onclick="startBlog()">블로그 초안 생성</button>
-          <button class="reset-btn-sm" onclick="resetBlog()">초기화</button>
-        </div>
-        <div id="blog-progress" class="progress-steps hidden"></div>
-      </div>
+      </section>
 
       <section class="report-section hidden" id="blog-report-section">
         <div class="report-header">
           <div>
             <h2 id="blog-report-title"></h2>
-            <p id="blog-report-subtitle" class="report-subtitle"></p>
+            <p class="report-subtitle">네이버 SEO 최적화 · 상위노출 전략</p>
           </div>
-          <button class="reset-btn" onclick="resetBlog()">← 다시 생성</button>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="pdf-btn" onclick="downloadPdf('blog-report-section','블로그기획')">⬇ PDF 저장</button>
+            <button class="reset-btn" onclick="resetBlog()">← 새 기획</button>
+          </div>
         </div>
 
-        <!-- 키워드 전략 -->
         <div class="card">
           <div class="card-header"><span class="card-icon">🎯</span> 키워드 전략</div>
-          <div style="padding:16px 24px 20px">
-            <div id="blog-keyword-strategy"></div>
-          </div>
+          <div class="card-body" id="blog-keyword-strategy"></div>
         </div>
 
-        <!-- 제목 후보 -->
         <div class="card">
           <div class="card-header"><span class="card-icon">✍️</span> 추천 제목 3개</div>
-          <div id="blog-titles" style="padding:16px 24px 20px;display:flex;flex-direction:column;gap:12px"></div>
+          <div id="blog-titles" class="titles-grid"></div>
         </div>
 
-        <!-- 해시태그 -->
         <div class="card">
           <div class="card-header">
             <span class="card-icon">🏷️</span> 추천 해시태그
-            <button class="copy-btn" style="margin-left:auto" onclick="copyBlogHashtags()">복사</button>
+            <button class="sns-copy-btn" onclick="copyBlogHashtags()">복사</button>
           </div>
-          <div style="padding:16px 24px 20px">
+          <div class="card-body">
             <div id="blog-hashtags" class="hashtag-row"></div>
-            <p id="blog-hashtag-reason" style="font-size:12px;color:#6b7280;margin-top:10px"></p>
+            <p id="blog-hashtag-reason" style="font-size:12px;color:var(--text-sub);margin-top:10px"></p>
           </div>
         </div>
 
-        <!-- 이미지 + 발행 전략 -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="edit-two-col">
           <div class="card">
-            <div class="card-header"><span class="card-icon">🖼️</span> 이미지 전략</div>
-            <div id="blog-image-strategy" style="padding:16px 24px 20px"></div>
+            <div class="card-header"><span class="card-icon">🖼️</span> 사진 8장 촬영 가이드</div>
+            <div class="card-body" id="blog-image-strategy"></div>
           </div>
           <div class="card">
             <div class="card-header"><span class="card-icon">📅</span> 발행 전략</div>
-            <div id="blog-publish-strategy" style="padding:16px 24px 20px"></div>
+            <div class="card-body" id="blog-publish-strategy"></div>
           </div>
         </div>
 
-        <!-- 블로그 초안 -->
         <div class="card">
           <div class="card-header">
-            <span class="card-icon">📄</span> 블로그 초안 (바로 복붙 가능)
-            <button class="copy-btn" style="margin-left:auto" onclick="copyBlogDraft()">전체 복사</button>
+            <span class="card-icon">📄</span> 블로그 초안 (사진 8장 분량 · 바로 복붙)
+            <button class="sns-copy-btn" onclick="copyBlogDraft()">전체 복사</button>
           </div>
-          <div style="padding:4px 16px 16px">
-            <div id="blog-meta-desc" style="background:#f3f4f6;border-radius:8px;padding:10px 14px;margin:12px 0 8px;font-size:12px;color:#6b7280">
-              <strong style="color:#374151">검색 결과 설명 (meta description):</strong>
-              <span id="blog-meta-text"></span>
+          <div class="card-body">
+            <div id="blog-meta-desc" style="background:var(--bg);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--text-sub)">
+              <strong style="color:var(--text)">검색 결과 설명:</strong> <span id="blog-meta-text"></span>
             </div>
             <pre id="blog-draft-text" class="blog-draft-pre"></pre>
           </div>

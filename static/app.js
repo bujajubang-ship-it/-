@@ -1978,14 +1978,12 @@ async function sendChat() {
 // ===== 📝 블로그 기획 =====
 
 function resetBlog() {
-  document.getElementById('blog-keyword').value = '';
-  document.getElementById('blog-product').value = '';
-  document.getElementById('blog-region').value = '';
-  document.getElementById('blog-progress').innerHTML = '';
-  document.getElementById('blog-progress').classList.add('hidden');
+  document.getElementById('blog-input-section').classList.remove('hidden');
+  document.getElementById('blog-progress-section').classList.add('hidden');
   document.getElementById('blog-report-section').classList.add('hidden');
-  document.getElementById('blog-start-btn').disabled = false;
-  document.getElementById('blog-start-btn').textContent = '블로그 초안 생성';
+  document.getElementById('blog-progress-steps').innerHTML = '';
+  document.getElementById('blog-btn').disabled = false;
+  document.getElementById('blog-btn').textContent = '블로그 초안 생성';
 }
 
 async function startBlog() {
@@ -1996,23 +1994,25 @@ async function startBlog() {
   if (!keyword) { alert('타겟 키워드를 입력해주세요.'); return; }
   if (!product)  { alert('내 제품/서비스 설명을 입력해주세요.'); return; }
 
-  const btn = document.getElementById('blog-start-btn');
+  const btn = document.getElementById('blog-btn');
   btn.disabled = true;
   btn.textContent = '⏳ 생성 중...';
 
-  const progress = document.getElementById('blog-progress');
-  progress.innerHTML = '';
-  progress.classList.remove('hidden');
+  document.getElementById('blog-input-section').classList.add('hidden');
+  document.getElementById('blog-progress-section').classList.remove('hidden');
   document.getElementById('blog-report-section').classList.add('hidden');
+
+  const progressSteps = document.getElementById('blog-progress-steps');
+  progressSteps.innerHTML = '';
 
   const addStep = (msg, type = 'active') => {
     const icons = { active: '⏳', done: '✅', error: '❌' };
+    const prev = progressSteps.querySelector('.progress-step:last-child');
+    if (prev) prev.querySelector('.step-icon').textContent = icons.done;
     const el = document.createElement('div');
     el.className = 'progress-step';
     el.innerHTML = `<span class="step-icon">${icons[type]}</span><span>${msg}</span>`;
-    const prev = progress.querySelector('.progress-step:last-child');
-    if (prev) prev.querySelector('.step-icon').textContent = icons.done;
-    progress.appendChild(el);
+    progressSteps.appendChild(el);
   };
 
   try {
@@ -2036,28 +2036,32 @@ async function startBlog() {
         if (!line.startsWith('data: ')) continue;
         try {
           const data = JSON.parse(line.slice(6));
-          if (data.step === 'error') { addStep(data.message, 'error'); btn.disabled = false; btn.textContent = '블로그 초안 생성'; return; }
+          if (data.step === 'error') {
+            addStep(data.message, 'error');
+            document.getElementById('blog-input-section').classList.remove('hidden');
+            btn.disabled = false; btn.textContent = '블로그 초안 생성';
+            return;
+          }
           if (data.step === 'ping') continue;
           if (data.message) addStep(data.message);
           if (data.step === 'done') {
-            progress.querySelectorAll('.step-icon').forEach(el => el.textContent = '✅');
+            progressSteps.querySelectorAll('.step-icon').forEach(el => el.textContent = '✅');
+            document.getElementById('blog-progress-section').classList.add('hidden');
             renderBlogReport(data.report, data.keyword);
-            btn.disabled = false;
-            btn.textContent = '블로그 초안 생성';
+            btn.disabled = false; btn.textContent = '블로그 초안 생성';
           }
         } catch(e) {}
       }
     }
   } catch(e) {
     addStep(`오류: ${e.message}`, 'error');
-    btn.disabled = false;
-    btn.textContent = '블로그 초안 생성';
+    document.getElementById('blog-input-section').classList.remove('hidden');
+    btn.disabled = false; btn.textContent = '블로그 초안 생성';
   }
 }
 
 function renderBlogReport(r, keyword) {
   document.getElementById('blog-report-title').textContent = `"${keyword}" 블로그 기획안`;
-  document.getElementById('blog-report-subtitle').textContent = `네이버 SEO 최적화 · 상위노출 전략`;
   document.getElementById('blog-report-section').classList.remove('hidden');
 
   // 키워드 전략
@@ -2083,17 +2087,17 @@ function renderBlogReport(r, keyword) {
 
   // 제목 후보
   const titlesEl = document.getElementById('blog-titles');
-  titlesEl.innerHTML = (r.title_candidates || []).map((t, i) => `
-    <div style="border:1.5px solid #e5e7eb;border-radius:10px;padding:14px 16px">
-      <div style="display:flex;align-items:flex-start;gap:10px">
-        <span style="background:#1a1a2e;color:#fff;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;flex-shrink:0">제목 ${i+1}</span>
-        <div style="flex:1">
-          <div style="font-size:15px;font-weight:800;margin-bottom:6px">${t.title}</div>
-          <div style="font-size:12px;color:#6b7280">${t.strategy}</div>
-        </div>
-        <button onclick="navigator.clipboard.writeText('${t.title.replace(/'/g,"\\'")}').then(()=>{this.textContent='✅';setTimeout(()=>this.textContent='복사',1500)})" style="background:#f3f4f6;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;flex-shrink:0">복사</button>
-      </div>
-    </div>`).join('');
+  titlesEl.innerHTML = '';
+  (r.title_candidates || []).forEach((t, i) => {
+    const div = document.createElement('div');
+    div.className = 'title-card';
+    div.innerHTML = `
+      <div class="title-num">제목 ${i + 1}</div>
+      <div class="title-text">${t.title}</div>
+      ${t.strategy ? `<div class="title-hook">${t.strategy}</div>` : ''}
+    `;
+    titlesEl.appendChild(div);
+  });
 
   // 해시태그
   const ht = r.hashtags || {};
