@@ -1234,20 +1234,22 @@ threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개
         )
         return _safe_json(msg.content[0].text.strip(), msg)
 
-    async def analyze_blog(self, keyword: str, product_desc: str, region: str, naver_results: list) -> Dict:
-        NAVER_SEO_GUIDE = """
+    async def analyze_blog(self, keyword: str, product_desc: str, region: str,
+                           naver_results: list, attachments: list = None, link_content: str = "") -> Dict:
+        photo_count = len([a for a in (attachments or []) if a.get("media_type","").startswith("image/")])
+        para_count = max(photo_count, 5) if photo_count else 5   # 사진 수 = 문단 수, 최소 5
+
+        NAVER_SEO_GUIDE = f"""
 [네이버 블로그 상위노출 핵심 규칙 — 사진 중심 단문 스타일]
 1. 제목: 메인 키워드를 앞쪽(15자 이내)에 배치, 전체 25~35자, 숫자+명사형 조합이 CTR에 유리
-2. 글자수: 사진 1장당 5줄(80~100자) 기준, 사진 8장 → 전체 글자 700~800자 내외
+2. 글자수: 문단당 약 200자, 전체 {para_count}개 문단 → 총 {para_count*200}자 내외
 3. 키워드 반복: 메인 키워드를 전체 글에서 8~10회 자연스럽게 반복 (억지 나열 금지)
-4. 키워드 위치: 첫 단락·중간·마지막 단락에 각 1회씩 필수 포함
+4. 키워드 위치: 첫 문단·중간·마지막 문단에 각 1회씩 필수 포함
 5. 서브 키워드: 메인 키워드의 변형·연관어 2~3회 삽입
-6. 본문 구조: 사진 순서에 맞춰 짧은 단락 8개로 구성 (각 단락 80~100자)
-7. 이미지: 8장 기준, 파일명을 키워드로 저장, 직접 촬영/편집 이미지 우대
-8. 해시태그: 경쟁 낮음=3개, 중간=2개, 높음=1개 (점수 분산 방지, 핵심 키워드에 집중)
-9. 롱테일 전략: "지역+제품" 조합 키워드가 단기 성과에 유리 (예: "대구 업소용 냉장고 추천")
-10. C-Rank: 같은 주제로 꾸준히 발행할수록 분야 전문성 지수 상승
-11. 발행 후: 48시간 내 공감·댓글·스크랩 유도, 오전 10~12시 or 저녁 8~10시 발행 최적
+6. 본문 구조: {'사진 순서에 맞춰' if photo_count else '자연스러운 흐름으로'} 문단 {para_count}개 구성 (각 문단 약 200자)
+7. 해시태그: 경쟁 낮음=3개, 중간=2개, 높음=1개 (점수 분산 방지, 핵심 키워드에 집중)
+8. 롱테일 전략: "지역+제품" 조합 키워드가 단기 성과에 유리 (예: "대구 업소용 냉장고 추천")
+9. 발행 후: 48시간 내 공감·댓글·스크랩 유도, 오전 10~12시 or 저녁 8~10시 발행 최적
 """
 
         naver_context = ""
@@ -1256,9 +1258,19 @@ threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개
             for n in naver_results[:8]:
                 naver_context += f"- {n.get('title','')}: {n.get('description','')[:120]}\n"
 
+        link_context = ""
+        if link_content:
+            link_context = f"\n\n== 참고 링크 내용 (제품/블로그 페이지) ==\n{link_content[:2000]}\n"
+
+        photo_context = ""
+        if photo_count:
+            photo_context = f"\n\n== 첨부 사진 정보 ==\n사진 {photo_count}장이 첨부되어 있습니다. 각 사진을 분석해서 해당 사진에 맞는 문단을 작성하세요.\n"
+
         system_prompt = (
             "당신은 네이버 블로그 SEO 전문가입니다. "
             "주어진 SEO 가이드를 철저히 적용해 상위노출에 최적화된 블로그 초안과 전략을 작성합니다. "
+            "사진이 첨부된 경우 각 사진의 내용을 파악해 그 사진에 맞는 문단을 작성하세요. "
+            "링크 내용이 있으면 제품 특징, 가격, 스펙 등을 초안에 자연스럽게 반영하세요. "
             "초안은 실제 발행 가능한 수준으로 자연스러운 한국어로 작성하되, "
             "키워드를 억지스럽지 않게 배치하세요. "
             "반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만."
@@ -1267,7 +1279,7 @@ threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개
         user_text = f"""타겟 키워드: "{keyword}"
 내 제품/서비스/업체: {product_desc}
 지역 (롱테일 키워드용): {region or "미입력"}
-{naver_context}
+{naver_context}{link_context}{photo_context}
 
 {NAVER_SEO_GUIDE}
 
@@ -1310,15 +1322,29 @@ threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개
 title_candidates 3개 작성하세요.
 hashtags.tags는 경쟁도 낮음=3개, 중간=2개, 높음=1개만 작성하세요.
 draft.full_text 작성 규칙:
-- 단락 8개, 각 단락 80~100자, 전체 700~800자 엄수
-- 각 단락 끝에 괄호로 사진 힌트 한 줄 추가: (📷 어떤 종류의 사진이 어울리는지 간단히)
-- 예시: "업소용 냉장고를 고를 때 가장 중요한 건 용량과 냉각 방식입니다. ...(📷 냉장고 내부 수납 모습)"
-- 메인 키워드 8~10회 자연스럽게 반복, 억지 나열 금지"""
+- 문단 {para_count}개, 각 문단 약 200자, 전체 {para_count*200}자 내외
+- 사진이 첨부된 경우: 각 문단은 첨부된 사진 순서에 맞게, 그 사진에서 보이는 내용 설명 포함
+- 사진이 없는 경우: 각 문단 끝에 (📷 어울리는 사진 종류 한 줄) 힌트 추가
+- 메인 키워드 8~10회 자연스럽게 반복, 억지 나열 금지
+- 링크 내용이 있으면 제품 스펙·가격·특징을 문단에 자연스럽게 포함"""
+
+        # 이미지가 있으면 멀티모달 content 구성
+        images = [a for a in (attachments or []) if a.get("media_type","").startswith("image/")]
+        if images:
+            content: list = []
+            for a in images:
+                content.append({"type": "image", "source": {
+                    "type": "base64", "media_type": a["media_type"], "data": a["data"]
+                }})
+            content.append({"type": "text", "text": user_text})
+            messages = [{"role": "user", "content": content}]
+        else:
+            messages = [{"role": "user", "content": user_text}]
 
         msg = await self.client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=16000,
             system=system_prompt,
-            messages=[{"role": "user", "content": user_text}],
+            messages=messages,
         )
         return _safe_json(msg.content[0].text.strip(), msg)

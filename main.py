@@ -1,7 +1,9 @@
 import asyncio
 import json
 import os
+import re
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -98,6 +100,8 @@ class BlogRequest(BaseModel):
     keyword: str
     product_desc: str = ""
     region: str = ""
+    attachments: list = []   # [{name, media_type, data(base64)}]
+    link: str = ""           # 제품/블로그 URL
 
 
 def sse(data: dict) -> str:
@@ -721,7 +725,25 @@ async def blog(req: BlogRequest):
             return
 
         naver_results = []
+        link_content = ""
         try:
+            # 링크 크롤링
+            if req.link.strip():
+                yield sse({"step": "link", "message": f"링크 내용 읽는 중..."})
+                try:
+                    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                        r = await client.get(req.link.strip(), headers={"User-Agent": "Mozilla/5.0"})
+                        raw = r.text
+                    # 태그 제거 후 텍스트만
+                    text = re.sub(r'<style[^>]*>.*?</style>', '', raw, flags=re.DOTALL)
+                    text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL)
+                    text = re.sub(r'<[^>]+>', ' ', text)
+                    text = re.sub(r'\s+', ' ', text).strip()
+                    link_content = text[:3000]
+                    yield sse({"step": "link_done", "message": "링크 내용 수집 완료!"})
+                except Exception as le:
+                    yield sse({"step": "link_warn", "message": f"링크 읽기 실패 (계속 진행): {le}"})
+
             if naver_id and naver_secret:
                 yield sse({"step": "naver", "message": "네이버 경쟁 글 현황 수집 중..."})
                 naver = NaverService(naver_id, naver_secret)
@@ -729,10 +751,13 @@ async def blog(req: BlogRequest):
                 await naver.close()
                 yield sse({"step": "naver_done", "message": f"네이버 {len(naver_results)}개 글 수집 완료!"})
 
-            yield sse({"step": "analyzing", "message": "AI가 SEO 최적화 블로그 초안 작성 중... (30~60초 소요)"})
+            photo_count = len([a for a in req.attachments if a.get("media_type", "").startswith("image/")])
+            msg = f"사진 {photo_count}장 분석 + " if photo_count else ""
+            yield sse({"step": "analyzing", "message": f"AI가 {msg}SEO 최적화 블로그 초안 작성 중... (30~60초 소요)"})
             analyzer = Analyzer()
             _task = asyncio.create_task(
-                analyzer.analyze_blog(req.keyword, req.product_desc, req.region, naver_results)
+                analyzer.analyze_blog(req.keyword, req.product_desc, req.region,
+                                      naver_results, req.attachments, link_content)
             )
             while not _task.done():
                 yield sse({"step": "ping"})

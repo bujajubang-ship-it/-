@@ -1977,6 +1977,49 @@ async function sendChat() {
 
 // ===== 📝 블로그 기획 =====
 
+let blogPhotos = [];
+
+function handleBlogPhotos(input) {
+  const files = [...input.files];
+  const preview = document.getElementById('blog-photo-preview');
+  const countEl = document.getElementById('blog-photo-count');
+
+  const readFile = (file) => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const b64 = e.target.result.split(',')[1];
+      const media_type = e.target.result.match(/:(.*?);/)[1];
+      resolve({ name: file.name, media_type, data: b64 });
+    };
+    reader.readAsDataURL(file);
+  });
+
+  Promise.all(files.map(readFile)).then(results => {
+    blogPhotos.push(...results);
+    countEl.textContent = `${blogPhotos.length}장 선택됨`;
+    preview.classList.remove('hidden');
+    preview.innerHTML = blogPhotos.map((a, i) => `
+      <div class="attach-thumb-wrap">
+        <img class="attach-thumb" src="data:${a.media_type};base64,${a.data}" title="${a.name}"/>
+        <button class="attach-remove" onclick="removeBlogPhoto(${i})">✕</button>
+      </div>`).join('');
+  });
+  input.value = '';
+}
+
+function removeBlogPhoto(idx) {
+  blogPhotos.splice(idx, 1);
+  const countEl = document.getElementById('blog-photo-count');
+  const preview = document.getElementById('blog-photo-preview');
+  countEl.textContent = blogPhotos.length ? `${blogPhotos.length}장 선택됨` : '';
+  if (!blogPhotos.length) { preview.classList.add('hidden'); preview.innerHTML = ''; return; }
+  preview.innerHTML = blogPhotos.map((a, i) => `
+    <div class="attach-thumb-wrap">
+      <img class="attach-thumb" src="data:${a.media_type};base64,${a.data}" title="${a.name}"/>
+      <button class="attach-remove" onclick="removeBlogPhoto(${i})">✕</button>
+    </div>`).join('');
+}
+
 function resetBlog() {
   document.getElementById('blog-input-section').classList.remove('hidden');
   document.getElementById('blog-progress-section').classList.add('hidden');
@@ -1984,12 +2027,17 @@ function resetBlog() {
   document.getElementById('blog-progress-steps').innerHTML = '';
   document.getElementById('blog-btn').disabled = false;
   document.getElementById('blog-btn').textContent = '블로그 초안 생성';
+  blogPhotos = [];
+  document.getElementById('blog-photo-preview').innerHTML = '';
+  document.getElementById('blog-photo-preview').classList.add('hidden');
+  document.getElementById('blog-photo-count').textContent = '';
 }
 
 async function startBlog() {
   const keyword = document.getElementById('blog-keyword').value.trim();
   const product = document.getElementById('blog-product').value.trim();
   const region  = document.getElementById('blog-region').value.trim();
+  const link    = document.getElementById('blog-link').value.trim();
 
   if (!keyword) { alert('타겟 키워드를 입력해주세요.'); return; }
   if (!product)  { alert('내 제품/서비스 설명을 입력해주세요.'); return; }
@@ -2019,7 +2067,7 @@ async function startBlog() {
     const resp = await fetch('/api/blog', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keyword, product_desc: product, region }),
+      body: JSON.stringify({ keyword, product_desc: product, region, link, attachments: blogPhotos }),
     });
 
     const reader = resp.body.getReader();
