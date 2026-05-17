@@ -2049,68 +2049,42 @@ async function startBlog() {
   document.getElementById('blog-input-section').classList.add('hidden');
   document.getElementById('blog-progress-section').classList.remove('hidden');
   document.getElementById('blog-report-section').classList.add('hidden');
+  document.getElementById('blog-progress-steps').innerHTML = '';
 
-  const progressSteps = document.getElementById('blog-progress-steps');
-  progressSteps.innerHTML = '';
+  const addStep = makeProgressStepper('blog-progress-steps');
+  addStep('분석 준비 중...', 'active');
 
-  const addStep = (msg, type = 'active') => {
-    const icons = { active: '⏳', done: '✅', error: '❌' };
-    const prev = progressSteps.querySelector('.progress-step:last-child');
-    if (prev) prev.querySelector('.step-icon').textContent = icons.done;
-    const el = document.createElement('div');
-    el.className = 'progress-step';
-    el.innerHTML = `<span class="step-icon">${icons[type]}</span><span>${msg}</span>`;
-    progressSteps.appendChild(el);
-  };
-
-  try {
-    const resp = await fetch('/api/blog', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keyword, product_desc: product, region, link, attachments: blogPhotos }),
-    });
-
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        try {
-          const data = JSON.parse(line.slice(6));
-          if (data.step === 'error') {
-            addStep(data.message, 'error');
-            document.getElementById('blog-input-section').classList.remove('hidden');
-            btn.disabled = false; btn.textContent = '블로그 초안 생성';
-            return;
-          }
-          if (data.step === 'ping') continue;
-          if (data.message) addStep(data.message);
-          if (data.step === 'done') {
-            progressSteps.querySelectorAll('.step-icon').forEach(el => el.textContent = '✅');
-            document.getElementById('blog-progress-section').classList.add('hidden');
-            renderBlogReport(data.report, data.keyword);
-            btn.disabled = false; btn.textContent = '블로그 초안 생성';
-          }
-        } catch(e) {}
-      }
+  await streamSSE(
+    '/api/blog',
+    { keyword, product_desc: product, region, link, attachments: blogPhotos },
+    addStep,
+    (data) => {
+      document.getElementById('blog-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
+        s.className = 'progress-step done';
+        s.querySelector('.step-icon').textContent = '✅';
+      });
+      addStep('초안 완성!', 'done');
+      setTimeout(() => {
+        document.getElementById('blog-progress-section').classList.add('hidden');
+        renderBlogReport(data.report, data.keyword || keyword);
+        document.getElementById('blog-report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        btn.disabled = false;
+        btn.textContent = '블로그 초안 생성';
+      }, 600);
+    },
+    (msg) => {
+      document.getElementById('blog-progress-steps').innerHTML = '';
+      makeProgressStepper('blog-progress-steps')(msg, 'error');
+      document.getElementById('blog-input-section').classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = '블로그 초안 생성';
     }
-  } catch(e) {
-    addStep(`오류: ${e.message}`, 'error');
-    document.getElementById('blog-input-section').classList.remove('hidden');
-    btn.disabled = false; btn.textContent = '블로그 초안 생성';
-  }
+  );
 }
 
 function renderBlogReport(r, keyword) {
   document.getElementById('blog-report-title').textContent = `"${keyword}" 블로그 기획안`;
-  document.getElementById('blog-report-section').classList.remove('hidden');
 
   // 키워드 전략
   const ks = r.keyword_strategy || {};
