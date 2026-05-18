@@ -7,7 +7,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -819,5 +819,9 @@ async def history_delete(id: int):
     delete_history(id)
     return {"ok": True}
 
+
+@app.get("/")
+async def root():
+    return FileResponse("static/index.html", headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
