@@ -760,81 +760,84 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   font-size: 11px; font-weight: 800; padding: 0 5px;
 }
 
-/* ── 칸반 보드 ── */
-.pl-kanban {
-  display: flex; gap: 12px;
-  overflow-x: auto; padding-bottom: 16px;
-  align-items: flex-start;
-}
-.pl-kanban::-webkit-scrollbar { height: 6px; }
-.pl-kanban::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+/* ── 영상 로우 리스트 ── */
+.pl-kanban { display: flex; flex-direction: column; gap: 12px; }
 
-.pl-col {
-  min-width: 230px; max-width: 230px;
-  background: #f9fafb; border-radius: 14px;
-  display: flex; flex-direction: column; gap: 0;
-  border: 1px solid #e5e7eb; flex-shrink: 0;
-}
-.pl-col-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 14px; font-size: 13px; font-weight: 700;
-  border-radius: 13px 13px 0 0;
-  background: #fff; border-bottom: 1px solid #f3f4f6;
-}
-.pl-col-count {
-  font-size: 11px; font-weight: 800;
-  padding: 2px 8px; border-radius: 10px;
-}
-.pl-col-body {
-  padding: 10px; display: flex; flex-direction: column; gap: 8px;
-  min-height: 80px;
+.pl-empty {
+  text-align: center; padding: 60px 0;
+  color: #9ca3af; font-size: 15px; line-height: 1.8;
 }
 
-/* ── 카드 ── */
-.pl-card {
-  background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
-  padding: 12px 12px 10px; cursor: pointer;
+.pl-row {
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 14px;
+  padding: 16px 20px; cursor: pointer;
   transition: box-shadow .15s, transform .1s;
-  display: flex; flex-direction: column; gap: 6px;
+  display: flex; flex-direction: column; gap: 12px;
 }
-.pl-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.1); transform: translateY(-1px); }
+.pl-row:hover { box-shadow: 0 4px 16px rgba(0,0,0,.09); transform: translateY(-1px); }
 
-.pl-card-top { display: flex; align-items: center; justify-content: space-between; }
-.pl-type-badge {
-  font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 5px;
+.pl-row-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
 }
-.pl-card-actions { display: flex; gap: 2px; align-items: center; }
+.pl-row-left { display: flex; align-items: center; gap: 10px; flex: 1; flex-wrap: wrap; min-width: 0; }
+.pl-row-title { font-size: 15px; font-weight: 800; word-break: keep-all; }
+.pl-row-meta { font-size: 12px; color: #6b7280; white-space: nowrap; }
+.pl-row-notes {
+  font-size: 12px; color: #9ca3af; line-height: 1.5;
+  border-left: 3px solid #f3f4f6; padding-left: 10px;
+}
+.pl-row-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.pl-cur-stage {
+  font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 20px;
+  white-space: nowrap;
+}
+.pl-type-badge {
+  font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 5px; white-space: nowrap;
+}
 .pl-arrow {
-  width: 24px; height: 24px; border: 1px solid #e5e7eb; border-radius: 6px;
-  background: #f9fafb; color: #374151; font-size: 12px; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: background .1s;
+  width: 28px; height: 28px; border: 1px solid #e5e7eb; border-radius: 7px;
+  background: #f9fafb; color: #374151; font-size: 13px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; transition: background .1s;
 }
 .pl-arrow:hover:not(:disabled) { background: #111827; color: #fff; border-color: #111827; }
 .pl-arrow:disabled { opacity: .3; cursor: default; }
 .pl-del {
-  width: 24px; height: 24px; border: none; background: none;
-  font-size: 13px; cursor: pointer; opacity: .4; transition: opacity .15s;
+  width: 28px; height: 28px; border: none; background: none;
+  font-size: 15px; cursor: pointer; opacity: .35; transition: opacity .15s;
   display: flex; align-items: center; justify-content: center;
 }
 .pl-del:hover { opacity: 1; }
 
-.pl-card-title {
-  font-size: 13px; font-weight: 700; line-height: 1.4;
-  word-break: keep-all;
+/* ── 단계 스테퍼 ── */
+.pl-stepper {
+  display: flex; align-items: center; gap: 0;
+  overflow-x: auto; padding-bottom: 4px;
 }
-.pl-card-meta { font-size: 11px; color: #6b7280; }
-.pl-card-notes {
-  font-size: 11px; color: #9ca3af; line-height: 1.4;
-  border-left: 2px solid #e5e7eb; padding-left: 6px;
-}
+.pl-stepper::-webkit-scrollbar { height: 4px; }
+.pl-stepper::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 2px; }
 
-.pl-col-add {
-  width: 100%; padding: 8px; border: 1.5px dashed #d1d5db;
-  border-radius: 8px; background: transparent; color: #9ca3af;
-  font-size: 12px; cursor: pointer; transition: all .15s;
+.pl-step-wrap {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  flex-shrink: 0;
 }
-.pl-col-add:hover { border-color: #374151; color: #374151; background: #fff; }
+.pl-step-dot {
+  width: 34px; height: 34px; border-radius: 50%; border: 2px solid;
+  font-size: 13px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .15s, box-shadow .15s;
+  background: none;
+}
+.pl-step-dot:hover { transform: scale(1.15); box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+.pl-step-label {
+  font-size: 10px; font-weight: 600; white-space: nowrap;
+  text-align: center; max-width: 60px;
+}
+.pl-step-line {
+  flex: 1; height: 2px; min-width: 20px; max-width: 60px;
+  transition: background .3s;
+  margin-bottom: 18px;
+}
 
 /* ── 모달 ── */
 .pl-modal-overlay {

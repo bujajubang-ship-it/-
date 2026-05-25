@@ -2211,43 +2211,58 @@ function renderPipelineSummary() {
 }
 
 function renderKanban() {
-  const byStage = {};
-  PIPELINE_STAGES.forEach(s => byStage[s.key] = []);
-  plVideos.forEach(v => { if (byStage[v.stage]) byStage[v.stage].push(v); });
-
-  document.getElementById('pl-kanban').innerHTML = PIPELINE_STAGES.map((s, si) => `
-    <div class="pl-col">
-      <div class="pl-col-head" style="border-top:3px solid ${s.color}">
-        <span>${s.emoji} ${s.label}</span>
-        <span class="pl-col-count" style="background:${s.bg};color:${s.color}">${byStage[s.key].length}</span>
-      </div>
-      <div class="pl-col-body">
-        ${byStage[s.key].map(v => plCard(v, si)).join('')}
-        <button class="pl-col-add" onclick="openVideoModal(null,'${s.key}')">+ 추가</button>
-      </div>
-    </div>
-  `).join('');
+  const el = document.getElementById('pl-kanban');
+  if (!plVideos.length) {
+    el.innerHTML = '<div class="pl-empty">아직 추가된 영상이 없습니다.<br>우상단 <strong>+ 영상 추가</strong>를 눌러 시작하세요.</div>';
+    return;
+  }
+  el.innerHTML = plVideos.map(v => plRow(v)).join('');
 }
 
-function plCard(v, stageIdx) {
+function plRow(v) {
   const tc = TYPE_COLORS[v.content_type] || TYPE_COLORS['기타'];
-  const hasNext = stageIdx < PIPELINE_STAGES.length - 1;
-  const hasPrev = stageIdx > 0;
+  const curIdx = PIPELINE_STAGES.findIndex(s => s.key === v.stage);
+  const cur = PIPELINE_STAGES[curIdx];
   const dateStr = v.planned_date ? `📅 ${v.planned_date}` : '';
   const editorStr = v.editor ? `✂️ ${v.editor}` : '';
+
+  const stepper = PIPELINE_STAGES.map((s, i) => {
+    const done = i < curIdx;
+    const active = i === curIdx;
+    const dotStyle = active
+      ? `background:${s.color};border-color:${s.color};color:#fff`
+      : done
+        ? `background:${s.color}22;border-color:${s.color};color:${s.color}`
+        : 'background:#f3f4f6;border-color:#d1d5db;color:#9ca3af';
+    const labelStyle = active ? `color:${s.color};font-weight:800` : done ? `color:${s.color}` : 'color:#9ca3af';
+    const lineStyle = done || active ? `background:${PIPELINE_STAGES[i].color}` : 'background:#e5e7eb';
+    const dot = done ? '✓' : s.emoji;
+    return `
+      <div class="pl-step-wrap">
+        <button class="pl-step-dot" style="${dotStyle}" onclick="event.stopPropagation();setStage(${v.id},${i})" title="${s.label}로 이동">${dot}</button>
+        <div class="pl-step-label" style="${labelStyle}">${s.label}</div>
+      </div>
+      ${i < PIPELINE_STAGES.length - 1 ? `<div class="pl-step-line" style="${lineStyle}"></div>` : ''}
+    `;
+  }).join('');
+
   return `
-  <div class="pl-card" onclick="openVideoModal(${v.id})">
-    <div class="pl-card-top">
-      <span class="pl-type-badge" style="background:${tc.bg};color:${tc.color}">${v.content_type}</span>
-      <div class="pl-card-actions" onclick="event.stopPropagation()">
-        <button class="pl-arrow" onclick="moveStage(${v.id},-1)" ${hasPrev?'':'disabled'} title="이전 단계">←</button>
-        <button class="pl-arrow" onclick="moveStage(${v.id},1)" ${hasNext?'':'disabled'} title="다음 단계">→</button>
-        <button class="pl-del" onclick="deleteVideo(${v.id})" title="삭제">🗑</button>
+  <div class="pl-row" onclick="openVideoModal(${v.id})">
+    <div class="pl-row-head">
+      <div class="pl-row-left">
+        <span class="pl-type-badge" style="background:${tc.bg};color:${tc.color}">${v.content_type}</span>
+        <span class="pl-row-title">${escHtml(v.title)}</span>
+        ${editorStr || dateStr ? `<span class="pl-row-meta">${[editorStr, dateStr].filter(Boolean).join(' · ')}</span>` : ''}
+      </div>
+      <div class="pl-row-actions" onclick="event.stopPropagation()">
+        <span class="pl-cur-stage" style="color:${cur.color};background:${cur.bg}">${cur.emoji} ${cur.label}</span>
+        <button class="pl-arrow" onclick="moveStage(${v.id},-1)" ${curIdx>0?'':'disabled'}>←</button>
+        <button class="pl-arrow" onclick="moveStage(${v.id},1)" ${curIdx<PIPELINE_STAGES.length-1?'':'disabled'}>→</button>
+        <button class="pl-del" onclick="deleteVideo(${v.id})">🗑</button>
       </div>
     </div>
-    <div class="pl-card-title">${escHtml(v.title)}</div>
-    ${editorStr || dateStr ? `<div class="pl-card-meta">${[editorStr,dateStr].filter(Boolean).join(' · ')}</div>` : ''}
-    ${v.notes ? `<div class="pl-card-notes">${escHtml(v.notes.slice(0,60))}${v.notes.length>60?'…':''}</div>` : ''}
+    ${v.notes ? `<div class="pl-row-notes">${escHtml(v.notes.slice(0,80))}${v.notes.length>80?'…':''}</div>` : ''}
+    <div class="pl-stepper">${stepper}</div>
   </div>`;
 }
 
@@ -2310,11 +2325,14 @@ async function moveStage(id, dir) {
   const v = plVideos.find(x => x.id === id);
   if (!v) return;
   const idx = PIPELINE_STAGES.findIndex(s => s.key === v.stage);
-  const newIdx = idx + dir;
-  if (newIdx < 0 || newIdx >= PIPELINE_STAGES.length) return;
+  await setStage(id, idx + dir);
+}
+
+async function setStage(id, idx) {
+  if (idx < 0 || idx >= PIPELINE_STAGES.length) return;
   await fetch(`/api/pipeline/${id}`, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ stage: PIPELINE_STAGES[newIdx].key })
+    body: JSON.stringify({ stage: PIPELINE_STAGES[idx].key })
   });
   loadPipeline();
 }
