@@ -736,8 +736,8 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .pl-topbar {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;
 }
-.pl-page-title { font-size: 22px; font-weight: 800; }
-.pl-page-sub { font-size: 13px; color: #6b7280; margin-top: 4px; }
+.pl-page-title { font-size: 26px; font-weight: 800; }
+.pl-page-sub { font-size: 15px; color: #6b7280; margin-top: 6px; }
 
 .pl-add-btn {
   padding: 10px 20px; background: #111827; color: #fff;
@@ -749,62 +749,62 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 /* ── 요약 칩 ── */
 .pl-stage-summary { display: flex; gap: 8px; flex-wrap: wrap; }
 .pl-sum-chip {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 12px; border-radius: 20px; border: 1.5px solid;
-  font-size: 12px; font-weight: 600;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px; border-radius: 24px; border: 1.5px solid;
+  font-size: 14px; font-weight: 700;
 }
 .pl-sum-label { white-space: nowrap; }
 .pl-sum-count {
-  min-width: 20px; height: 20px; border-radius: 10px;
+  min-width: 24px; height: 24px; border-radius: 12px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 800; padding: 0 5px;
+  font-size: 13px; font-weight: 800; padding: 0 7px;
 }
 
 /* ── 영상 로우 리스트 ── */
-.pl-kanban { display: flex; flex-direction: column; gap: 12px; }
+.pl-kanban { display: flex; flex-direction: column; gap: 16px; }
 
 .pl-empty {
-  text-align: center; padding: 60px 0;
-  color: #9ca3af; font-size: 15px; line-height: 1.8;
+  text-align: center; padding: 80px 0;
+  color: #9ca3af; font-size: 17px; line-height: 2;
 }
 
 .pl-row {
-  background: #fff; border: 1px solid #e5e7eb; border-radius: 14px;
-  padding: 16px 20px; cursor: pointer;
+  background: #fff; border: 1.5px solid #e5e7eb; border-radius: 18px;
+  padding: 24px 28px; cursor: pointer;
   transition: box-shadow .15s, transform .1s;
-  display: flex; flex-direction: column; gap: 12px;
+  display: flex; flex-direction: column; gap: 18px;
 }
-.pl-row:hover { box-shadow: 0 4px 16px rgba(0,0,0,.09); transform: translateY(-1px); }
+.pl-row:hover { box-shadow: 0 6px 24px rgba(0,0,0,.1); transform: translateY(-2px); }
 
 .pl-row-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
 }
-.pl-row-left { display: flex; align-items: center; gap: 10px; flex: 1; flex-wrap: wrap; min-width: 0; }
-.pl-row-title { font-size: 15px; font-weight: 800; word-break: keep-all; }
-.pl-row-meta { font-size: 12px; color: #6b7280; white-space: nowrap; }
+.pl-row-left { display: flex; align-items: center; gap: 12px; flex: 1; flex-wrap: wrap; min-width: 0; }
+.pl-row-title { font-size: 19px; font-weight: 800; word-break: keep-all; }
+.pl-row-meta { font-size: 14px; color: #6b7280; white-space: nowrap; }
 .pl-row-notes {
-  font-size: 12px; color: #9ca3af; line-height: 1.5;
-  border-left: 3px solid #f3f4f6; padding-left: 10px;
+  font-size: 14px; color: #9ca3af; line-height: 1.6;
+  border-left: 3px solid #f3f4f6; padding-left: 12px;
 }
-.pl-row-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.pl-row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
 .pl-cur-stage {
-  font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 20px;
+  font-size: 14px; font-weight: 700; padding: 6px 14px; border-radius: 20px;
   white-space: nowrap;
 }
 .pl-type-badge {
-  font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 5px; white-space: nowrap;
+  font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 6px; white-space: nowrap;
 }
 .pl-arrow {
-  width: 28px; height: 28px; border: 1px solid #e5e7eb; border-radius: 7px;
-  background: #f9fafb; color: #374151; font-size: 13px; cursor: pointer;
+  width: 36px; height: 36px; border: 1.5px solid #e5e7eb; border-radius: 9px;
+  background: #f9fafb; color: #374151; font-size: 16px; cursor: pointer;
   display: flex; align-items: center; justify-content: center; transition: background .1s;
 }
 .pl-arrow:hover:not(:disabled) { background: #111827; color: #fff; border-color: #111827; }
 .pl-arrow:disabled { opacity: .3; cursor: default; }
 .pl-del {
-  width: 28px; height: 28px; border: none; background: none;
-  font-size: 15px; cursor: pointer; opacity: .35; transition: opacity .15s;
+  width: 36px; height: 36px; border: none; background: none;
+  font-size: 18px; cursor: pointer; opacity: .35; transition: opacity .15s;
   display: flex; align-items: center; justify-content: center;
 }
 .pl-del:hover { opacity: 1; }
@@ -812,31 +812,31 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 /* ── 단계 스테퍼 ── */
 .pl-stepper {
   display: flex; align-items: center; gap: 0;
-  overflow-x: auto; padding-bottom: 4px;
+  overflow-x: auto; padding-bottom: 6px;
 }
 .pl-stepper::-webkit-scrollbar { height: 4px; }
 .pl-stepper::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 2px; }
 
 .pl-step-wrap {
-  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
   flex-shrink: 0;
 }
 .pl-step-dot {
-  width: 34px; height: 34px; border-radius: 50%; border: 2px solid;
-  font-size: 13px; cursor: pointer;
+  width: 48px; height: 48px; border-radius: 50%; border: 2.5px solid;
+  font-size: 18px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: transform .15s, box-shadow .15s;
   background: none;
 }
-.pl-step-dot:hover { transform: scale(1.15); box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+.pl-step-dot:hover { transform: scale(1.18); box-shadow: 0 4px 12px rgba(0,0,0,.18); }
 .pl-step-label {
-  font-size: 10px; font-weight: 600; white-space: nowrap;
-  text-align: center; max-width: 60px;
+  font-size: 12px; font-weight: 700; white-space: nowrap;
+  text-align: center; max-width: 72px;
 }
 .pl-step-line {
-  flex: 1; height: 2px; min-width: 20px; max-width: 60px;
+  flex: 1; height: 3px; min-width: 24px; max-width: 72px;
   transition: background .3s;
-  margin-bottom: 18px;
+  margin-bottom: 26px;
 }
 
 /* ── 모달 ── */
