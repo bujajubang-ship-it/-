@@ -10,7 +10,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'topic', 'detail', 'edit', 'sns', 'decision', 'channel', 'blog', 'chat', 'history', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'topic', 'detail', 'edit', 'sns', 'decision', 'channel', 'blog', 'chat', 'history', 'pipeline', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -20,6 +20,7 @@ function switchTab(tab) {
     if (pane) pane.classList.toggle('hidden', t !== tab);
   });
   if (tab === 'history') loadHistory('');
+  if (tab === 'pipeline') loadPipeline();
 }
 
 // ===== 공통 유틸 =====
@@ -2166,4 +2167,160 @@ function copyBlogDraft() {
   navigator.clipboard.writeText(draft).then(() => {
     const btn = event.target; btn.textContent = '✅ 복사됨'; setTimeout(() => btn.textContent = '전체 복사', 1500);
   });
+}
+
+// ── 콘텐츠 파이프라인 ───────────────────────────────────────────────
+
+const PIPELINE_STAGES = [
+  { key: 'filming',   label: '촬영 완료',   emoji: '📹', color: '#8b5cf6', bg: '#f5f3ff' },
+  { key: 'sent',      label: '편집자 전달', emoji: '📤', color: '#f97316', bg: '#fff7ed' },
+  { key: 'editing',   label: '편집 중',     emoji: '✂️', color: '#eab308', bg: '#fefce8' },
+  { key: 'done',      label: '편집 완료',   emoji: '✅', color: '#22c55e', bg: '#f0fdf4' },
+  { key: 'scheduled', label: '업로드 예정', emoji: '📅', color: '#3b82f6', bg: '#eff6ff' },
+  { key: 'uploaded',  label: '업로드 완료', emoji: '🎬', color: '#06b6d4', bg: '#ecfeff' },
+  { key: 'blog',      label: '블로그 완료', emoji: '📝', color: '#6b7280', bg: '#f9fafb' },
+];
+
+const TYPE_COLORS = {
+  '미드폼': { bg: '#eff6ff', color: '#1d4ed8' },
+  '숏폼':   { bg: '#fdf4ff', color: '#7e22ce' },
+  '쇼츠':   { bg: '#fff1f0', color: '#cf1322' },
+  '기타':   { bg: '#f3f4f6', color: '#374151' },
+};
+
+let plVideos = [];
+
+async function loadPipeline() {
+  const res = await fetch('/api/pipeline');
+  plVideos = await res.json();
+  renderPipelineSummary();
+  renderKanban();
+}
+
+function renderPipelineSummary() {
+  const counts = {};
+  PIPELINE_STAGES.forEach(s => counts[s.key] = 0);
+  plVideos.forEach(v => { if (counts[v.stage] !== undefined) counts[v.stage]++; });
+  document.getElementById('pl-stage-summary').innerHTML = PIPELINE_STAGES.map(s => `
+    <div class="pl-sum-chip" style="background:${s.bg};border-color:${s.color}20;color:${s.color}">
+      <span>${s.emoji}</span>
+      <span class="pl-sum-label">${s.label}</span>
+      <span class="pl-sum-count" style="background:${s.color};color:#fff">${counts[s.key]}</span>
+    </div>
+  `).join('');
+}
+
+function renderKanban() {
+  const byStage = {};
+  PIPELINE_STAGES.forEach(s => byStage[s.key] = []);
+  plVideos.forEach(v => { if (byStage[v.stage]) byStage[v.stage].push(v); });
+
+  document.getElementById('pl-kanban').innerHTML = PIPELINE_STAGES.map((s, si) => `
+    <div class="pl-col">
+      <div class="pl-col-head" style="border-top:3px solid ${s.color}">
+        <span>${s.emoji} ${s.label}</span>
+        <span class="pl-col-count" style="background:${s.bg};color:${s.color}">${byStage[s.key].length}</span>
+      </div>
+      <div class="pl-col-body">
+        ${byStage[s.key].map(v => plCard(v, si)).join('')}
+        <button class="pl-col-add" onclick="openVideoModal(null,'${s.key}')">+ 추가</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function plCard(v, stageIdx) {
+  const tc = TYPE_COLORS[v.content_type] || TYPE_COLORS['기타'];
+  const hasNext = stageIdx < PIPELINE_STAGES.length - 1;
+  const hasPrev = stageIdx > 0;
+  const dateStr = v.planned_date ? `📅 ${v.planned_date}` : '';
+  const editorStr = v.editor ? `✂️ ${v.editor}` : '';
+  return `
+  <div class="pl-card" onclick="openVideoModal(${v.id})">
+    <div class="pl-card-top">
+      <span class="pl-type-badge" style="background:${tc.bg};color:${tc.color}">${v.content_type}</span>
+      <div class="pl-card-actions" onclick="event.stopPropagation()">
+        <button class="pl-arrow" onclick="moveStage(${v.id},-1)" ${hasPrev?'':'disabled'} title="이전 단계">←</button>
+        <button class="pl-arrow" onclick="moveStage(${v.id},1)" ${hasNext?'':'disabled'} title="다음 단계">→</button>
+        <button class="pl-del" onclick="deleteVideo(${v.id})" title="삭제">🗑</button>
+      </div>
+    </div>
+    <div class="pl-card-title">${escHtml(v.title)}</div>
+    ${editorStr || dateStr ? `<div class="pl-card-meta">${[editorStr,dateStr].filter(Boolean).join(' · ')}</div>` : ''}
+    ${v.notes ? `<div class="pl-card-notes">${escHtml(v.notes.slice(0,60))}${v.notes.length>60?'…':''}</div>` : ''}
+  </div>`;
+}
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function openVideoModal(id = null, defaultStage = 'filming') {
+  document.getElementById('pl-modal-title').textContent = id ? '영상 수정' : '영상 추가';
+  document.getElementById('pl-edit-id').value = id || '';
+  if (id) {
+    const v = plVideos.find(x => x.id === id);
+    if (!v) return;
+    document.getElementById('pl-f-title').value = v.title;
+    document.getElementById('pl-f-type').value = v.content_type;
+    document.getElementById('pl-f-stage').value = v.stage;
+    document.getElementById('pl-f-editor').value = v.editor || '';
+    document.getElementById('pl-f-date').value = v.planned_date || '';
+    document.getElementById('pl-f-notes').value = v.notes || '';
+  } else {
+    document.getElementById('pl-f-title').value = '';
+    document.getElementById('pl-f-type').value = '미드폼';
+    document.getElementById('pl-f-stage').value = defaultStage;
+    document.getElementById('pl-f-editor').value = '';
+    document.getElementById('pl-f-date').value = '';
+    document.getElementById('pl-f-notes').value = '';
+  }
+  document.getElementById('pl-modal').classList.remove('hidden');
+  document.getElementById('pl-modal-overlay').classList.remove('hidden');
+  document.getElementById('pl-f-title').focus();
+}
+
+function closeVideoModal() {
+  document.getElementById('pl-modal').classList.add('hidden');
+  document.getElementById('pl-modal-overlay').classList.add('hidden');
+}
+
+async function saveVideo() {
+  const title = document.getElementById('pl-f-title').value.trim();
+  if (!title) { alert('영상 제목을 입력해주세요.'); return; }
+  const payload = {
+    title,
+    content_type: document.getElementById('pl-f-type').value,
+    stage: document.getElementById('pl-f-stage').value,
+    editor: document.getElementById('pl-f-editor').value.trim(),
+    planned_date: document.getElementById('pl-f-date').value,
+    notes: document.getElementById('pl-f-notes').value.trim(),
+  };
+  const editId = document.getElementById('pl-edit-id').value;
+  if (editId) {
+    await fetch(`/api/pipeline/${editId}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  } else {
+    await fetch('/api/pipeline', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  }
+  closeVideoModal();
+  loadPipeline();
+}
+
+async function moveStage(id, dir) {
+  const v = plVideos.find(x => x.id === id);
+  if (!v) return;
+  const idx = PIPELINE_STAGES.findIndex(s => s.key === v.stage);
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= PIPELINE_STAGES.length) return;
+  await fetch(`/api/pipeline/${id}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ stage: PIPELINE_STAGES[newIdx].key })
+  });
+  loadPipeline();
+}
+
+async function deleteVideo(id) {
+  if (!confirm('이 영상을 파이프라인에서 삭제하시겠습니까?')) return;
+  await fetch(`/api/pipeline/${id}`, { method: 'DELETE' });
+  loadPipeline();
 }

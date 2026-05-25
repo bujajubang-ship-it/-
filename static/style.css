@@ -721,3 +721,165 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   cursor: pointer; transition: all .15s;
 }
 .blog-attach-btn:hover { background: #e5e7eb; border-color: #9ca3af; color: var(--text); }
+
+/* ══════════════════════════════════════════
+   📋 콘텐츠 파이프라인
+══════════════════════════════════════════ */
+.tab-btn-pipeline { background: #f0fdf4 !important; color: #15803d !important; border-color: #bbf7d0 !important; }
+.tab-btn-pipeline.active { background: #15803d !important; color: #fff !important; }
+
+.pl-page {
+  max-width: 1400px; margin: 0 auto;
+  padding: 28px 24px 60px;
+  display: flex; flex-direction: column; gap: 20px;
+}
+.pl-topbar {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
+.pl-page-title { font-size: 22px; font-weight: 800; }
+.pl-page-sub { font-size: 13px; color: #6b7280; margin-top: 4px; }
+
+.pl-add-btn {
+  padding: 10px 20px; background: #111827; color: #fff;
+  border: none; border-radius: 10px; font-size: 14px; font-weight: 700;
+  cursor: pointer; white-space: nowrap; transition: opacity .15s;
+}
+.pl-add-btn:hover { opacity: .85; }
+
+/* ── 요약 칩 ── */
+.pl-stage-summary { display: flex; gap: 8px; flex-wrap: wrap; }
+.pl-sum-chip {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 20px; border: 1.5px solid;
+  font-size: 12px; font-weight: 600;
+}
+.pl-sum-label { white-space: nowrap; }
+.pl-sum-count {
+  min-width: 20px; height: 20px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; padding: 0 5px;
+}
+
+/* ── 칸반 보드 ── */
+.pl-kanban {
+  display: flex; gap: 12px;
+  overflow-x: auto; padding-bottom: 16px;
+  align-items: flex-start;
+}
+.pl-kanban::-webkit-scrollbar { height: 6px; }
+.pl-kanban::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+
+.pl-col {
+  min-width: 230px; max-width: 230px;
+  background: #f9fafb; border-radius: 14px;
+  display: flex; flex-direction: column; gap: 0;
+  border: 1px solid #e5e7eb; flex-shrink: 0;
+}
+.pl-col-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; font-size: 13px; font-weight: 700;
+  border-radius: 13px 13px 0 0;
+  background: #fff; border-bottom: 1px solid #f3f4f6;
+}
+.pl-col-count {
+  font-size: 11px; font-weight: 800;
+  padding: 2px 8px; border-radius: 10px;
+}
+.pl-col-body {
+  padding: 10px; display: flex; flex-direction: column; gap: 8px;
+  min-height: 80px;
+}
+
+/* ── 카드 ── */
+.pl-card {
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+  padding: 12px 12px 10px; cursor: pointer;
+  transition: box-shadow .15s, transform .1s;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.pl-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.1); transform: translateY(-1px); }
+
+.pl-card-top { display: flex; align-items: center; justify-content: space-between; }
+.pl-type-badge {
+  font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 5px;
+}
+.pl-card-actions { display: flex; gap: 2px; align-items: center; }
+.pl-arrow {
+  width: 24px; height: 24px; border: 1px solid #e5e7eb; border-radius: 6px;
+  background: #f9fafb; color: #374151; font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .1s;
+}
+.pl-arrow:hover:not(:disabled) { background: #111827; color: #fff; border-color: #111827; }
+.pl-arrow:disabled { opacity: .3; cursor: default; }
+.pl-del {
+  width: 24px; height: 24px; border: none; background: none;
+  font-size: 13px; cursor: pointer; opacity: .4; transition: opacity .15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.pl-del:hover { opacity: 1; }
+
+.pl-card-title {
+  font-size: 13px; font-weight: 700; line-height: 1.4;
+  word-break: keep-all;
+}
+.pl-card-meta { font-size: 11px; color: #6b7280; }
+.pl-card-notes {
+  font-size: 11px; color: #9ca3af; line-height: 1.4;
+  border-left: 2px solid #e5e7eb; padding-left: 6px;
+}
+
+.pl-col-add {
+  width: 100%; padding: 8px; border: 1.5px dashed #d1d5db;
+  border-radius: 8px; background: transparent; color: #9ca3af;
+  font-size: 12px; cursor: pointer; transition: all .15s;
+}
+.pl-col-add:hover { border-color: #374151; color: #374151; background: #fff; }
+
+/* ── 모달 ── */
+.pl-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 400;
+}
+.pl-modal {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  width: 520px; max-width: 95vw; max-height: 90vh; overflow-y: auto;
+  background: #fff; border-radius: 16px; z-index: 401;
+  box-shadow: 0 20px 60px rgba(0,0,0,.2);
+  display: flex; flex-direction: column;
+}
+.pl-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px 24px; border-bottom: 1px solid #f3f4f6;
+  font-size: 17px; font-weight: 800; flex-shrink: 0;
+}
+.pl-modal-header button {
+  background: none; border: none; font-size: 20px;
+  cursor: pointer; color: #6b7280; line-height: 1;
+}
+.pl-modal-body { padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; }
+.pl-field { display: flex; flex-direction: column; gap: 5px; flex: 1; }
+.pl-field label { font-size: 12px; font-weight: 700; color: #374151; }
+.pl-field input, .pl-field select, .pl-field textarea {
+  padding: 9px 12px; border: 1.5px solid #e5e7eb; border-radius: 8px;
+  font-size: 14px; font-family: inherit; outline: none; transition: border-color .15s;
+}
+.pl-field input:focus, .pl-field select:focus, .pl-field textarea:focus {
+  border-color: #111827;
+}
+.pl-field textarea { resize: vertical; }
+.pl-field-row { display: flex; gap: 12px; }
+
+.pl-modal-footer {
+  display: flex; gap: 10px; justify-content: flex-end;
+  padding: 16px 24px; border-top: 1px solid #f3f4f6; flex-shrink: 0;
+}
+.pl-modal-cancel {
+  padding: 9px 20px; border: 1.5px solid #e5e7eb; border-radius: 8px;
+  background: #fff; font-size: 14px; cursor: pointer; color: #6b7280;
+}
+.pl-modal-save {
+  padding: 9px 24px; background: #111827; color: #fff;
+  border: none; border-radius: 8px; font-size: 14px; font-weight: 700;
+  cursor: pointer; transition: opacity .15s;
+}
+.pl-modal-save:hover { opacity: .85; }

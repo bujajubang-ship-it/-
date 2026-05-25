@@ -26,6 +26,7 @@
           <button class="tab-btn" id="tab-blog" onclick="switchTab('blog')">📝 블로그 기획</button>
           <button class="tab-btn tab-btn-chat" id="tab-chat" onclick="switchTab('chat')">💬 AI 상담</button>
           <button class="tab-btn" id="tab-history" onclick="switchTab('history')">히스토리</button>
+          <button class="tab-btn tab-btn-pipeline" id="tab-pipeline" onclick="switchTab('pipeline')">📋 파이프라인</button>
         </div>
       </div>
       <div id="api-status" class="api-status"></div>
@@ -882,6 +883,78 @@
         <div class="report-header"><div><h2 id="script-report-title"></h2></div><button class="reset-btn" onclick="switchTab('history')">← 히스토리</button></div>
         <div class="card"><div class="card-header"><span class="card-icon">✍️</span> 변형 대본</div><div class="intro-script-output" id="script-adapted"></div></div>
       </section>
+    </div>
+
+    <!-- ===== 📋 파이프라인 탭 ===== -->
+    <div id="pane-pipeline" class="hidden">
+      <div class="pl-page">
+        <div class="pl-topbar">
+          <div>
+            <div class="pl-page-title">📋 콘텐츠 파이프라인</div>
+            <div class="pl-page-sub">촬영 완료된 영상들을 단계별로 추적하고 편집자 협업을 관리합니다</div>
+          </div>
+          <button class="pl-add-btn" onclick="openVideoModal()">+ 영상 추가</button>
+        </div>
+        <div class="pl-stage-summary" id="pl-stage-summary"></div>
+        <div class="pl-kanban" id="pl-kanban"></div>
+      </div>
+
+      <!-- 영상 추가/수정 모달 -->
+      <div class="pl-modal-overlay hidden" id="pl-modal-overlay" onclick="closeVideoModal()"></div>
+      <div class="pl-modal hidden" id="pl-modal">
+        <div class="pl-modal-header">
+          <span id="pl-modal-title">영상 추가</span>
+          <button onclick="closeVideoModal()">✕</button>
+        </div>
+        <div class="pl-modal-body">
+          <input type="hidden" id="pl-edit-id" value="" />
+          <div class="pl-field">
+            <label>영상 제목 *</label>
+            <input type="text" id="pl-f-title" placeholder="예: 업소용 냉장고 종류 완벽 정리" />
+          </div>
+          <div class="pl-field-row">
+            <div class="pl-field">
+              <label>콘텐츠 유형</label>
+              <select id="pl-f-type">
+                <option>미드폼</option>
+                <option>숏폼</option>
+                <option>쇼츠</option>
+                <option>기타</option>
+              </select>
+            </div>
+            <div class="pl-field">
+              <label>현재 단계</label>
+              <select id="pl-f-stage">
+                <option value="filming">📹 촬영 완료</option>
+                <option value="sent">📤 편집자 전달</option>
+                <option value="editing">✂️ 편집 중</option>
+                <option value="done">✅ 편집 완료</option>
+                <option value="scheduled">📅 업로드 예정</option>
+                <option value="uploaded">🎬 업로드 완료</option>
+                <option value="blog">📝 블로그 완료</option>
+              </select>
+            </div>
+          </div>
+          <div class="pl-field-row">
+            <div class="pl-field">
+              <label>담당 편집자</label>
+              <input type="text" id="pl-f-editor" placeholder="편집자 이름" />
+            </div>
+            <div class="pl-field">
+              <label>업로드 예정일</label>
+              <input type="date" id="pl-f-date" />
+            </div>
+          </div>
+          <div class="pl-field">
+            <label>메모</label>
+            <textarea id="pl-f-notes" rows="3" placeholder="특이사항, 편집 지시사항 등..."></textarea>
+          </div>
+        </div>
+        <div class="pl-modal-footer">
+          <button class="pl-modal-cancel" onclick="closeVideoModal()">취소</button>
+          <button class="pl-modal-save" onclick="saveVideo()">저장</button>
+        </div>
+      </div>
     </div>
 
   </main>

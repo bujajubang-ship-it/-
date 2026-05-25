@@ -70,3 +70,66 @@ def delete_history(id_: int):
     conn.execute("DELETE FROM history WHERE id=?", (id_,))
     conn.commit()
     conn.close()
+
+
+# ── 콘텐츠 파이프라인 ─────────────────────────────────────────────────
+
+def init_pipeline():
+    conn = get_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pipeline (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            stage TEXT NOT NULL DEFAULT 'filming',
+            content_type TEXT DEFAULT '미드폼',
+            editor TEXT DEFAULT '',
+            planned_date TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            sort_order INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def list_pipeline():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM pipeline ORDER BY stage, sort_order, created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def create_pipeline_item(title, stage, content_type, editor, planned_date, notes):
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO pipeline (title, stage, content_type, editor, planned_date, notes) VALUES (?,?,?,?,?,?)",
+        (title, stage, content_type, editor, planned_date, notes),
+    )
+    conn.commit()
+    id_ = cur.lastrowid
+    conn.close()
+    return id_
+
+
+def update_pipeline_item(id_: int, data: dict):
+    fields = {k: v for k, v in data.items() if k in
+              ("title", "stage", "content_type", "editor", "planned_date", "notes", "sort_order")}
+    if not fields:
+        return
+    sets = ", ".join(f"{k}=?" for k in fields)
+    vals = list(fields.values()) + [id_]
+    conn = get_db()
+    conn.execute(f"UPDATE pipeline SET {sets}, updated_at=CURRENT_TIMESTAMP WHERE id=?", vals)
+    conn.commit()
+    conn.close()
+
+
+def delete_pipeline_item(id_: int):
+    conn = get_db()
+    conn.execute("DELETE FROM pipeline WHERE id=?", (id_,))
+    conn.commit()
+    conn.close()

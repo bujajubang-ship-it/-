@@ -17,9 +17,12 @@ from analyzer import Analyzer
 from naver_service import NaverService
 from youtube_service import YouTubeService
 from analytics_service import AnalyticsService
-from database import init_db, save_history, list_history, get_history, delete_history
+from database import (init_db, save_history, list_history, get_history, delete_history,
+                       init_pipeline, list_pipeline, create_pipeline_item,
+                       update_pipeline_item, delete_pipeline_item)
 
 init_db()
+init_pipeline()
 
 app = FastAPI(title="YouTube Content Researcher")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -817,6 +820,43 @@ async def history_get(id: int):
 @app.delete("/api/history/{id}")
 async def history_delete(id: int):
     delete_history(id)
+    return {"ok": True}
+
+
+# ── 콘텐츠 파이프라인 API ──────────────────────────────────────────────
+
+class PipelineItem(BaseModel):
+    title: str
+    stage: str = "filming"
+    content_type: str = "미드폼"
+    editor: str = ""
+    planned_date: str = ""
+    notes: str = ""
+
+
+@app.get("/api/pipeline")
+async def pipeline_list():
+    return list_pipeline()
+
+
+@app.post("/api/pipeline")
+async def pipeline_create(item: PipelineItem):
+    id_ = create_pipeline_item(
+        item.title, item.stage, item.content_type,
+        item.editor, item.planned_date, item.notes
+    )
+    return {"id": id_}
+
+
+@app.put("/api/pipeline/{id}")
+async def pipeline_update(id: int, item: dict):
+    update_pipeline_item(id, item)
+    return {"ok": True}
+
+
+@app.delete("/api/pipeline/{id}")
+async def pipeline_delete(id: int):
+    delete_pipeline_item(id)
     return {"ok": True}
 
 
