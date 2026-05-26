@@ -975,8 +975,18 @@ async def pipeline_delete(id: int):
     return {"ok": True}
 
 
+NO_CACHE = {"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"}
+
 @app.get("/")
 async def root():
-    return FileResponse("static/index.html", headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+    return FileResponse("static/index.html", headers=NO_CACHE)
+
+@app.get("/app.js")
+async def serve_js():
+    return FileResponse("static/app.js", media_type="application/javascript", headers=NO_CACHE)
+
+@app.get("/style.css")
+async def serve_css():
+    return FileResponse("static/style.css", media_type="text/css", headers=NO_CACHE)
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
