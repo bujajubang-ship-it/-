@@ -90,6 +90,7 @@ class AnalyzeRequest(BaseModel):
 class EditFeedbackRequest(BaseModel):
     keyword: str
     script: str
+    product_url: str = ""
 
 
 class PlanningRequest(BaseModel):
@@ -288,9 +289,19 @@ async def edit_feedback(req: EditFeedbackRequest):
                 await naver.close()
                 yield sse({"step": "naver_done", "message": f"네이버 카페 {len(naver_results)}개 게시글 수집 완료!"})
 
+            # 스마트스토어 URL 크롤링
+            product_page_info = ""
+            if req.product_url.strip():
+                yield sse({"step": "crawling", "message": "스마트스토어 상품 페이지 분석 중..."})
+                product_page_info = await fetch_product_info(req.product_url)
+
+            script_with_product = req.script
+            if product_page_info:
+                script_with_product = f"[스마트스토어 상품 정보]\n{product_page_info}\n\n[영상 대본]\n{req.script}"
+
             yield sse({"step": "analyzing", "message": "AI가 대본 분석 중... (보통 20~40초 소요)"})
             analyzer = Analyzer()
-            _task = asyncio.create_task(analyzer.analyze_edit_feedback(req.keyword, req.script, videos_with_comments, naver_results))
+            _task = asyncio.create_task(analyzer.analyze_edit_feedback(req.keyword, script_with_product, videos_with_comments, naver_results))
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)

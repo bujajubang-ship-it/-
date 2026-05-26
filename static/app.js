@@ -856,10 +856,11 @@ function startEditAnalysis() {
   const script = document.getElementById('edit-script-input').value.trim();
   if (!keyword) { document.getElementById('edit-keyword-input').focus(); return; }
   if (!script) { document.getElementById('edit-script-input').focus(); return; }
-  runEditAnalysis(keyword, script);
+  const product_url = (document.getElementById('edit-product-url')?.value || '').trim();
+  runEditAnalysis(keyword, script, product_url);
 }
 
-async function runEditAnalysis(keyword, script) {
+async function runEditAnalysis(keyword, script, product_url = '') {
   editAnalyzing = true;
   document.getElementById('edit-analyze-btn').disabled = true;
   document.getElementById('edit-input-section').classList.add('hidden');
@@ -871,7 +872,7 @@ async function runEditAnalysis(keyword, script) {
   addStep('분석 준비 중...', 'active');
 
   await streamSSE(
-    '/api/edit-feedback', { keyword, script },
+    '/api/edit-feedback', { keyword, script, product_url },
     addStep,
     (data) => {
       document.getElementById('edit-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
