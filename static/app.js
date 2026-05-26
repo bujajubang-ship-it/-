@@ -267,10 +267,11 @@ function startMidform() {
   const keyword = document.getElementById('midform-keyword-input').value.trim();
   if (!keyword) { document.getElementById('midform-keyword-input').focus(); return; }
   const product_desc = document.getElementById('midform-product-input').value.trim();
-  runMidform(keyword, product_desc);
+  const product_url  = (document.getElementById('midform-product-url')?.value || '').trim();
+  runMidform(keyword, product_desc, product_url);
 }
 
-async function runMidform(keyword, product_desc) {
+async function runMidform(keyword, product_desc, product_url = '') {
   midformAnalyzing = true;
   document.getElementById('midform-btn').disabled = true;
   document.getElementById('midform-input-section').classList.add('hidden');
@@ -282,7 +283,7 @@ async function runMidform(keyword, product_desc) {
   addStep('분석 준비 중...', 'active');
 
   await streamSSE(
-    '/api/midform', { keyword, product_desc },
+    '/api/midform', { keyword, product_desc, product_url },
     addStep,
     (data) => {
       document.getElementById('midform-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {

@@ -27,6 +27,59 @@ init_db()
 init_pipeline()
 
 app = FastAPI(title="YouTube Content Researcher")
+
+
+async def fetch_product_info(url: str) -> str:
+    """스마트스토어 상품 페이지에서 제품 정보 추출"""
+    if not url or not url.startswith("http"):
+        return ""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+            "Accept-Language": "ko-KR,ko;q=0.9",
+        }
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(url, headers=headers)
+        html = resp.text
+
+        # og 메타태그 추출
+        def meta(prop):
+            m = re.search(rf'<meta[^>]+(?:property|name)=["\']og:{prop}["\'][^>]+content=["\']([^"\']+)["\']', html)
+            if not m:
+                m = re.search(rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']og:{prop}["\']', html)
+            return m.group(1).strip() if m else ""
+
+        title       = meta("title")
+        description = meta("description")
+
+        # JSON-LD 구조화 데이터 추출 (가격·브랜드 등)
+        jld_match = re.search(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.S)
+        jld_text = ""
+        if jld_match:
+            try:
+                jld = json.loads(jld_match.group(1))
+                if isinstance(jld, dict):
+                    name   = jld.get("name", "")
+                    price  = jld.get("offers", {}).get("price", "") if isinstance(jld.get("offers"), dict) else ""
+                    brand  = jld.get("brand", {}).get("name", "") if isinstance(jld.get("brand"), dict) else ""
+                    desc   = jld.get("description", "")
+                    jld_text = "\n".join(filter(None, [
+                        f"제품명: {name}" if name else "",
+                        f"브랜드: {brand}" if brand else "",
+                        f"가격: {price}원" if price else "",
+                        f"설명: {desc[:300]}" if desc else "",
+                    ]))
+            except Exception:
+                pass
+
+        parts = []
+        if title:       parts.append(f"제품명: {title}")
+        if description: parts.append(f"소개: {description[:200]}")
+        if jld_text:    parts.append(jld_text)
+
+        return "\n".join(parts) if parts else ""
+    except Exception:
+        return ""
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -68,6 +121,7 @@ class ShortformRequest(BaseModel):
 class MidformRequest(BaseModel):
     keyword: str
     product_desc: str = ""
+    product_url: str = ""
 
 
 class ChannelAnalyzeRequest(BaseModel):
@@ -429,9 +483,19 @@ async def midform(req: MidformRequest):
                 await naver.close()
                 yield sse({"step": "naver_done", "message": f"네이버 카페 {len(naver_results)}개 게시글 수집 완료!"})
 
+            # 스마트스토어 URL 크롤링
+            product_page_info = ""
+            if req.product_url.strip():
+                yield sse({"step": "crawling", "message": "스마트스토어 상품 페이지 분석 중..."})
+                product_page_info = await fetch_product_info(req.product_url)
+
+            combined_desc = req.product_desc.strip()
+            if product_page_info:
+                combined_desc = f"[스마트스토어 상품 정보]\n{product_page_info}\n\n[추가 메모]\n{combined_desc}" if combined_desc else f"[스마트스토어 상품 정보]\n{product_page_info}"
+
             yield sse({"step": "analyzing", "message": "AI가 전체 영상 기획 작성 중... (1~2분 소요)"})
             analyzer = Analyzer()
-            _task = asyncio.create_task(analyzer.analyze_midform(req.keyword, req.product_desc, videos_with_comments, naver_results))
+            _task = asyncio.create_task(analyzer.analyze_midform(req.keyword, combined_desc, videos_with_comments, naver_results))
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)
