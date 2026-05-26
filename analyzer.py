@@ -1234,7 +1234,7 @@ threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개
         )
         return _safe_json(msg.content[0].text.strip(), msg)
 
-    async def analyze_blog(self, keyword: str, memo: str, photos: list = None) -> Dict:
+    async def analyze_blog(self, keyword: str, memo: str, photos: list = None, region: str = "", link: str = "") -> Dict:
         photos = photos or []
         photo_count = len(photos)
 
@@ -1302,12 +1302,14 @@ threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개
             ph_str = f"사진 {[p+1 for p in s['photos']]}" if s['photos'] else "사진 없음"
             section_plan_text += f"- {s['heading']}: {ph_str}\n"
 
-        memo_text = f"\n메모: {memo}" if memo.strip() else ""
+        memo_text   = f"\n업체 소개: {memo}" if memo.strip() else ""
+        region_text = f"\n지역: {region}" if region.strip() else ""
+        link_text   = f"\n참고 링크: {link}" if link.strip() else ""
 
         user_text = f"""브랜드: 부자주방 (업소용 주방기기 판매)
 타겟: 식당 자영업자
 말투: 친근한 존댓말
-키워드: {keyword}{memo_text}
+키워드: {keyword}{memo_text}{region_text}{link_text}
 
 다음 사진들을 분석하여 네이버 블로그용 SEO 최적화 글을 작성해주세요.
 

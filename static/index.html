@@ -14,22 +14,23 @@
         <span class="logo-icon">▶</span>
         <span class="logo-text">콘텐츠 리서처</span>
       </div>
-      <div class="header-center">
-        <div class="tab-nav">
-          <button class="tab-btn active" id="tab-midform" onclick="switchTab('midform')">미드폼</button>
-          <button class="tab-btn" id="tab-shortform" onclick="switchTab('shortform')">숏폼</button>
-          <button class="tab-btn tab-btn-trend" id="tab-topic" onclick="switchTab('topic')">주제 추천</button>
-          <button class="tab-btn" id="tab-detail" onclick="switchTab('detail')">상세페이지</button>
-          <button class="tab-btn" id="tab-edit" onclick="switchTab('edit')">편집 피드백</button>
-          <button class="tab-btn" id="tab-channel" onclick="switchTab('channel')">채널 분석</button>
-          <button class="tab-btn" id="tab-sns" onclick="switchTab('sns')">📣 SNS 변환</button>
-          <button class="tab-btn" id="tab-blog" onclick="switchTab('blog')">📝 블로그 기획</button>
-          <button class="tab-btn tab-btn-chat" id="tab-chat" onclick="switchTab('chat')">💬 AI 상담</button>
-          <button class="tab-btn" id="tab-history" onclick="switchTab('history')">히스토리</button>
-          <button class="tab-btn tab-btn-pipeline" id="tab-pipeline" onclick="switchTab('pipeline')">📋 파이프라인</button>
-        </div>
-      </div>
       <div id="api-status" class="api-status"></div>
+    </div>
+    <div class="tab-bar-wrap">
+      <div class="tab-nav">
+        <button class="tab-btn active" id="tab-midform" onclick="switchTab('midform')">미드폼</button>
+        <button class="tab-btn" id="tab-shortform" onclick="switchTab('shortform')">숏폼</button>
+        <button class="tab-btn tab-btn-trend" id="tab-topic" onclick="switchTab('topic')">주제 추천</button>
+        <button class="tab-btn" id="tab-detail" onclick="switchTab('detail')">상세페이지</button>
+        <button class="tab-btn" id="tab-edit" onclick="switchTab('edit')">편집 피드백</button>
+        <button class="tab-btn" id="tab-channel" onclick="switchTab('channel')">채널 분석</button>
+        <button class="tab-btn" id="tab-sns" onclick="switchTab('sns')">📣 SNS 변환</button>
+        <button class="tab-btn" id="tab-blog" onclick="switchTab('blog')">📝 블로그 기획</button>
+        <button class="tab-btn" id="tab-video-feedback" onclick="switchTab('video-feedback')">🎬 영상 피드백</button>
+        <button class="tab-btn tab-btn-chat" id="tab-chat" onclick="switchTab('chat')">💬 AI 상담</button>
+        <button class="tab-btn" id="tab-history" onclick="switchTab('history')">히스토리</button>
+        <button class="tab-btn tab-btn-pipeline" id="tab-pipeline" onclick="switchTab('pipeline')">📋 파이프라인</button>
+      </div>
     </div>
   </header>
 
@@ -695,23 +696,23 @@
       <section class="search-section" id="blog-input-section">
         <div class="search-card edit-card">
           <h1>네이버 블로그 SEO 최적화 초안을 만드세요</h1>
-          <p class="search-desc">키워드와 업체 정보를 입력하면 상위노출 제목·해시태그·사진 8장 분량 블로그 초안을 한 번에 완성해드립니다.</p>
+          <p class="search-desc">키워드와 업체 정보를 입력하면 상위노출 제목·해시태그·사진 분량 블로그 초안을 한 번에 완성해드립니다.</p>
           <div class="edit-inputs">
-            <input type="text" id="blog-keyword" placeholder="타겟 키워드 * (예: 업소용 냉장고 추천, 식당 가스레인지 교체)" autocomplete="off"/>
-            <textarea id="blog-product" rows="3" placeholder="내 제품/서비스/업체 소개 * (예: 부자주방 — 식당·카페·급식소에 업소용 주방기기를 납품하는 전문업체. 냉장고·가스레인지·식기세척기 취급.)"></textarea>
+            <input type="text" id="blog-keyword" placeholder="키워드/제목 * (예: 까치선반 추천, 업소용 냉장고)" autocomplete="off"/>
+            <textarea id="blog-memo" rows="3" placeholder="업체 소개 * (예: 부자주방-업소용 주방용품 전문점)"></textarea>
             <div class="detail-row">
-              <input type="text" id="blog-region" placeholder="지역 (선택, 예: 대구, 경북)" autocomplete="off"/>
-              <input type="url" id="blog-link" placeholder="참고 링크 (선택 — 제품 or 블로그 URL)" autocomplete="off"/>
+              <input type="text" id="blog-region" placeholder="지역 (예: 대구, 경북)" autocomplete="off"/>
+              <input type="url" id="blog-link" placeholder="참고 링크 (제품 or 스마트스토어 URL)" autocomplete="off"/>
             </div>
-            <!-- 사진 첨부 -->
+            <!-- 사진 업로드 -->
             <div class="blog-attach-bar">
-              <label class="blog-attach-btn">
+              <label class="blog-attach-btn" id="blog-upload-label">
                 📷 사진 첨부 (선택 — 사진에 맞는 글 작성)
                 <input type="file" id="blog-photo-input" accept="image/*" multiple onchange="handleBlogPhotos(this)" style="display:none"/>
               </label>
               <span id="blog-photo-count" style="font-size:12px;color:var(--text-sub)"></span>
             </div>
-            <div id="blog-photo-preview" class="chat-attach-preview hidden"></div>
+            <div id="blog-photo-preview" class="blog-photo-grid hidden"></div>
             <button id="blog-btn" onclick="startBlog()">블로그 초안 생성</button>
           </div>
         </div>
@@ -728,57 +729,51 @@
         <div class="report-header">
           <div>
             <h2 id="blog-report-title"></h2>
-            <p class="report-subtitle">네이버 SEO 최적화 · 상위노출 전략</p>
+            <p class="report-subtitle">부자주방 · 네이버 블로그 SEO 최적화 원고</p>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
-            <button class="pdf-btn" onclick="downloadPdf('blog-report-section','블로그기획')">⬇ PDF 저장</button>
-            <button class="reset-btn" onclick="resetBlog()">← 새 기획</button>
+            <button class="pdf-btn" onclick="downloadPdf('blog-report-section','블로그원고')">⬇ PDF 저장</button>
+            <button class="reset-btn" onclick="resetBlog()">← 새 원고</button>
           </div>
         </div>
 
+        <!-- 제목 후보 3개 -->
         <div class="card">
-          <div class="card-header"><span class="card-icon">🎯</span> 키워드 전략</div>
-          <div class="card-body" id="blog-keyword-strategy"></div>
+          <div class="card-header"><span class="card-icon">✍️</span> 추천 제목 3개 (클릭하면 복사)</div>
+          <div id="blog-titles" class="blog-title-cards"></div>
         </div>
 
-        <div class="card">
-          <div class="card-header"><span class="card-icon">✍️</span> 추천 제목 3개</div>
-          <div id="blog-titles" class="titles-grid"></div>
-        </div>
-
+        <!-- 본문 -->
         <div class="card">
           <div class="card-header">
-            <span class="card-icon">🏷️</span> 추천 해시태그
-            <button class="sns-copy-btn" onclick="copyBlogHashtags()">복사</button>
+            <span class="card-icon">📄</span> 블로그 본문
+            <button class="sns-copy-btn" id="blog-copy-body-btn" onclick="copyBlogBody()">전체 복사</button>
           </div>
-          <div class="card-body">
-            <div id="blog-hashtags" class="hashtag-row"></div>
-            <p id="blog-hashtag-reason" style="font-size:12px;color:var(--text-sub);margin-top:10px"></p>
-          </div>
+          <div class="card-body" id="blog-body-sections"></div>
         </div>
 
-        <div class="edit-two-col">
-          <div class="card">
-            <div class="card-header"><span class="card-icon">🖼️</span> 사진 8장 촬영 가이드</div>
-            <div class="card-body" id="blog-image-strategy"></div>
-          </div>
-          <div class="card">
-            <div class="card-header"><span class="card-icon">📅</span> 발행 전략</div>
-            <div class="card-body" id="blog-publish-strategy"></div>
-          </div>
+        <!-- 파일명 -->
+        <div class="card" id="blog-filenames-card">
+          <div class="card-header"><span class="card-icon">🗂️</span> 사진 파일명 (클릭하면 복사)</div>
+          <div class="card-body" id="blog-filenames"></div>
         </div>
 
+        <!-- 태그 30개 -->
         <div class="card">
-          <div class="card-header">
-            <span class="card-icon">📄</span> 블로그 초안 (사진 8장 분량 · 바로 복붙)
-            <button class="sns-copy-btn" onclick="copyBlogDraft()">전체 복사</button>
-          </div>
-          <div class="card-body">
-            <div id="blog-meta-desc" style="background:var(--bg);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--text-sub)">
-              <strong style="color:var(--text)">검색 결과 설명:</strong> <span id="blog-meta-text"></span>
-            </div>
-            <pre id="blog-draft-text" class="blog-draft-pre"></pre>
-          </div>
+          <div class="card-header"><span class="card-icon">🏷️</span> 태그 30개</div>
+          <div class="card-body" id="blog-tags"></div>
+        </div>
+
+        <!-- 발행 가이드 -->
+        <div class="card">
+          <div class="card-header"><span class="card-icon">📅</span> 발행 가이드</div>
+          <div class="card-body" id="blog-publish-guide"></div>
+        </div>
+
+        <!-- 저품질 방지 체크리스트 -->
+        <div class="card">
+          <div class="card-header"><span class="card-icon">✅</span> 발행 전 체크리스트</div>
+          <div class="card-body" id="blog-checklist"></div>
         </div>
       </section>
     </div>
@@ -883,6 +878,33 @@
         <div class="report-header"><div><h2 id="script-report-title"></h2></div><button class="reset-btn" onclick="switchTab('history')">← 히스토리</button></div>
         <div class="card"><div class="card-header"><span class="card-icon">✍️</span> 변형 대본</div><div class="intro-script-output" id="script-adapted"></div></div>
       </section>
+    </div>
+
+    <!-- ===== 🎬 영상 피드백 탭 ===== -->
+    <div id="pane-video-feedback" class="pane hidden">
+      <div class="section-card">
+        <h2 class="section-title">🎬 영상 피드백</h2>
+        <p class="section-desc">편집 완료된 영상을 업로드하면 AI가 자막을 추출하고 상세 피드백을 제공합니다.</p>
+
+        <div class="upload-area" id="vf-upload-area">
+          <input type="file" id="vf-file-input" accept="video/*" style="display:none" onchange="onVideoFileSelected(event)">
+          <button class="upload-btn" onclick="document.getElementById('vf-file-input').click()">
+            📁 영상 파일 선택 (mp4, mov 등)
+          </button>
+          <p class="upload-hint" id="vf-file-name">파일을 선택하세요</p>
+        </div>
+
+        <button class="analyze-btn" id="vf-analyze-btn" onclick="analyzeVideo()" disabled>
+          AI 피드백 받기
+        </button>
+      </div>
+
+      <div id="vf-progress" class="hidden">
+        <div class="step-indicator" id="vf-step-msg">처리 중...</div>
+        <div class="progress-bar"><div class="progress-fill" id="vf-progress-fill"></div></div>
+      </div>
+
+      <div id="vf-result" class="hidden"></div>
     </div>
 
     <!-- ===== 📋 파이프라인 탭 ===== -->

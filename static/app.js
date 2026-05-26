@@ -2045,7 +2045,7 @@ function resetBlog() {
   document.getElementById('blog-report-section').classList.add('hidden');
   document.getElementById('blog-progress-steps').innerHTML = '';
   document.getElementById('blog-btn').disabled = false;
-  document.getElementById('blog-btn').textContent = '블로그 원고 생성';
+  document.getElementById('blog-btn').textContent = '블로그 초안 생성';
   blogPhotos = [];
   document.getElementById('blog-photo-preview').innerHTML = '';
   document.getElementById('blog-photo-preview').classList.add('hidden');
@@ -2055,6 +2055,8 @@ function resetBlog() {
 async function startBlog() {
   const keyword = document.getElementById('blog-keyword').value.trim();
   const memo    = document.getElementById('blog-memo').value.trim();
+  const region  = (document.getElementById('blog-region')?.value || '').trim();
+  const link    = (document.getElementById('blog-link')?.value || '').trim();
 
   if (!keyword) { alert('키워드/제목을 입력해주세요.'); return; }
 
@@ -2075,7 +2077,7 @@ async function startBlog() {
 
   await streamSSE(
     '/api/blog',
-    { keyword, memo, photos: photosPayload },
+    { keyword, memo, region, link, photos: photosPayload },
     addStep,
     (data) => {
       document.getElementById('blog-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
@@ -2089,7 +2091,7 @@ async function startBlog() {
         document.getElementById('blog-report-section').classList.remove('hidden');
         window.scrollTo({ top: 0, behavior: 'smooth' });
         btn.disabled = false;
-        btn.textContent = '블로그 원고 생성';
+        btn.textContent = '블로그 초안 생성';
       }, 600);
     },
     (msg) => {
@@ -2097,7 +2099,7 @@ async function startBlog() {
       makeProgressStepper('blog-progress-steps')(msg, 'error');
       document.getElementById('blog-input-section').classList.remove('hidden');
       btn.disabled = false;
-      btn.textContent = '블로그 원고 생성';
+      btn.textContent = '블로그 초안 생성';
     }
   );
 }

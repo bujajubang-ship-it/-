@@ -2,10 +2,12 @@ import asyncio
 import json
 import os
 import re
+import uuid
+import subprocess
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -101,10 +103,10 @@ class DetailPageRequest(BaseModel):
 
 class BlogRequest(BaseModel):
     keyword: str
-    product_desc: str = ""
+    memo: str = ""
     region: str = ""
-    attachments: list = []   # [{name, media_type, data(base64)}]
-    link: str = ""           # 제품/블로그 URL
+    link: str = ""
+    photos: list = []  # [{"media_type": "image/jpeg", "data": "base64..."}]
 
 
 def sse(data: dict) -> str:
@@ -713,64 +715,102 @@ async def sns_convert(req: SnsConvertRequest):
 
 @app.post("/api/blog")
 async def blog(req: BlogRequest):
-    naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
-    naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
-
     async def stream():
         if not os.getenv("ANTHROPIC_API_KEY", "").strip():
             yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
             return
         if not req.keyword.strip():
-            yield sse({"step": "error", "message": "타겟 키워드를 입력해주세요."})
-            return
-        if not req.product_desc.strip():
-            yield sse({"step": "error", "message": "내 제품/서비스 설명을 입력해주세요."})
+            yield sse({"step": "error", "message": "키워드/제목을 입력해주세요."})
             return
 
-        naver_results = []
-        link_content = ""
         try:
-            # 링크 크롤링
-            if req.link.strip():
-                yield sse({"step": "link", "message": f"링크 내용 읽는 중..."})
-                try:
-                    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                        r = await client.get(req.link.strip(), headers={"User-Agent": "Mozilla/5.0"})
-                        raw = r.text
-                    # 태그 제거 후 텍스트만
-                    text = re.sub(r'<style[^>]*>.*?</style>', '', raw, flags=re.DOTALL)
-                    text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL)
-                    text = re.sub(r'<[^>]+>', ' ', text)
-                    text = re.sub(r'\s+', ' ', text).strip()
-                    link_content = text[:3000]
-                    yield sse({"step": "link_done", "message": "링크 내용 수집 완료!"})
-                except Exception as le:
-                    yield sse({"step": "link_warn", "message": f"링크 읽기 실패 (계속 진행): {le}"})
-
-            if naver_id and naver_secret:
-                yield sse({"step": "naver", "message": "네이버 경쟁 글 현황 수집 중..."})
-                naver = NaverService(naver_id, naver_secret)
-                naver_results = await naver.search_cafe(req.keyword)
-                await naver.close()
-                yield sse({"step": "naver_done", "message": f"네이버 {len(naver_results)}개 글 수집 완료!"})
-
-            photo_count = len([a for a in req.attachments if a.get("media_type", "").startswith("image/")])
-            msg = f"사진 {photo_count}장 분석 + " if photo_count else ""
-            yield sse({"step": "analyzing", "message": f"AI가 {msg}SEO 최적화 블로그 초안 작성 중... (30~60초 소요)"})
+            photo_count = len(req.photos)
+            if photo_count:
+                yield sse({"step": "analyzing_photos", "message": f"사진 {photo_count}장 분석 중..."})
+            yield sse({"step": "writing", "message": "블로그 원고 작성 중... (1~2분 소요)"})
             analyzer = Analyzer()
             _task = asyncio.create_task(
-                analyzer.analyze_blog(req.keyword, req.product_desc, req.region,
-                                      naver_results, req.attachments, link_content)
+                analyzer.analyze_blog(req.keyword, req.memo, req.photos, req.region, req.link)
             )
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)
             report = _task.result()
             save_history("blog", req.keyword, report)
-            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+            yield sse({"step": "done", "result": report, "keyword": req.keyword})
 
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/video-feedback")
+async def video_feedback(file: UploadFile = File(...)):
+    # StreamingResponse 시작 전에 파일 먼저 읽기
+    content = await file.read()
+
+    async def stream():
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
+            return
+
+        uid = uuid.uuid4().hex
+        video_path = f"/tmp/vf_{uid}.mp4"
+        audio_path = f"/tmp/vf_{uid}.mp3"
+
+        try:
+            # 1. 파일 저장
+            yield sse({"step": "uploading", "message": "영상 파일 저장 중..."})
+            with open(video_path, "wb") as f_out:
+                f_out.write(content)
+
+            # 2. 오디오 추출
+            yield sse({"step": "extracting", "message": "오디오 추출 중..."})
+            result = subprocess.run(
+                ["ffmpeg", "-i", video_path, "-vn", "-acodec", "mp3", "-q:a", "2", audio_path, "-y"],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"ffmpeg 오류: {result.stderr[-500:]}")
+
+            # 3. Whisper로 자막 추출
+            yield sse({"step": "transcribing", "message": "자막 추출 중... (영상 길이에 따라 2~5분 소요)"})
+
+            def run_whisper():
+                import whisper
+                model = whisper.load_model("base")
+                result_w = model.transcribe(audio_path, language="ko")
+                return result_w["text"]
+
+            loop = asyncio.get_event_loop()
+            transcript = await loop.run_in_executor(None, run_whisper)
+
+            # 4. Claude AI 분석
+            yield sse({"step": "analyzing", "message": "AI 피드백 분석 중..."})
+            analyzer = Analyzer()
+            _task = asyncio.create_task(analyzer.analyze_video_feedback(transcript))
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            feedback = _task.result()
+
+            save_history("video_feedback", file.filename or "영상 피드백", {"transcript": transcript, "feedback": feedback})
+            yield sse({"step": "done", "transcript": transcript, "feedback": feedback})
+
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
+        finally:
+            for path in [video_path, audio_path]:
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except Exception:
+                    pass
 
     return StreamingResponse(
         stream(),
