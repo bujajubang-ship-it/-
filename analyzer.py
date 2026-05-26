@@ -1234,107 +1234,173 @@ threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개
         )
         return _safe_json(msg.content[0].text.strip(), msg)
 
-    async def analyze_blog(self, keyword: str, product_desc: str, region: str,
-                           naver_results: list, attachments: list = None, link_content: str = "") -> Dict:
-        photo_count = len([a for a in (attachments or []) if a.get("media_type","").startswith("image/")])
-        para_count = max(photo_count, 5) if photo_count else 5   # 사진 수 = 문단 수, 최소 5
-
-        NAVER_SEO_GUIDE = f"""
-[네이버 블로그 상위노출 핵심 규칙 — 사진 중심 단문 스타일]
-1. 제목: 메인 키워드를 앞쪽(15자 이내)에 배치, 전체 25~35자, 숫자+명사형 조합이 CTR에 유리
-2. 글자수: 문단당 약 200자, 전체 {para_count}개 문단 → 총 {para_count*200}자 내외
-3. 키워드 반복: 메인 키워드를 전체 글에서 8~10회 자연스럽게 반복 (억지 나열 금지)
-4. 키워드 위치: 첫 문단·중간·마지막 문단에 각 1회씩 필수 포함
-5. 서브 키워드: 메인 키워드의 변형·연관어 2~3회 삽입
-6. 본문 구조: {'사진 순서에 맞춰' if photo_count else '자연스러운 흐름으로'} 문단 {para_count}개 구성 (각 문단 약 200자)
-7. 해시태그: 경쟁 낮음=3개, 중간=2개, 높음=1개 (점수 분산 방지, 핵심 키워드에 집중)
-8. 롱테일 전략: "지역+제품" 조합 키워드가 단기 성과에 유리 (예: "대구 업소용 냉장고 추천")
-9. 발행 후: 48시간 내 공감·댓글·스크랩 유도, 오전 10~12시 or 저녁 8~10시 발행 최적
-"""
-
-        naver_context = ""
-        if naver_results:
-            naver_context = "\n\n== 네이버 카페/커뮤니티 반응 (경쟁 현황 참고) ==\n"
-            for n in naver_results[:8]:
-                naver_context += f"- {n.get('title','')}: {n.get('description','')[:120]}\n"
-
-        link_context = ""
-        if link_content:
-            link_context = f"\n\n== 참고 링크 내용 (제품/블로그 페이지) ==\n{link_content[:2000]}\n"
-
-        photo_context = ""
-        if photo_count:
-            photo_context = f"\n\n== 첨부 사진 정보 ==\n사진 {photo_count}장이 첨부되어 있습니다. 각 사진을 분석해서 해당 사진에 맞는 문단을 작성하세요.\n"
+    async def analyze_blog(self, keyword: str, memo: str, photos: list = None) -> Dict:
+        photos = photos or []
+        photo_count = len(photos)
 
         system_prompt = (
-            "당신은 네이버 블로그 SEO 전문가입니다. "
-            "주어진 SEO 가이드를 철저히 적용해 상위노출에 최적화된 블로그 초안과 전략을 작성합니다. "
-            "사진이 첨부된 경우 각 사진의 내용을 파악해 그 사진에 맞는 문단을 작성하세요. "
-            "링크 내용이 있으면 제품 특징, 가격, 스펙 등을 초안에 자연스럽게 반영하세요. "
-            "초안은 실제 발행 가능한 수준으로 자연스러운 한국어로 작성하되, "
-            "키워드를 억지스럽지 않게 배치하세요. "
+            "당신은 네이버 블로그 SEO 전문가이자 부자주방 브랜드 콘텐츠 전문가입니다. "
+            "사진이 첨부된 경우 각 사진에 실제로 있는 것만 묘사하세요. "
+            "'이 사진은', '위 사진처럼' 등 메타 표현은 절대 사용하지 마세요. "
             "반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만."
         )
 
-        user_text = f"""타겟 키워드: "{keyword}"
-내 제품/서비스/업체: {product_desc}
-지역 (롱테일 키워드용): {region or "미입력"}
-{naver_context}{link_context}{photo_context}
+        # 사진 배분 계산
+        def plan_sections(n):
+            if n == 0:
+                # 사진 없을 때 텍스트 전용 섹션
+                return [
+                    {"type": "intro", "heading": "도입부", "photos": []},
+                    {"type": "subtitle", "heading": "소제목1", "photos": []},
+                    {"type": "subtitle", "heading": "소제목2", "photos": []},
+                    {"type": "subtitle", "heading": "소제목3", "photos": []},
+                    {"type": "subtitle", "heading": "소제목4", "photos": []},
+                    {"type": "closing", "heading": "마무리", "photos": []},
+                ]
+            idx = 0
+            sections = []
+            remaining = n
 
-{NAVER_SEO_GUIDE}
+            # 도입부: 1~2장
+            intro_n = min(2, remaining)
+            intro_photos = list(range(idx, idx + intro_n))
+            sections.append({"type": "intro", "heading": "도입부", "photos": intro_photos})
+            idx += intro_n; remaining -= intro_n
 
-위 SEO 가이드를 적용해 아래 JSON 형식으로 블로그 기획안과 초안을 작성하세요.
+            # 소제목들: 최소 2개
+            sub_allocs = []
+            if remaining >= 7:
+                sub_allocs = [min(3, remaining // 3), min(3, remaining // 3), 2, 2]
+            elif remaining >= 5:
+                sub_allocs = [min(3, remaining - 3), 2, 2]
+            elif remaining >= 3:
+                sub_allocs = [min(3, remaining - 1), 1]
+            elif remaining >= 2:
+                sub_allocs = [1, 1]
+            elif remaining == 1:
+                sub_allocs = [1]
+            else:
+                sub_allocs = []
 
+            for si, alloc in enumerate(sub_allocs, 1):
+                ph = list(range(idx, idx + alloc))
+                sections.append({"type": "subtitle", "heading": f"소제목{si}", "photos": ph})
+                idx += alloc; remaining -= alloc
+
+            # 마무리: 남은 장 (최대 1장)
+            closing_n = min(1, remaining)
+            closing_photos = list(range(idx, idx + closing_n))
+            sections.append({"type": "closing", "heading": "마무리", "photos": closing_photos})
+
+            return sections
+
+        sections_plan = plan_sections(photo_count)
+
+        # 섹션 배분 설명 텍스트
+        section_plan_text = ""
+        for s in sections_plan:
+            ph_str = f"사진 {[p+1 for p in s['photos']]}" if s['photos'] else "사진 없음"
+            section_plan_text += f"- {s['heading']}: {ph_str}\n"
+
+        memo_text = f"\n메모: {memo}" if memo.strip() else ""
+
+        user_text = f"""브랜드: 부자주방 (업소용 주방기기 판매)
+타겟: 식당 자영업자
+말투: 친근한 존댓말
+키워드: {keyword}{memo_text}
+
+다음 사진들을 분석하여 네이버 블로그용 SEO 최적화 글을 작성해주세요.
+
+[사진 배분]
+{section_plan_text}
+
+[글 구조 요구사항]
+- 도입부 body: 250자 이상
+- 소제목 각 body: 350자 이상
+- 마무리 body: 250자 이상 (반드시 연락처+자사몰 CTA 포함)
+- 전체 공백제외 2800자 이상
+
+[키워드 전략]
+- 메인 키워드 ({keyword}) 전체 반드시 8~10회 포함 (부족하면 재작성)
+- 연관 키워드 2~4회
+- LSI 키워드 (제품 스펙, 업종명) 자연스럽게
+- 메인 키워드 첫 문장 필수 포함
+- 소제목 제목에 메인 키워드 포함
+- 키워드 억지 나열 절대 금지
+
+[연락처·자사몰 CTA 전략 — 필수]
+아래 두 가지를 합산 5회 이상 자연스럽게 본문에 녹여 넣으세요.
+- 전화 문의: 1600-6787 (예: "궁금한 점은 1600-6787로 문의주세요", "부자주방 1600-6787")
+- 자사몰: www.bujaikm.com (예: "www.bujaikm.com 에서 시공사례를 확인해보세요", "www.bujaikm.com 간편문의")
+각 섹션에 분산 배치하고, 마무리에 반드시 둘 다 포함.
+
+[소제목2 필수]
+비교표나 리스트 반드시 포함 (마크다운 표 형식)
+
+[사진 작성 원칙 — 중요]
+- 각 섹션은 전체 글의 주제와 맥락에 맞는 본문(body)을 먼저 충분히 작성
+- 사진은 본문의 주인공이 아니라 보조 자료 — photo_captions에 한 줄씩만 부가 설명
+- "이 사진은", "위 사진처럼", "아래 사진에서" 등 메타 표현 절대 금지
+- 사진에 실제로 있는 것만 묘사, 자연스러운 서술형
+
+다음 JSON으로 출력해주세요:
 {{
-  "keyword_strategy": {{
-    "main_keyword": "메인 키워드 (검색량 집중 타겟)",
-    "sub_keywords": ["서브 키워드 4~6개 (연관어·변형어)"],
-    "longtail_keywords": ["롱테일 키워드 3~5개 (지역+제품 조합 포함)"],
-    "competition_level": "낮음/중간/높음",
-    "competition_reason": "경쟁도 판단 근거 한 줄"
-  }},
-  "title_candidates": [
+  "titles": ["제목후보1 (키워드 앞15자이내, 25-35자, 숫자포함)", "제목후보2", "제목후보3"],
+  "sections": [
     {{
-      "title": "제목 (25~35자, 메인 키워드 앞에 배치)",
-      "keyword_position": "키워드가 몇 번째 글자부터 시작하는지",
-      "strategy": "클릭 유도 전략 (숫자/비교/긴급성/이득 등)"
+      "type": "intro",
+      "heading": "도입부",
+      "body": "전체 주제에 맞는 도입 본문 (키워드+CTA 포함)...",
+      "photo_captions": [
+        {{"photo_index": 0, "caption": "한 줄 사진 부가설명"}},
+        {{"photo_index": 1, "caption": "한 줄 사진 부가설명"}}
+      ]
+    }},
+    {{
+      "type": "subtitle",
+      "heading": "소제목1 (키워드 포함)",
+      "body": "전체 주제에 맞는 본문 (키워드+CTA 포함)...",
+      "photo_captions": [
+        {{"photo_index": 2, "caption": "한 줄 사진 부가설명"}},
+        {{"photo_index": 3, "caption": "한 줄 사진 부가설명"}}
+      ]
+    }},
+    {{
+      "type": "closing",
+      "heading": "마무리",
+      "body": "... 1600-6787로 문의주세요. www.bujaikm.com 에서 시공사례와 간편문의를 남겨주세요.",
+      "photo_captions": [
+        {{"photo_index": 12, "caption": "한 줄 사진 부가설명"}}
+      ]
     }}
   ],
-  "hashtags": {{
-    "tags": ["해시태그 목록 (# 없이) — 경쟁 낮음=3개, 중간=2개, 높음=1개"],
-    "count_reason": "이 개수로 선택한 이유 (경쟁도 기반)"
-  }},
-  "image_strategy": {{
-    "count": "8장",
-    "suggestions": ["사진 1~8장 각각 어떤 장면을 찍으면 좋은지 구체적으로 8개 제안"]
-  }},
-  "publish_strategy": {{
-    "best_time": "최적 발행 시간대",
-    "seeding": "48시간 내 초기 반응 유도 방법",
-    "update_cycle": "글 업데이트 주기 추천"
-  }},
-  "draft": {{
-    "meta_description": "검색 결과에 뜨는 요약 설명 (100자 이내, 키워드 포함)",
-    "full_text": "완성 블로그 초안 — 단락 8개, 각 단락 80~100자, 전체 700~800자, 메인 키워드 8~10회 자연스럽게 반복"
+  "filenames": ["업소용냉장고-추천-01.jpg", "업소용냉장고-추천-02.jpg"],
+  "tags": ["태그1", "태그2"],
+  "checklist": {{
+    "quality": ["복붙 금지", "외부 링크 3개 초과 금지", "키워드 나열 금지", "하루 1개 이상 포스팅 금지", "다른 블로그 사진 무단 사용 금지"],
+    "publish_guide": {{
+      "best_time": "오전 7~9시 또는 오후 12~1시",
+      "frequency": "주 2~3회 꾸준히",
+      "interval": "같은 주제는 2주 간격",
+      "optimization": "발행 후 2~3일 내 반응 보고 제목·첫 문단 수정 가능"
+    }}
   }}
 }}
 
-title_candidates 3개 작성하세요.
-hashtags.tags는 경쟁도 낮음=3개, 중간=2개, 높음=1개만 작성하세요.
-draft.full_text 작성 규칙:
-- 문단 {para_count}개, 각 문단 약 200자, 전체 {para_count*200}자 내외
-- 사진이 첨부된 경우: 각 문단은 첨부된 사진 순서에 맞게, 그 사진에서 보이는 내용 설명 포함
-- 사진이 없는 경우: 각 문단 끝에 (📷 어울리는 사진 종류 한 줄) 힌트 추가
-- 메인 키워드 8~10회 자연스럽게 반복, 억지 나열 금지
-- 링크 내용이 있으면 제품 스펙·가격·특징을 문단에 자연스럽게 포함"""
+sections 배열은 위 사진 배분 계획대로 작성하세요.
+photo_captions는 해당 섹션에 배분된 사진 수만큼 작성하세요. (사진 없는 섹션은 빈 배열)
+filenames는 사진 총 {photo_count}개에 맞춰 작성하세요. (사진 없으면 빈 배열)
+tags는 정확히 30개 작성하세요."""
 
-        # 이미지가 있으면 멀티모달 content 구성
-        images = [a for a in (attachments or []) if a.get("media_type","").startswith("image/")]
-        if images:
+        # 멀티모달 content 구성
+        if photos:
             content: list = []
-            for a in images:
+            for i, p in enumerate(photos):
+                content.append({"type": "text", "text": f"[사진 {i+1}]"})
                 content.append({"type": "image", "source": {
-                    "type": "base64", "media_type": a["media_type"], "data": a["data"]
+                    "type": "base64",
+                    "media_type": p.get("media_type", "image/jpeg"),
+                    "data": p["data"]
                 }})
             content.append({"type": "text", "text": user_text})
             messages = [{"role": "user", "content": content}]
@@ -1346,5 +1412,56 @@ draft.full_text 작성 규칙:
             max_tokens=16000,
             system=system_prompt,
             messages=messages,
+        )
+        return _safe_json(msg.content[0].text.strip(), msg)
+
+    async def analyze_video_feedback(self, transcript: str) -> dict:
+        system_prompt = (
+            "당신은 유튜브 영상 퍼포먼스 전문 분석가입니다. "
+            "부자주방 채널(업소용 주방용품 전문 유튜버)의 영상을 분석합니다. "
+            "채널 목표: CTR 10% 이상, 초반 30초 이탈률 40% 미만. "
+            "반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만."
+        )
+
+        user_text = f"""아래는 유튜브 영상의 자막입니다. 부자주방 채널 (주방용품 전문 유튜버)의 영상입니다.
+목표: CTR 10% 이상, 초반 30초 이탈률 40% 미만
+
+[자막]
+{transcript}
+
+다음 항목을 JSON으로 분석해주세요:
+{{
+  "overall_score": 85,
+  "hook_analysis": {{
+    "score": 90,
+    "first_30s": "초반 30초 내용 요약",
+    "hook_strength": "강함/보통/약함",
+    "improvement": "개선 제안"
+  }},
+  "content_flow": {{
+    "score": 80,
+    "summary": "전체 내용 흐름 요약 (3줄)",
+    "key_message": "핵심 메시지",
+    "pacing": "빠름/적절/느림"
+  }},
+  "ctr_prediction": {{
+    "score": 75,
+    "analysis": "CTR 예측 근거",
+    "title_suggestion": ["추천 제목 1", "추천 제목 2", "추천 제목 3"]
+  }},
+  "retention_risk": {{
+    "score": 70,
+    "weak_points": ["이탈 위험 구간 1", "이탈 위험 구간 2"],
+    "suggestion": "시청 유지율 개선 방안"
+  }},
+  "strengths": ["잘된 점 1", "잘된 점 2"],
+  "improvements": ["개선할 점 1", "개선할 점 2", "개선할 점 3"]
+}}"""
+
+        msg = await self.client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_text}],
         )
         return _safe_json(msg.content[0].text.strip(), msg)
