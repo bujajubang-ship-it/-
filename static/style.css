@@ -1268,3 +1268,112 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   margin: 0;
   font-family: inherit;
 }
+
+/* ViewTrap 인사이트 */
+.vt-applied {
+  font-size: 14px;
+  line-height: 1.7;
+  color: #374151;
+  background: #f5f3ff;
+  border-left: 4px solid #7c3aed;
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+.vt-refs-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #7c3aed;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+.vt-refs-list {
+  margin: 0 0 16px;
+  padding-left: 20px;
+  font-size: 13px;
+  color: #4b5563;
+  line-height: 1.8;
+}
+
+/* ViewTrap 탭 */
+.vt-tab {
+  padding: 5px 14px;
+  border-radius: 20px;
+  border: 1.5px solid #7c3aed;
+  background: #fff;
+  color: #7c3aed;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.vt-tab.active {
+  background: #7c3aed;
+  color: #fff;
+}
+
+/* ViewTrap 영상 그리드 */
+.vt-video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+.vt-video-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  text-decoration: none;
+  background: #fff;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.vt-video-card:hover {
+  box-shadow: 0 4px 16px rgba(124,58,237,0.15);
+  transform: translateY(-2px);
+}
+.vt-thumb {
+  width: 100%;
+  aspect-ratio: 16/9;
+  object-fit: cover;
+  background: #f3f4f6;
+}
+.vt-info {
+  padding: 8px 10px;
+}
+.vt-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #111827;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.vt-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.vt-channel {
+  font-size: 11px;
+  color: #6b7280;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vt-perf {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.perf-good { background: #d1fae5; color: #065f46; }
+.perf-avg  { background: #fef3c7; color: #92400e; }
+.perf-bad  { background: #fee2e2; color: #991b1b; }

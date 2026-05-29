@@ -463,6 +463,71 @@ function renderMidformReport(r, keyword) {
   const instaEl = document.getElementById('midform-insta-cap');
   if (instaEl) instaEl.textContent = r.instagram_caption || '';
 
+  // ViewTrap 인사이트
+  const vtCard = document.getElementById('midform-viewtrap-card');
+  const vtInsightsEl = document.getElementById('midform-viewtrap-insights');
+  const vtTabsEl = document.getElementById('midform-viewtrap-tabs');
+  const vtVideosEl = document.getElementById('midform-viewtrap-videos');
+  const vti = r.viewtrap_insights;
+  const vtTop = r.viewtrap_top || [];
+  const vtHot = r.viewtrap_hot || [];
+  const hasVt = (vti && (vti.applied_patterns || (vti.referenced_videos && vti.referenced_videos.length))) || vtTop.length || vtHot.length;
+  if (vtCard && hasVt) {
+    vtCard.style.display = '';
+    // 인사이트 텍스트
+    let insHtml = '';
+    if (vti && vti.applied_patterns) insHtml += `<div class="vt-applied">${vti.applied_patterns}</div>`;
+    if (vti && vti.referenced_videos && vti.referenced_videos.length) {
+      insHtml += `<div class="vt-refs-label">AI가 참고한 영상 패턴</div><ul class="vt-refs-list">`;
+      vti.referenced_videos.forEach(t => { insHtml += `<li>${t}</li>`; });
+      insHtml += '</ul>';
+    }
+    if (vtInsightsEl) vtInsightsEl.innerHTML = insHtml;
+
+    // 탭 + 영상 그리드
+    function renderVtVideos(list) {
+      if (!vtVideosEl) return;
+      vtVideosEl.innerHTML = '';
+      list.forEach(v => {
+        const card = document.createElement('a');
+        card.href = v.url || '#';
+        card.target = '_blank';
+        card.rel = 'noopener';
+        card.className = 'vt-video-card';
+        const perf = v.performance_rate_str || '';
+        const perfClass = perf === '매우 좋음' || perf === '좋음' ? 'perf-good' : perf === '보통' ? 'perf-avg' : 'perf-bad';
+        card.innerHTML = `
+          <img src="${v.thumbnail || ''}" alt="" loading="lazy" class="vt-thumb" />
+          <div class="vt-info">
+            <div class="vt-title">${v.title || ''}</div>
+            <div class="vt-meta"><span class="vt-channel">${v.channel || ''}</span><span class="vt-perf ${perfClass}">${perf}</span></div>
+          </div>`;
+        vtVideosEl.appendChild(card);
+      });
+    }
+
+    if (vtTabsEl) {
+      vtTabsEl.innerHTML = '';
+      if (vtTop.length) {
+        const btn1 = document.createElement('button');
+        btn1.className = 'vt-tab active';
+        btn1.textContent = `성과 영상 ${vtTop.length}개`;
+        btn1.onclick = () => { vtTabsEl.querySelectorAll('.vt-tab').forEach(b=>b.classList.remove('active')); btn1.classList.add('active'); renderVtVideos(vtTop); };
+        vtTabsEl.appendChild(btn1);
+      }
+      if (vtHot.length) {
+        const btn2 = document.createElement('button');
+        btn2.className = 'vt-tab';
+        btn2.textContent = `신규 핫비디오 ${vtHot.length}개`;
+        btn2.onclick = () => { vtTabsEl.querySelectorAll('.vt-tab').forEach(b=>b.classList.remove('active')); btn2.classList.add('active'); renderVtVideos(vtHot); };
+        vtTabsEl.appendChild(btn2);
+      }
+    }
+    renderVtVideos(vtTop.length ? vtTop : vtHot);
+  } else if (vtCard) {
+    vtCard.style.display = 'none';
+  }
+
   // 예상 길이
   const dur = document.getElementById('midform-duration');
   if (r.estimated_duration) {

@@ -19,6 +19,7 @@ from analyzer import Analyzer
 from naver_service import NaverService
 from youtube_service import YouTubeService
 from analytics_service import AnalyticsService
+from viewtrap_service import ViewTrapService
 from database import (init_db, save_history, list_history, get_history, delete_history,
                        init_pipeline, list_pipeline, create_pipeline_item,
                        update_pipeline_item, delete_pipeline_item)
@@ -175,8 +176,22 @@ async def health():
         "anthropic": bool(os.getenv("ANTHROPIC_API_KEY")),
         "naver": bool(os.getenv("NAVER_CLIENT_ID")),
         "analytics": bool(os.getenv("OAUTH_REFRESH_TOKEN")),
+        "viewtrap": bool(os.getenv("VIEWTRAP_TOKEN")),
         "my_channel_id": os.getenv("MY_CHANNEL_ID", ""),
     }
+
+
+@app.get("/api/viewtrap-ref")
+async def viewtrap_ref():
+    token = os.getenv("VIEWTRAP_TOKEN", "").strip()
+    if not token:
+        return {"top_videos": [], "hot_videos": [], "error": "VIEWTRAP_TOKEN 없음"}
+    svc = ViewTrapService(token)
+    top, hot = await asyncio.gather(
+        svc.get_top_videos(),
+        svc.get_hot_videos(),
+    )
+    return {"top_videos": top[:20], "hot_videos": hot[:20]}
 
 
 @app.post("/api/analyze")
@@ -504,13 +519,30 @@ async def midform(req: MidformRequest):
             if product_page_info:
                 combined_desc = f"[스마트스토어 상품 정보]\n{product_page_info}\n\n[추가 메모]\n{combined_desc}" if combined_desc else f"[스마트스토어 상품 정보]\n{product_page_info}"
 
+            viewtrap_refs = None
+            vt_token = os.getenv("VIEWTRAP_TOKEN", "").strip()
+            if vt_token:
+                yield sse({"step": "viewtrap", "message": "ViewTrap 성과 레퍼런스 수집 중..."})
+                vt_svc = ViewTrapService(vt_token)
+                vt_top, vt_hot = await asyncio.gather(
+                    vt_svc.get_top_videos(),
+                    vt_svc.get_hot_videos(),
+                )
+                viewtrap_refs = {"top_videos": vt_top, "hot_videos": vt_hot}
+                total_refs = len(vt_top) + len(vt_hot)
+                if total_refs:
+                    yield sse({"step": "viewtrap_done", "message": f"ViewTrap 레퍼런스 {total_refs}개 수집 완료!"})
+
             yield sse({"step": "analyzing", "message": "AI가 전체 영상 기획 작성 중... (1~2분 소요)"})
             analyzer = Analyzer()
-            _task = asyncio.create_task(analyzer.analyze_midform(req.keyword, combined_desc, videos_with_comments, naver_results))
+            _task = asyncio.create_task(analyzer.analyze_midform(req.keyword, combined_desc, videos_with_comments, naver_results, viewtrap_refs))
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)
             report = _task.result()
+            if viewtrap_refs:
+                report["viewtrap_top"] = viewtrap_refs.get("top_videos", [])[:10]
+                report["viewtrap_hot"] = viewtrap_refs.get("hot_videos", [])[:10]
             save_history("midform", req.keyword, report)
             yield sse({"step": "done", "report": report, "keyword": req.keyword})
 

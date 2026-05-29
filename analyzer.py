@@ -446,7 +446,31 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
 
         return _safe_json(msg.content[0].text.strip(), msg)
 
-    async def analyze_midform(self, keyword: str, product_desc: str, videos: List[Dict], naver: List[Dict]) -> Dict:
+    def _build_viewtrap_text(self, refs: Optional[Dict]) -> str:
+        if not refs:
+            return ""
+        top = refs.get("top_videos") or []
+        hot = refs.get("hot_videos") or []
+        lines = []
+        if top:
+            lines.append("【ViewTrap 성과 영상 — 이미 검증된 고성과 패턴】")
+            for i, v in enumerate(top[:10], 1):
+                lines.append(
+                    f"[성과{i}] {v.get('title','')}\n"
+                    f"  채널:{v.get('channel','')} / 조회수:{v.get('views',0):,} / 성과:{v.get('performance_rate_str','')}\n"
+                    f"  URL:{v.get('url','')}"
+                )
+        if hot:
+            lines.append("\n【ViewTrap 핫비디오 — 최근 신규 고성과 영상】")
+            for i, v in enumerate(hot[:10], 1):
+                lines.append(
+                    f"[핫{i}] {v.get('title','')}\n"
+                    f"  채널:{v.get('channel','')} / 조회수:{v.get('views',0):,} / 성과:{v.get('performance_rate_str','')}\n"
+                    f"  URL:{v.get('url','')}"
+                )
+        return "\n".join(lines)
+
+    async def analyze_midform(self, keyword: str, product_desc: str, videos: List[Dict], naver: List[Dict], viewtrap_refs: Optional[Dict] = None) -> Dict:
         videos_text = self._build_videos_text(videos)
         naver_text = self._build_naver_text(naver)
 
@@ -477,6 +501,7 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
             "반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만."
         )
 
+        viewtrap_text = self._build_viewtrap_text(viewtrap_refs)
         product_info = f"\n이번 영상 제품 상세 정보:\n{product_desc}" if product_desc.strip() else ""
         user_text = f"""영상 키워드: "{keyword}"{product_info}
 
@@ -485,7 +510,17 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
 
 == 네이버 카페 반응 ==
 {naver_text}
+{f'''
+== ViewTrap 성과/핫비디오 레퍼런스 ==
+{viewtrap_text}
 
+[ViewTrap 활용 지침]
+- 성과 영상과 핫비디오의 제목 패턴·썸네일 구성·영상 구조를 분석하세요
+- 이미 검증된 성공 패턴을 이 영상의 주제({keyword})에 맞게 카피·변형하여 적용하세요
+- 제목에서: 성과 영상 제목의 언어 패턴(단어 선택, 문장 구조)을 부자주방 주제로 변환
+- 썸네일에서: 핫비디오 썸네일 패턴을 분석해 동일한 심리 자극 방식 적용
+- viewtrap_insights 필드에 어떤 영상을 참고했고 어떻게 변형 적용했는지 명시하세요
+''' if viewtrap_text else ''}
 위 시장 데이터를 바탕으로 영상 제작의 모든 단계를 포함한 완성된 기획안을 작성하세요.
 
 [벤치마크 분석 — 먼저 할 것]
@@ -584,6 +619,10 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
   "estimated_duration": "예상 영상 길이 (예: 5-7분)",
   "must_include": ["반드시 넣어야 할 내용 6-8개"],
   "differentiation": ["차별화 포인트 4-5개 (근거 포함)"],
+  "viewtrap_insights": {{
+    "referenced_videos": ["참고한 ViewTrap 영상 제목 (없으면 빈 배열)"],
+    "applied_patterns": "어떤 패턴을 어떻게 이 영상에 적용했는지 설명 (ViewTrap 데이터가 없으면 빈 문자열)"
+  }},
   "youtube_description": "유튜브 영상 설명글. 반드시 첫 줄을 #키워드 (핵심 명사만, 예: #자동숯불구이기) 로 시작. 그 다음 줄부터 키워드를 8회 이상 자연스럽게 반복한 본문 5-7문장. 이후 고정 링크 블록을 그대로 포함:\\n\\n🔗 {keyword} 자세히 보기\\n👉 부자주방 자사몰 : https://bujaikm.com/\\n\\n🛒 네이버에서 바로 보기\\n👉 부자주방 스마트스토어 : https://smartstore.naver.com/bujakitchen\\n\\n📞 문의가 필요하시면\\n부자주방 1600-6787 으로 편하게 연락 주세요.",
   "instagram_caption": "인스타그램 캡션. 반드시 첫 줄을 #키워드 (핵심 명사만) 로 시작. 그 다음 줄부터 키워드를 8회 이상 자연스럽게 반복한 본문 5-7문장 (유튜브 설명글과 다른 문장으로). 이후 고정 링크 블록:\\n\\n🔗 {keyword} 자세히 보기\\n👉 부자주방 자사몰 : https://bujaikm.com/\\n\\n🛒 네이버에서 바로 보기\\n👉 부자주방 스마트스토어 : https://smartstore.naver.com/bujakitchen\\n\\n📞 문의가 필요하시면\\n부자주방 1600-6787 으로 편하게 연락 주세요."
 }}
