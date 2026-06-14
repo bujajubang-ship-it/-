@@ -2597,16 +2597,16 @@ function plRow(v) {
     const done = i < curIdx;
     const active = i === curIdx;
     const dotStyle = active
-      ? `background:${s.color};border-color:${s.color};color:#fff`
+      ? `background:${s.color};border-color:${s.color};color:#fff;box-shadow:0 0 0 4px ${s.color}40,0 4px 14px ${s.color}70`
       : done
         ? `background:${s.color}22;border-color:${s.color};color:${s.color}`
         : 'background:#f3f4f6;border-color:#d1d5db;color:#9ca3af';
-    const labelStyle = active ? `color:${s.color};font-weight:800` : done ? `color:${s.color}` : 'color:#9ca3af';
+    const labelStyle = active ? `color:${s.color};font-weight:800;font-size:11px` : done ? `color:${s.color}` : 'color:#9ca3af';
     const lineStyle = done || active ? `background:${PIPELINE_STAGES[i].color}` : 'background:#e5e7eb';
     const dot = done ? '✓' : s.emoji;
     return `
       <div class="pl-step-wrap">
-        <button class="pl-step-dot" style="${dotStyle}" onclick="event.stopPropagation();setStage(${v.id},${i})" title="${s.label}로 이동">${dot}</button>
+        <button class="pl-step-dot${active ? ' pl-step-dot-active' : ''}" style="${dotStyle}" onclick="event.stopPropagation();setStage(${v.id},${i})" title="${s.label}로 이동">${dot}</button>
         <div class="pl-step-label" style="${labelStyle}">${s.label}</div>
       </div>
       ${i < PIPELINE_STAGES.length - 1 ? `<div class="pl-step-line" style="${lineStyle}"></div>` : ''}
