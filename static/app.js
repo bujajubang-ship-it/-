@@ -1038,6 +1038,72 @@ function renderEditReport(r, keyword) {
     th.appendChild(div);
   });
 
+  // ViewTrap 레퍼런스 섹션
+  const vtCard = document.getElementById('edit-viewtrap-card');
+  const vti = r.viewtrap_insights;
+  const vtTop = r.viewtrap_top || [];
+  const vtHot = r.viewtrap_hot || [];
+  const hasVt = (vti && (vti.applied_patterns || (vti.referenced_videos && vti.referenced_videos.length))) || vtTop.length || vtHot.length;
+  if (vtCard) {
+    if (hasVt) {
+      vtCard.style.display = '';
+      const vtInsightsEl = document.getElementById('edit-viewtrap-insights');
+      const vtTabsEl = document.getElementById('edit-viewtrap-tabs');
+      const vtVideosEl = document.getElementById('edit-viewtrap-videos');
+
+      let insHtml = '';
+      if (vti && vti.applied_patterns) insHtml += `<div class="vt-applied">${vti.applied_patterns}</div>`;
+      if (vti && vti.referenced_videos && vti.referenced_videos.length) {
+        insHtml += `<div class="vt-refs-label">AI가 참고한 레퍼런스 영상</div><ul class="vt-refs-list">`;
+        vti.referenced_videos.forEach(t => { insHtml += `<li>${t}</li>`; });
+        insHtml += '</ul>';
+      }
+      if (vtInsightsEl) vtInsightsEl.innerHTML = insHtml;
+
+      function renderVtVideosEdit(list) {
+        if (!vtVideosEl) return;
+        vtVideosEl.innerHTML = '';
+        list.forEach(v => {
+          const card = document.createElement('a');
+          card.href = v.url || '#';
+          card.target = '_blank';
+          card.rel = 'noopener';
+          card.className = 'vt-video-card';
+          const perf = v.performance_rate_str || '';
+          const perfClass = perf === '매우 좋음' || perf === '좋음' ? 'perf-good' : perf === '보통' ? 'perf-avg' : 'perf-bad';
+          card.innerHTML = `
+            <img src="${v.thumbnail || ''}" alt="" loading="lazy" class="vt-thumb" />
+            <div class="vt-info">
+              <div class="vt-title">${v.title || ''}</div>
+              <div class="vt-meta"><span class="vt-channel">${v.channel || ''}</span><span class="vt-perf ${perfClass}">${perf}</span></div>
+            </div>`;
+          vtVideosEl.appendChild(card);
+        });
+      }
+
+      if (vtTabsEl) {
+        vtTabsEl.innerHTML = '';
+        if (vtTop.length) {
+          const btn1 = document.createElement('button');
+          btn1.className = 'vt-tab active';
+          btn1.textContent = `성과 영상 ${vtTop.length}개`;
+          btn1.onclick = () => { vtTabsEl.querySelectorAll('.vt-tab').forEach(b => b.classList.remove('active')); btn1.classList.add('active'); renderVtVideosEdit(vtTop); };
+          vtTabsEl.appendChild(btn1);
+        }
+        if (vtHot.length) {
+          const btn2 = document.createElement('button');
+          btn2.className = 'vt-tab' + (vtTop.length ? '' : ' active');
+          btn2.textContent = `핫비디오 ${vtHot.length}개`;
+          btn2.onclick = () => { vtTabsEl.querySelectorAll('.vt-tab').forEach(b => b.classList.remove('active')); btn2.classList.add('active'); renderVtVideosEdit(vtHot); };
+          vtTabsEl.appendChild(btn2);
+        }
+      }
+      renderVtVideosEdit(vtTop.length ? vtTop : vtHot);
+    } else {
+      vtCard.style.display = 'none';
+    }
+  }
+
   // 편집 채팅 컨텍스트 초기화
   initEditChat(r, keyword);
 }
@@ -1476,6 +1542,49 @@ async function loadHistoryItem(id) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }, 100);
     },
+    sns: () => {
+      switchTab('sns'); resetToSns();
+      setTimeout(() => {
+        renderSnsReport(data.report, data.keyword);
+        document.getElementById('sns-report-section').classList.remove('hidden');
+        document.getElementById('sns-input-section').classList.add('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
+    blog: () => {
+      switchTab('blog'); resetBlog();
+      setTimeout(() => {
+        renderBlogResult(data.report, data.keyword);
+        document.getElementById('blog-report-section').classList.remove('hidden');
+        document.getElementById('blog-input-section').classList.add('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
+    channel: () => {
+      switchTab('channel'); resetToChannel();
+      setTimeout(() => {
+        renderChannelReport(data.report);
+        document.getElementById('channel-report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
+    decision: () => {
+      switchTab('decision'); resetToDecision();
+      setTimeout(() => {
+        renderDecisionReport(data.report);
+        document.getElementById('decision-report-section').classList.remove('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
+    detail_page: () => {
+      switchTab('detail');
+      setTimeout(() => {
+        renderDetailPageReport(data.report, data.keyword);
+        document.getElementById('detail-report-section').classList.remove('hidden');
+        document.getElementById('detail-input-section').classList.add('hidden');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, 100);
+    },
   };
 
   (actions[data.type] || actions.midform)();
@@ -1531,6 +1640,22 @@ function renderReport(r, keyword) {
     card.innerHTML = `<a href="${v.url}" target="_blank" rel="noopener"><img src="${v.thumbnail}" alt="${v.title}" loading="lazy" /><div class="video-thumb-info"><div class="video-thumb-title">${v.title}</div><div class="video-thumb-views">조회수 ${fmt(v.views)}회 · ${v.channel}</div></div></a>`;
     vl.appendChild(card);
   });
+
+  // Most Replayed 히트맵 인사이트
+  const hi = r.heatmap_insights;
+  const heatmapCard = document.getElementById('heatmap-card');
+  if (heatmapCard) {
+    if (hi && hi.available) {
+      heatmapCard.style.display = '';
+      document.getElementById('heatmap-pattern').textContent = hi.pattern_summary || '';
+      const hmList = document.getElementById('heatmap-moments');
+      hmList.innerHTML = (hi.hot_moments || []).map(m => `<li>${m}</li>`).join('');
+      const etList = document.getElementById('heatmap-tips');
+      etList.innerHTML = (hi.editor_tips || []).map(t => `<li>${t}</li>`).join('');
+    } else {
+      heatmapCard.style.display = 'none';
+    }
+  }
 }
 
 function renderPlanningReport(r, keyword) {
@@ -2602,6 +2727,7 @@ function onVideoFileSelected(event) {
 
 const VF_STEP_PROGRESS = {
   uploading: 10,
+  validating: 15,
   extracting: 30,
   transcribing: 60,
   analyzing: 85,
@@ -2610,6 +2736,7 @@ const VF_STEP_PROGRESS = {
 
 const VF_STEP_LABEL = {
   uploading: '영상 파일 저장 중...',
+  validating: '파일 유효성 검사 중...',
   extracting: '오디오 추출 중...',
   transcribing: '자막 추출 중... (영상 길이에 따라 2~5분 소요)',
   analyzing: 'AI 피드백 분석 중...',
@@ -2639,21 +2766,60 @@ async function analyzeVideo() {
     fillEl.style.width = pct + '%';
   }
 
-  try {
-    const formData = new FormData();
-    formData.append('file', vfSelectedFile);
+  // XHR로 업로드 진행률 표시 + SSE 스트림 수신
+  const formData = new FormData();
+  formData.append('file', vfSelectedFile);
 
-    const res = await fetch('/api/video-feedback', { method: 'POST', body: formData });
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
+  const fileSizeMB = (vfSelectedFile.size / 1024 / 1024).toFixed(0);
+
+  await new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/video-feedback');
+
+    let resolved = false;
+    function done() { if (!resolved) { resolved = true; clearTimeout(stallTimer); resolve(); } }
+
+    // 무응답 감지: 마지막 SSE 수신 후 5분간 새 데이터 없으면 에러
+    // (서버가 ffmpeg/Whisper ping을 5초마다 보내므로 실제로는 훨씬 빨리 감지됨)
+    const STALL_MS = 5 * 60 * 1000;
+    function onStall() {
+      if (resolved) return;
+      xhr.abort();
+      setProgress('error', '응답이 없습니다. 파일이 손상되었거나 서버가 중단되었을 수 있습니다. 다시 시도해주세요.');
+      fillEl.style.background = '#ef4444';
+      analyzeBtn.disabled = false;
+      analyzeBtn.textContent = 'AI 피드백 받기';
+      done();
+    }
+    let stallTimer = setTimeout(onStall, STALL_MS);
+
+    function resetStallTimer() { clearTimeout(stallTimer); stallTimer = setTimeout(onStall, STALL_MS); }
+
+    // 업로드 진행률
+    stepMsgEl.textContent = '서버로 전송 중...';
+    fillEl.style.width = '2%';
+    xhr.upload.onprogress = (e) => {
+      resetStallTimer();
+      if (!e.lengthComputable) return;
+      const pct = Math.round((e.loaded / e.total) * 8); // 0~8% (업로드 단계)
+      const uploadedMB = (e.loaded / 1024 / 1024).toFixed(0);
+      stepMsgEl.textContent = `서버로 전송 중... ${uploadedMB} / ${fileSizeMB} MB`;
+      fillEl.style.width = pct + '%';
+    };
+    xhr.upload.onload = () => {
+      resetStallTimer();
+      stepMsgEl.textContent = '전송 완료, 서버 처리 준비 중...';
+      fillEl.style.width = '8%';
+    };
+
+    // 응답 스트림 처리
     let buf = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop();
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState < 3) return;
+      const newText = xhr.responseText.slice(buf.length);
+      if (newText) resetStallTimer();
+      buf = xhr.responseText;
+      const lines = newText.split('\n');
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         let data;
@@ -2664,24 +2830,29 @@ async function analyzeVideo() {
           fillEl.style.background = '#ef4444';
           analyzeBtn.disabled = false;
           analyzeBtn.textContent = 'AI 피드백 받기';
-          return;
+          done(); return;
         }
         if (data.step === 'done') {
           setProgress('done');
           renderVideoFeedback(data);
           analyzeBtn.disabled = false;
           analyzeBtn.textContent = 'AI 피드백 받기';
-          return;
+          done(); return;
         }
         setProgress(data.step, data.message);
       }
-    }
-  } catch (e) {
-    setProgress('error', '오류: ' + e.message);
-    fillEl.style.background = '#ef4444';
-    analyzeBtn.disabled = false;
-    analyzeBtn.textContent = 'AI 피드백 받기';
-  }
+    };
+
+    xhr.onerror = () => {
+      setProgress('error', '네트워크 오류가 발생했습니다.');
+      fillEl.style.background = '#ef4444';
+      analyzeBtn.disabled = false;
+      analyzeBtn.textContent = 'AI 피드백 받기';
+      done();
+    };
+
+    xhr.send(formData);
+  });
 }
 
 function scoreColor(score) {
