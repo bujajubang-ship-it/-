@@ -97,7 +97,7 @@ def init_pipeline():
 def list_pipeline():
     conn = get_db()
     rows = conn.execute(
-        "SELECT * FROM pipeline ORDER BY stage, sort_order, created_at DESC"
+        "SELECT * FROM pipeline ORDER BY sort_order, id"
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
