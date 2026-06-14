@@ -851,82 +851,82 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .tab-btn-pipeline.active { background: #15803d !important; color: #fff !important; }
 
 .pl-page {
-  width: 100%; padding: 48px 60px 100px;
-  display: flex; flex-direction: column; gap: 36px;
+  width: 100%; padding: 20px 32px 60px;
+  display: flex; flex-direction: column; gap: 14px;
 }
 .pl-topbar {
-  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap;
 }
-.pl-page-title { font-size: 42px; font-weight: 800; }
-.pl-page-sub { font-size: 18px; color: #6b7280; margin-top: 8px; }
+.pl-page-title { font-size: 22px; font-weight: 800; }
+.pl-page-sub { font-size: 13px; color: #6b7280; margin-top: 3px; }
 
 .pl-add-btn {
-  padding: 16px 32px; background: #111827; color: #fff;
-  border: none; border-radius: 14px; font-size: 18px; font-weight: 700;
+  padding: 8px 18px; background: #111827; color: #fff;
+  border: none; border-radius: 10px; font-size: 13px; font-weight: 700;
   cursor: pointer; white-space: nowrap; transition: opacity .15s;
 }
 .pl-add-btn:hover { opacity: .85; }
 
 /* ── 요약 칩 ── */
-.pl-stage-summary { display: flex; gap: 8px; flex-wrap: wrap; }
+.pl-stage-summary { display: flex; gap: 6px; flex-wrap: wrap; }
 .pl-sum-chip {
-  display: flex; align-items: center; gap: 7px;
-  padding: 7px 14px; border-radius: 20px; border: 1.5px solid;
-  font-size: 13px; font-weight: 700;
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 16px; border: 1.5px solid;
+  font-size: 11px; font-weight: 700;
 }
 .pl-sum-label { white-space: nowrap; }
 .pl-sum-count {
-  min-width: 22px; height: 22px; border-radius: 11px;
+  min-width: 18px; height: 18px; border-radius: 9px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 800; padding: 0 6px;
+  font-size: 10px; font-weight: 800; padding: 0 4px;
 }
 
 /* ── 영상 로우 리스트 ── */
-.pl-kanban { display: flex; flex-direction: column; gap: 10px; }
+.pl-kanban { display: flex; flex-direction: column; gap: 6px; }
 
 .pl-empty {
-  text-align: center; padding: 60px 0;
-  color: #9ca3af; font-size: 16px; line-height: 2;
+  text-align: center; padding: 40px 0;
+  color: #9ca3af; font-size: 14px; line-height: 2;
 }
 
 .pl-row {
-  background: #fff; border: 1.5px solid #e5e7eb; border-radius: 14px;
-  padding: 16px 24px; cursor: pointer; position: relative;
+  background: #fff; border: 1.5px solid #e5e7eb; border-radius: 10px;
+  padding: 10px 16px; cursor: pointer; position: relative;
   transition: box-shadow .2s;
-  display: flex; flex-direction: column; gap: 12px;
+  display: flex; flex-direction: column; gap: 8px;
   overflow: hidden;
 }
-.pl-row:hover { box-shadow: 0 4px 16px rgba(0,0,0,.10); }
+.pl-row:hover { box-shadow: 0 2px 10px rgba(0,0,0,.08); }
 
 .pl-row-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
 }
-.pl-row-left { display: flex; align-items: center; gap: 10px; flex: 1; flex-wrap: wrap; min-width: 0; }
-.pl-row-title { font-size: 16px; font-weight: 700; word-break: keep-all; line-height: 1.4; }
-.pl-row-meta { font-size: 13px; color: #6b7280; white-space: nowrap; }
+.pl-row-left { display: flex; align-items: center; gap: 7px; flex: 1; flex-wrap: wrap; min-width: 0; }
+.pl-row-title { font-size: 13px; font-weight: 700; word-break: keep-all; line-height: 1.4; }
+.pl-row-meta { font-size: 11px; color: #6b7280; white-space: nowrap; }
 .pl-row-notes {
-  font-size: 12px; color: #9ca3af; line-height: 1.6;
-  border-left: 3px solid #f3f4f6; padding-left: 10px;
+  font-size: 11px; color: #9ca3af; line-height: 1.5;
+  border-left: 2px solid #f3f4f6; padding-left: 8px;
 }
-.pl-row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.pl-row-actions { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
 
 .pl-cur-stage {
-  font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 20px;
+  font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 16px;
   white-space: nowrap;
 }
 .pl-type-badge {
-  font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 8px; white-space: nowrap;
+  font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 6px; white-space: nowrap;
 }
 .pl-arrow {
-  width: 30px; height: 30px; border: 1.5px solid #e5e7eb; border-radius: 8px;
-  background: #f9fafb; color: #374151; font-size: 14px; cursor: pointer;
+  width: 24px; height: 24px; border: 1.5px solid #e5e7eb; border-radius: 6px;
+  background: #f9fafb; color: #374151; font-size: 11px; cursor: pointer;
   display: flex; align-items: center; justify-content: center; transition: background .1s;
 }
 .pl-arrow:hover:not(:disabled) { background: #111827; color: #fff; border-color: #111827; }
 .pl-arrow:disabled { opacity: .3; cursor: default; }
 .pl-del {
-  width: 30px; height: 30px; border: none; background: none;
-  font-size: 16px; cursor: pointer; opacity: .35; transition: opacity .15s;
+  width: 24px; height: 24px; border: none; background: none;
+  font-size: 13px; cursor: pointer; opacity: .35; transition: opacity .15s;
   display: flex; align-items: center; justify-content: center;
 }
 .pl-del:hover { opacity: 1; }
@@ -934,29 +934,30 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 /* ── 단계 스테퍼 ── */
 .pl-stepper {
   display: flex; align-items: center;
-  padding-bottom: 2px;
+  padding-bottom: 1px;
 }
 
 .pl-step-wrap {
-  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
   flex-shrink: 0;
 }
 .pl-step-dot {
-  width: 40px; height: 40px; border-radius: 50%; border: 2px solid;
-  font-size: 17px; cursor: pointer;
+  width: 26px; height: 26px; border-radius: 50%; border: 2px solid;
+  font-size: 11px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  transition: transform .12s, box-shadow .12s;
+  transition: box-shadow .12s, opacity .12s;
   background: none;
 }
-.pl-step-dot:hover { transform: scale(1.15); box-shadow: 0 4px 12px rgba(0,0,0,.18); }
+.pl-step-dot:hover { box-shadow: 0 2px 8px rgba(0,0,0,.20); opacity: .8; }
 .pl-step-label {
-  font-size: 10px; font-weight: 600; white-space: nowrap;
+  font-size: 9px; font-weight: 600; white-space: nowrap;
   text-align: center;
 }
 .pl-step-line {
-  flex: 1; height: 3px; min-width: 8px;
+  flex: 1; height: 2px; min-width: 6px;
   transition: background .3s;
-  margin-bottom: 22px;
+  margin-bottom: 16px;
+  pointer-events: none;
 }
 
 /* ── 모달 ── */
