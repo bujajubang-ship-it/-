@@ -2551,7 +2551,7 @@ const PIPELINE_STAGES = [
 const TYPE_COLORS = {
   '미드폼': { bg: '#dbeafe', color: '#1e40af' },
   '숏폼':   { bg: '#fed7aa', color: '#c2410c' },
-  '쇼츠':   { bg: '#fce7f3', color: '#be185d' },
+  '쇼츠':   { bg: '#fed7aa', color: '#c2410c' }, // 숏폼과 동일 처리 (레거시)
   '기타':   { bg: '#f3f4f6', color: '#374151' },
 };
 

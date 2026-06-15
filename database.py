@@ -90,6 +90,7 @@ def init_pipeline():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    conn.execute("UPDATE pipeline SET content_type='숏폼' WHERE content_type='쇼츠'")
     conn.commit()
     conn.close()
 
