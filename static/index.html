@@ -458,6 +458,13 @@
           <div id="edit-thumbnails" class="thumb-reco-grid"></div>
         </div>
 
+        <div class="card" id="edit-viewtrap-card" style="display:none">
+          <div class="card-header"><span class="card-icon">📊</span> ViewTrap 레퍼런스 분석</div>
+          <div id="edit-viewtrap-insights" style="margin-bottom:12px"></div>
+          <div id="edit-viewtrap-tabs" class="vt-tabs"></div>
+          <div id="edit-viewtrap-videos" class="vt-videos-grid"></div>
+        </div>
+
         <!-- 편집 피드백 기반 AI 채팅 -->
         <div class="card edit-chat-card">
           <div class="card-header">
@@ -862,6 +869,14 @@
         <div class="card"><div class="card-header"><span class="card-icon">📝</span> 반드시 넣어야 할 내용</div><ul id="must-include" class="checklist"></ul></div>
         <div class="card"><div class="card-header"><span class="card-icon">⚡</span> 차별화 포인트</div><div id="diff-points" class="diff-grid"></div></div>
         <div class="card"><div class="card-header"><span class="card-icon">📹</span> 상위 경쟁 영상</div><div id="top-videos-list" class="videos-scroll"></div></div>
+        <div class="card" id="heatmap-card" style="display:none">
+          <div class="card-header"><span class="card-icon">🔥</span> Most Replayed 시청 패턴 분석</div>
+          <div style="margin-bottom:12px;padding:12px;background:var(--bg);border-radius:8px;font-size:14px;line-height:1.6" id="heatmap-pattern"></div>
+          <div style="margin-bottom:8px;font-weight:600;font-size:13px;color:var(--muted)">구간별 핫스팟 해석</div>
+          <ul id="heatmap-moments" class="checklist" style="margin-bottom:16px"></ul>
+          <div style="margin-bottom:8px;font-weight:600;font-size:13px;color:var(--muted)">편집 전략 제안</div>
+          <ul id="heatmap-tips" class="checklist"></ul>
+        </div>
       </section>
     </div>
     <div id="pane-planning" class="hidden">
@@ -924,6 +939,7 @@
           <button class="pl-add-btn" onclick="openVideoModal()">+ 영상 추가</button>
         </div>
         <div class="pl-stage-summary" id="pl-stage-summary"></div>
+        <div class="pl-controls" id="pl-controls"></div>
         <div class="pl-kanban" id="pl-kanban"></div>
       </div>
 

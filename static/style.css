@@ -881,6 +881,47 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   font-size: 10px; font-weight: 800; padding: 0 4px;
 }
 
+/* ── 그룹/필터 컨트롤 ── */
+.pl-controls { display: flex; flex-direction: column; gap: 6px; }
+.pl-ctrl-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pl-filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pl-ctrl-label {
+  font-size: 11px; font-weight: 700; color: #6b7280; white-space: nowrap;
+}
+.pl-group-btn {
+  padding: 4px 12px; border-radius: 20px; border: 1.5px solid #e5e7eb;
+  background: #f9fafb; color: #374151; font-size: 11px; font-weight: 700;
+  cursor: pointer; transition: all .12s;
+}
+.pl-group-btn:hover { border-color: #9ca3af; background: #f3f4f6; }
+.pl-group-btn.active { background: #111827; color: #fff; border-color: #111827; }
+.pl-filter-chip {
+  padding: 3px 10px; border-radius: 16px; border: 1.5px solid;
+  font-size: 11px; font-weight: 700; cursor: pointer; transition: all .12s;
+}
+.pl-filter-chip:hover { opacity: .8; }
+.pl-ctrl-reset {
+  padding: 3px 10px; border-radius: 16px; border: 1.5px solid #fca5a5;
+  background: #fef2f2; color: #ef4444; font-size: 11px; font-weight: 700;
+  cursor: pointer; margin-left: auto;
+}
+.pl-ctrl-reset:hover { background: #fee2e2; }
+
+/* ── 그룹 헤더 ── */
+.pl-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+.pl-group-header {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 800;
+  padding: 6px 10px; border-left: 3px solid; background: #f9fafb;
+  border-radius: 0 6px 6px 0;
+}
+.pl-group-count {
+  min-width: 18px; height: 18px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 800; padding: 0 4px; color: #fff;
+}
+.pl-group-body { display: flex; flex-direction: column; gap: 4px; padding-left: 6px; }
+
 /* ── 영상 로우 리스트 ── */
 .pl-kanban { display: flex; flex-direction: column; gap: 6px; }
 

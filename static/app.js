@@ -2556,12 +2556,79 @@ const TYPE_COLORS = {
 };
 
 let plVideos = [];
+let plGroupBy = null;   // null | 'stage' | 'type' | 'editor'
+let plFilterVal = null; // 특정 값으로 필터
 
 async function loadPipeline() {
   const res = await fetch('/api/pipeline');
   plVideos = await res.json();
   renderPipelineSummary();
+  renderGroupControls();
   renderKanban();
+}
+
+function plGroupField() {
+  return plGroupBy === 'stage' ? 'stage' : plGroupBy === 'type' ? 'content_type' : 'editor';
+}
+
+function setGroupBy(key) {
+  plGroupBy = plGroupBy === key ? null : key;
+  plFilterVal = null;
+  renderGroupControls();
+  renderKanban();
+}
+
+function setPlFilter(val) {
+  plFilterVal = plFilterVal === val ? null : val;
+  renderGroupControls();
+  renderKanban();
+}
+
+function resetPlControls() {
+  plGroupBy = null; plFilterVal = null;
+  renderGroupControls(); renderKanban();
+}
+
+function renderGroupControls() {
+  const el = document.getElementById('pl-controls');
+  if (!el) return;
+
+  const groupBtns = [
+    { key: 'stage',  label: '단계별' },
+    { key: 'type',   label: '유형별' },
+    { key: 'editor', label: '편집자별' },
+  ].map(g => `
+    <button class="pl-group-btn${plGroupBy === g.key ? ' active' : ''}" onclick="setGroupBy('${g.key}')">${g.label}</button>
+  `).join('');
+
+  let filterRow = '';
+  if (plGroupBy) {
+    const field = plGroupField();
+    const stageOrder = PIPELINE_STAGES.map(s => s.key);
+    let vals = [...new Set(plVideos.map(v => v[field] || '미지정'))];
+    if (plGroupBy === 'stage') vals.sort((a, b) => stageOrder.indexOf(a) - stageOrder.indexOf(b));
+    const chips = vals.map(val => {
+      const stage = plGroupBy === 'stage' ? PIPELINE_STAGES.find(s => s.key === val) : null;
+      const label = stage ? `${stage.emoji} ${stage.label}` : val || '미지정';
+      const color = stage ? stage.color : '#374151';
+      const bg    = stage ? stage.bg    : '#f3f4f6';
+      const active = plFilterVal === val;
+      return `<button class="pl-filter-chip${active ? ' active' : ''}"
+        style="${active ? `background:${color};color:#fff;border-color:${color}` : `background:${bg};color:${color};border-color:${color}40`}"
+        onclick="setPlFilter('${val}')">${label}</button>`;
+    }).join('');
+    filterRow = `<div class="pl-filter-row"><span class="pl-ctrl-label">필터</span>${chips}</div>`;
+  }
+
+  const hasControl = plGroupBy || plFilterVal;
+  el.innerHTML = `
+    <div class="pl-ctrl-row">
+      <span class="pl-ctrl-label">묶기</span>
+      ${groupBtns}
+      ${hasControl ? `<button class="pl-ctrl-reset" onclick="resetPlControls()">× 초기화</button>` : ''}
+    </div>
+    ${filterRow}
+  `;
 }
 
 function renderPipelineSummary() {
@@ -2583,7 +2650,51 @@ function renderKanban() {
     el.innerHTML = '<div class="pl-empty">아직 추가된 영상이 없습니다.<br>우상단 <strong>+ 영상 추가</strong>를 눌러 시작하세요.</div>';
     return;
   }
-  el.innerHTML = plVideos.map(v => plRow(v)).join('');
+
+  // 필터 적용
+  const field = plGroupField();
+  const videos = plFilterVal
+    ? plVideos.filter(v => (v[field] || '미지정') === plFilterVal)
+    : plVideos;
+
+  if (!videos.length) {
+    el.innerHTML = '<div class="pl-empty">조건에 맞는 영상이 없습니다.</div>';
+    return;
+  }
+
+  // 그룹 없음
+  if (!plGroupBy) {
+    el.innerHTML = videos.map(v => plRow(v)).join('');
+    return;
+  }
+
+  // 그룹별 묶기
+  const stageOrder = PIPELINE_STAGES.map(s => s.key);
+  const groups = {};
+  videos.forEach(v => {
+    const key = (v[field] || '미지정');
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(v);
+  });
+
+  let sortedKeys = Object.keys(groups);
+  if (plGroupBy === 'stage') {
+    sortedKeys.sort((a, b) => stageOrder.indexOf(a) - stageOrder.indexOf(b));
+  }
+
+  el.innerHTML = sortedKeys.map(key => {
+    const stage = plGroupBy === 'stage' ? PIPELINE_STAGES.find(s => s.key === key) : null;
+    const label = stage ? `${stage.emoji} ${stage.label}` : key;
+    const color = stage ? stage.color : '#374151';
+    const count = groups[key].length;
+    return `
+      <div class="pl-group">
+        <div class="pl-group-header" style="color:${color};border-left-color:${color}">
+          ${label} <span class="pl-group-count" style="background:${color}">${count}</span>
+        </div>
+        <div class="pl-group-body">${groups[key].map(v => plRow(v)).join('')}</div>
+      </div>`;
+  }).join('');
 }
 
 function plRow(v) {
