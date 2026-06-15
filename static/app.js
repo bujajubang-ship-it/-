@@ -2559,7 +2559,7 @@ let plVideos = [];
 let plGroupBy = null;   // null | 'stage' | 'type' | 'editor'
 let plFilterVal = null; // 특정 값으로 필터
 let plCollapsed = new Set(JSON.parse(localStorage.getItem('pl_collapsed') || '[]'));
-let plShowCalendar = JSON.parse(localStorage.getItem('pl_show_calendar') || 'false');
+let plShowCalendar = JSON.parse(localStorage.getItem('pl_show_calendar') || 'true');
 let plCalYear  = new Date().getFullYear();
 let plCalMonth = new Date().getMonth();
 
