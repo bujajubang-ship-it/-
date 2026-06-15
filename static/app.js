@@ -2574,8 +2574,13 @@ function applyCalendarLayout() {
   const panel = document.getElementById('pl-calendar-panel');
   const btn   = document.getElementById('pl-cal-toggle-btn');
   if (!panel) return;
-  if (plShowCalendar) { panel.classList.remove('hidden'); btn && btn.classList.add('active'); }
-  else                { panel.classList.add('hidden');    btn && btn.classList.remove('active'); }
+  if (plShowCalendar) {
+    panel.style.display = 'flex';
+    btn && btn.classList.add('active');
+  } else {
+    panel.style.display = 'none';
+    btn && btn.classList.remove('active');
+  }
 }
 
 function changeCalendarMonth(dir) {

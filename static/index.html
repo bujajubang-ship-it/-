@@ -941,31 +941,32 @@
             <button class="pl-add-btn" onclick="openVideoModal()">+ 영상 추가</button>
           </div>
         </div>
-        <div class="pl-body-wrap">
-          <div class="pl-list-wrap">
-            <div class="pl-stage-summary" id="pl-stage-summary"></div>
-            <div class="pl-controls" id="pl-controls"></div>
-            <div class="pl-kanban" id="pl-kanban"></div>
-          </div>
-          <div class="pl-calendar-panel" id="pl-calendar-panel">
+        <div class="pl-stage-summary" id="pl-stage-summary"></div>
+
+        <!-- 업로드 일정 달력 -->
+        <div class="pl-calendar-panel" id="pl-calendar-panel">
+          <div class="pl-cal-top">
             <div class="pl-cal-nav-bar">
               <button class="pl-cal-nav" onclick="changeCalendarMonth(-1)">‹</button>
               <span class="pl-cal-month-title" id="pl-cal-month-title"></span>
               <button class="pl-cal-nav" onclick="changeCalendarMonth(1)">›</button>
             </div>
-            <div class="pl-cal-dow-row">
-              <div class="pl-cal-dow sun">일</div><div class="pl-cal-dow">월</div>
-              <div class="pl-cal-dow">화</div><div class="pl-cal-dow">수</div>
-              <div class="pl-cal-dow">목</div><div class="pl-cal-dow">금</div>
-              <div class="pl-cal-dow sat">토</div>
-            </div>
-            <div id="pl-cal-grid"></div>
             <div class="pl-cal-legend">
-              <span class="pl-cal-legend-item" style="background:#dbeafe;color:#1e40af;border-color:#1e40af">미드폼</span>
-              <span class="pl-cal-legend-item" style="background:#fed7aa;color:#c2410c;border-color:#c2410c">숏폼</span>
+              <span class="pl-cal-legend-item" style="background:#dbeafe;color:#1e40af;border:1px solid #1e40af40">미드폼</span>
+              <span class="pl-cal-legend-item" style="background:#fed7aa;color:#c2410c;border:1px solid #c2410c40">숏폼</span>
             </div>
           </div>
+          <div class="pl-cal-dow-row">
+            <div class="pl-cal-dow sun">일</div><div class="pl-cal-dow">월</div>
+            <div class="pl-cal-dow">화</div><div class="pl-cal-dow">수</div>
+            <div class="pl-cal-dow">목</div><div class="pl-cal-dow">금</div>
+            <div class="pl-cal-dow sat">토</div>
+          </div>
+          <div id="pl-cal-grid"></div>
         </div>
+
+        <div class="pl-controls" id="pl-controls"></div>
+        <div class="pl-kanban" id="pl-kanban"></div>
       </div>
 
       <!-- 영상 추가/수정 모달 -->

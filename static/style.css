@@ -860,11 +860,7 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .pl-page-title { font-size: 22px; font-weight: 800; }
 .pl-page-sub { font-size: 13px; color: #6b7280; margin-top: 3px; }
 
-/* ── 바디 레이아웃 (리스트 + 달력) ── */
-.pl-body-wrap { display: flex; gap: 16px; align-items: flex-start; }
-.pl-list-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
-
-/* ── 달력 패널 ── */
+/* ── 달력 토글 버튼 ── */
 .pl-cal-toggle-btn {
   padding: 8px 14px; border-radius: 10px; border: 1.5px solid #e5e7eb;
   background: #f9fafb; color: #374151; font-size: 12px; font-weight: 700;
@@ -873,57 +869,56 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .pl-cal-toggle-btn:hover { border-color: #9ca3af; background: #f3f4f6; }
 .pl-cal-toggle-btn.active { background: #111827; color: #fff; border-color: #111827; }
 
+/* ── 달력 패널 (전체 너비) ── */
 .pl-calendar-panel {
-  width: 260px; flex-shrink: 0; background: #fff;
-  border: 1.5px solid #e5e7eb; border-radius: 12px;
-  padding: 14px; position: sticky; top: 16px;
-  display: flex; flex-direction: column; gap: 8px;
+  background: #fff; border: 1.5px solid #e5e7eb; border-radius: 12px;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 8px;
 }
-.pl-cal-nav-bar {
-  display: flex; align-items: center; justify-content: space-between;
+.pl-cal-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }
-.pl-cal-month-title { font-size: 13px; font-weight: 800; color: #111827; }
+.pl-cal-nav-bar { display: flex; align-items: center; gap: 10px; }
+.pl-cal-month-title { font-size: 14px; font-weight: 800; color: #111827; min-width: 80px; text-align: center; }
 .pl-cal-nav {
   width: 26px; height: 26px; border: none; background: none;
   font-size: 18px; color: #6b7280; cursor: pointer; border-radius: 6px;
   display: flex; align-items: center; justify-content: center; line-height: 1;
 }
 .pl-cal-nav:hover { background: #f3f4f6; color: #111827; }
-.pl-cal-dow-row { display: grid; grid-template-columns: repeat(7, 1fr); }
+.pl-cal-dow-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
 .pl-cal-dow {
-  font-size: 10px; font-weight: 700; color: #9ca3af;
+  font-size: 11px; font-weight: 700; color: #9ca3af;
   text-align: center; padding: 4px 0;
 }
 .pl-cal-dow.sun { color: #ef4444; }
 .pl-cal-dow.sat { color: #3b82f6; }
-.pl-cal-row { display: grid; grid-template-columns: repeat(7, 1fr); }
+.pl-cal-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-bottom: 2px; }
 .pl-cal-cell {
-  min-height: 46px; padding: 3px 2px;
-  border-top: 1px solid #f3f4f6; display: flex; flex-direction: column; gap: 2px;
+  min-height: 56px; padding: 4px 6px;
+  background: #fafafa; border-radius: 6px;
+  display: flex; flex-direction: column; gap: 2px;
 }
-.pl-cal-cell.empty { background: #fafafa; }
+.pl-cal-cell:not(.empty) { background: #fff; border: 1px solid #f3f4f6; }
+.pl-cal-cell.today { background: #f0fdf4 !important; border-color: #86efac !important; }
 .pl-cal-cell.today .pl-cal-day-num {
-  background: #111827; color: #fff; border-radius: 50%;
-  width: 18px; height: 18px; display: flex; align-items: center; justify-content: center;
+  background: #16a34a; color: #fff; border-radius: 50%;
+  width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
 }
 .pl-cal-cell.sun .pl-cal-day-num { color: #ef4444; }
 .pl-cal-cell.sat .pl-cal-day-num { color: #3b82f6; }
 .pl-cal-day-num {
-  font-size: 10px; font-weight: 700; color: #374151;
-  width: 18px; height: 18px; display: flex; align-items: center; justify-content: center;
-  margin-bottom: 1px;
+  font-size: 11px; font-weight: 700; color: #374151;
+  width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
 }
 .pl-cal-event {
-  font-size: 8.5px; font-weight: 700; padding: 1px 4px;
-  border-radius: 3px; white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; cursor: default; line-height: 1.5;
+  font-size: 10px; font-weight: 700; padding: 2px 5px;
+  border-radius: 4px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; cursor: default; line-height: 1.4;
 }
-.pl-cal-legend {
-  display: flex; gap: 6px; padding-top: 6px; border-top: 1px solid #f3f4f6; flex-wrap: wrap;
-}
+.pl-cal-legend { display: flex; gap: 6px; flex-wrap: wrap; }
 .pl-cal-legend-item {
   font-size: 10px; font-weight: 700; padding: 2px 8px;
-  border-radius: 10px; border: 1px solid;
+  border-radius: 10px;
 }
 
 .pl-add-btn {
