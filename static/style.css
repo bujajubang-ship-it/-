@@ -1031,7 +1031,7 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 }
 /* 접기/펼치기 */
 .pl-row-collapsed {
-  padding: 7px 16px !important;
+  padding: 6px 16px !important;
   gap: 0 !important;
 }
 .pl-collapse-btn {
@@ -1040,18 +1040,6 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   display: flex; align-items: center; justify-content: center; transition: all .1s;
 }
 .pl-collapse-btn:hover { background: #f3f4f6; color: #374151; }
-
-/* 접힌 상태 미니 단계 표시 */
-.pl-mini-stages {
-  display: flex; align-items: center; gap: 3px; flex-wrap: nowrap;
-}
-.pl-mini-stage {
-  font-size: 9px; font-weight: 700; white-space: nowrap; border-radius: 10px;
-  border: 1px solid transparent; line-height: 1;
-}
-.pl-mini-stage.active { padding: 2px 7px; }
-.pl-mini-stage.done { padding: 2px 6px; }
-.pl-mini-stage.inactive { color: #d1d5db; font-size: 10px; padding: 0 1px; }
 
 .pl-arrow {
   width: 24px; height: 24px; border: 1.5px solid #e5e7eb; border-radius: 6px;
