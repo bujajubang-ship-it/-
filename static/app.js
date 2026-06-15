@@ -2549,9 +2549,9 @@ const PIPELINE_STAGES = [
 ];
 
 const TYPE_COLORS = {
-  '미드폼': { bg: '#eff6ff', color: '#1d4ed8' },
-  '숏폼':   { bg: '#fdf4ff', color: '#7e22ce' },
-  '쇼츠':   { bg: '#fff1f0', color: '#cf1322' },
+  '미드폼': { bg: '#dbeafe', color: '#1e40af' },
+  '숏폼':   { bg: '#fed7aa', color: '#c2410c' },
+  '쇼츠':   { bg: '#fce7f3', color: '#be185d' },
   '기타':   { bg: '#f3f4f6', color: '#374151' },
 };
 
