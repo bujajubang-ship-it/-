@@ -2558,6 +2558,15 @@ const TYPE_COLORS = {
 let plVideos = [];
 let plGroupBy = null;   // null | 'stage' | 'type' | 'editor'
 let plFilterVal = null; // 특정 값으로 필터
+let plCollapsed = new Set(JSON.parse(localStorage.getItem('pl_collapsed') || '[]'));
+
+function toggleCollapse(id) {
+  event.stopPropagation();
+  if (plCollapsed.has(id)) plCollapsed.delete(id);
+  else plCollapsed.add(id);
+  localStorage.setItem('pl_collapsed', JSON.stringify([...plCollapsed]));
+  renderKanban();
+}
 
 async function loadPipeline() {
   const res = await fetch('/api/pipeline');
@@ -2703,6 +2712,7 @@ function plRow(v) {
   const cur = PIPELINE_STAGES[curIdx];
   const dateStr = v.planned_date ? `📅 ${v.planned_date}` : '';
   const editorStr = v.editor ? `✂️ ${v.editor}` : '';
+  const collapsed = plCollapsed.has(v.id);
 
   const stepper = PIPELINE_STAGES.map((s, i) => {
     const done = i < curIdx;
@@ -2724,23 +2734,36 @@ function plRow(v) {
     `;
   }).join('');
 
+  // 접힌 상태: 단계 진행바를 미니 텍스트 뱃지로 표시
+  const miniStages = collapsed ? `
+    <div class="pl-mini-stages">
+      ${PIPELINE_STAGES.map((s, i) => {
+        const done = i < curIdx;
+        const active = i === curIdx;
+        if (!done && !active) return `<span class="pl-mini-stage inactive" title="${s.label}">·</span>`;
+        return `<span class="pl-mini-stage${active ? ' active' : ' done'}" style="color:${active?'#fff':s.color};background:${active?s.color:s.color+'22'};border-color:${s.color}40" title="${s.label}">${s.label}</span>`;
+      }).join('')}
+    </div>` : '';
+
   return `
-  <div class="pl-row" onclick="openVideoModal(${v.id})">
+  <div class="pl-row${collapsed ? ' pl-row-collapsed' : ''}" onclick="openVideoModal(${v.id})">
     <div class="pl-row-head">
       <div class="pl-row-left">
         <span class="pl-type-badge" style="background:${tc.bg};color:${tc.color}">${v.content_type}</span>
         <span class="pl-row-title">${escHtml(v.title)}</span>
-        ${editorStr || dateStr ? `<span class="pl-row-meta">${[editorStr, dateStr].filter(Boolean).join(' · ')}</span>` : ''}
+        ${!collapsed && (editorStr || dateStr) ? `<span class="pl-row-meta">${[editorStr, dateStr].filter(Boolean).join(' · ')}</span>` : ''}
+        ${collapsed ? miniStages : ''}
       </div>
       <div class="pl-row-actions" onclick="event.stopPropagation()">
-        <span class="pl-cur-stage" style="color:${cur.color};background:${cur.bg}">${cur.emoji} ${cur.label}</span>
+        ${!collapsed ? `<span class="pl-cur-stage" style="color:${cur.color};background:${cur.bg}">${cur.emoji} ${cur.label}</span>` : ''}
         <button class="pl-arrow" onclick="moveStage(${v.id},-1)" ${curIdx>0?'':'disabled'}>←</button>
         <button class="pl-arrow" onclick="moveStage(${v.id},1)" ${curIdx<PIPELINE_STAGES.length-1?'':'disabled'}>→</button>
+        <button class="pl-collapse-btn" onclick="toggleCollapse(${v.id})" title="${collapsed?'펼치기':'접기'}">${collapsed ? '▶' : '▼'}</button>
         <button class="pl-del" onclick="deleteVideo(${v.id})">🗑</button>
       </div>
     </div>
-    ${v.notes ? `<div class="pl-row-notes">${escHtml(v.notes.slice(0,80))}${v.notes.length>80?'…':''}</div>` : ''}
-    <div class="pl-stepper">${stepper}</div>
+    ${!collapsed && v.notes ? `<div class="pl-row-notes">${escHtml(v.notes.slice(0,80))}${v.notes.length>80?'…':''}</div>` : ''}
+    ${!collapsed ? `<div class="pl-stepper">${stepper}</div>` : ''}
   </div>`;
 }
 
