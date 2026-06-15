@@ -967,6 +967,13 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   cursor: pointer; margin-left: auto;
 }
 .pl-ctrl-reset:hover { background: #fee2e2; }
+.pl-ctrl-sep { width: 1px; height: 16px; background: #e5e7eb; margin: 0 2px; }
+.pl-fold-btn {
+  padding: 3px 10px; border-radius: 16px; border: 1.5px solid #e5e7eb;
+  background: #f9fafb; color: #374151; font-size: 11px; font-weight: 700;
+  cursor: pointer; white-space: nowrap; transition: all .12s;
+}
+.pl-fold-btn:hover { background: #f3f4f6; border-color: #9ca3af; }
 
 /* ── 그룹 헤더 ── */
 .pl-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
@@ -974,8 +981,11 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   display: flex; align-items: center; gap: 8px;
   font-size: 12px; font-weight: 800;
   padding: 6px 10px; border-left: 3px solid; background: #f9fafb;
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 6px 6px 0; cursor: pointer; user-select: none;
+  transition: background .12s;
 }
+.pl-group-header:hover { background: #f3f4f6; }
+.pl-group-fold { margin-left: auto; font-size: 10px; opacity: .6; }
 .pl-group-count {
   min-width: 18px; height: 18px; border-radius: 9px;
   display: flex; align-items: center; justify-content: center;

@@ -2559,6 +2559,25 @@ let plVideos = [];
 let plGroupBy = null;   // null | 'stage' | 'type' | 'editor'
 let plFilterVal = null; // 특정 값으로 필터
 let plCollapsed = new Set(JSON.parse(localStorage.getItem('pl_collapsed') || '[]'));
+let plGroupIdMap = {}; // 그룹키 → [id, ...] 맵 (renderKanban에서 채움)
+
+function collapseAll() {
+  plVideos.forEach(v => plCollapsed.add(v.id));
+  localStorage.setItem('pl_collapsed', JSON.stringify([...plCollapsed]));
+  renderKanban();
+}
+function expandAll() {
+  plCollapsed.clear();
+  localStorage.setItem('pl_collapsed', JSON.stringify([]));
+  renderKanban();
+}
+function toggleGroupCollapse(key) {
+  const ids = plGroupIdMap[key] || [];
+  const allCollapsed = ids.length > 0 && ids.every(id => plCollapsed.has(id));
+  ids.forEach(id => allCollapsed ? plCollapsed.delete(id) : plCollapsed.add(id));
+  localStorage.setItem('pl_collapsed', JSON.stringify([...plCollapsed]));
+  renderKanban();
+}
 let plShowCalendar = JSON.parse(localStorage.getItem('pl_show_calendar') || 'true');
 let plCalYear  = new Date().getFullYear();
 let plCalMonth = new Date().getMonth();
@@ -2716,6 +2735,9 @@ function renderGroupControls() {
     <div class="pl-ctrl-row">
       <span class="pl-ctrl-label">묶기</span>
       ${groupBtns}
+      <div class="pl-ctrl-sep"></div>
+      <button class="pl-fold-btn" onclick="collapseAll()" title="전체 접기">▶ 모두 접기</button>
+      <button class="pl-fold-btn" onclick="expandAll()" title="전체 펼치기">▼ 모두 펼치기</button>
       ${hasControl ? `<button class="pl-ctrl-reset" onclick="resetPlControls()">× 초기화</button>` : ''}
     </div>
     ${filterRow}
@@ -2773,17 +2795,25 @@ function renderKanban() {
     sortedKeys.sort((a, b) => stageOrder.indexOf(a) - stageOrder.indexOf(b));
   }
 
+  // 그룹ID 맵 갱신
+  plGroupIdMap = {};
+  sortedKeys.forEach(key => { plGroupIdMap[key] = groups[key].map(v => v.id); });
+
   el.innerHTML = sortedKeys.map(key => {
     const stage = plGroupBy === 'stage' ? PIPELINE_STAGES.find(s => s.key === key) : null;
     const label = stage ? `${stage.emoji} ${stage.label}` : key;
     const color = stage ? stage.color : '#374151';
-    const count = groups[key].length;
+    const ids = groups[key].map(v => v.id);
+    const count = ids.length;
+    const allCollapsed = ids.length > 0 && ids.every(id => plCollapsed.has(id));
     return `
       <div class="pl-group">
-        <div class="pl-group-header" style="color:${color};border-left-color:${color}">
-          ${label} <span class="pl-group-count" style="background:${color}">${count}</span>
+        <div class="pl-group-header" style="color:${color};border-left-color:${color}" onclick="toggleGroupCollapse('${key}')">
+          <span>${label}</span>
+          <span class="pl-group-count" style="background:${color}">${count}</span>
+          <span class="pl-group-fold">${allCollapsed ? '▶' : '▼'}</span>
         </div>
-        <div class="pl-group-body">${groups[key].map(v => plRow(v)).join('')}</div>
+        <div class="pl-group-body">${allCollapsed ? '' : groups[key].map(v => plRow(v)).join('')}</div>
       </div>`;
   }).join('');
 }
