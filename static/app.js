@@ -2813,7 +2813,7 @@ function renderKanban() {
           <span class="pl-group-count" style="background:${color}">${count}</span>
           <span class="pl-group-fold">${allCollapsed ? '▶' : '▼'}</span>
         </div>
-        <div class="pl-group-body">${allCollapsed ? '' : groups[key].map(v => plRow(v)).join('')}</div>
+        <div class="pl-group-body">${groups[key].map(v => plRow(v)).join('')}</div>
       </div>`;
   }).join('');
 }
