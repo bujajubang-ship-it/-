@@ -2559,6 +2559,81 @@ let plVideos = [];
 let plGroupBy = null;   // null | 'stage' | 'type' | 'editor'
 let plFilterVal = null; // 특정 값으로 필터
 let plCollapsed = new Set(JSON.parse(localStorage.getItem('pl_collapsed') || '[]'));
+let plShowCalendar = JSON.parse(localStorage.getItem('pl_show_calendar') || 'false');
+let plCalYear  = new Date().getFullYear();
+let plCalMonth = new Date().getMonth();
+
+function toggleCalendar() {
+  plShowCalendar = !plShowCalendar;
+  localStorage.setItem('pl_show_calendar', JSON.stringify(plShowCalendar));
+  applyCalendarLayout();
+  if (plShowCalendar) renderCalendar();
+}
+
+function applyCalendarLayout() {
+  const panel = document.getElementById('pl-calendar-panel');
+  const btn   = document.getElementById('pl-cal-toggle-btn');
+  if (!panel) return;
+  if (plShowCalendar) { panel.classList.remove('hidden'); btn && btn.classList.add('active'); }
+  else                { panel.classList.add('hidden');    btn && btn.classList.remove('active'); }
+}
+
+function changeCalendarMonth(dir) {
+  plCalMonth += dir;
+  if (plCalMonth > 11) { plCalMonth = 0; plCalYear++; }
+  if (plCalMonth <  0) { plCalMonth = 11; plCalYear--; }
+  renderCalendar();
+}
+
+function renderCalendar() {
+  const gridEl  = document.getElementById('pl-cal-grid');
+  const titleEl = document.getElementById('pl-cal-month-title');
+  if (!gridEl || !plShowCalendar) return;
+
+  const y = plCalYear, m = plCalMonth;
+  const KR_MONTHS = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+  titleEl.textContent = `${y}년 ${KR_MONTHS[m]}`;
+
+  // planned_date → videos 맵
+  const dateMap = {};
+  plVideos.forEach(v => {
+    if (!v.planned_date) return;
+    if (!dateMap[v.planned_date]) dateMap[v.planned_date] = [];
+    dateMap[v.planned_date].push(v);
+  });
+
+  const firstDow  = new Date(y, m, 1).getDay();
+  const totalDays = new Date(y, m + 1, 0).getDate();
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+
+  let cells = Array(firstDow).fill(null);
+  for (let d = 1; d <= totalDays; d++) cells.push(d);
+  while (cells.length % 7) cells.push(null);
+
+  let html = '';
+  for (let i = 0; i < cells.length; i += 7) {
+    html += '<div class="pl-cal-row">';
+    for (let j = 0; j < 7; j++) {
+      const d = cells[i + j];
+      if (!d) { html += '<div class="pl-cal-cell empty"></div>'; continue; }
+      const ds = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const vids = dateMap[ds] || [];
+      const isToday = ds === todayStr;
+      const isSun = j === 0, isSat = j === 6;
+      html += `<div class="pl-cal-cell${isToday?' today':''}${isSun?' sun':isSat?' sat':''}">
+        <div class="pl-cal-day-num">${d}</div>
+        ${vids.map(v => {
+          const tc = TYPE_COLORS[v.content_type] || TYPE_COLORS['기타'];
+          const short = v.title.length > 7 ? v.title.slice(0,7)+'…' : v.title;
+          return `<div class="pl-cal-event" style="background:${tc.bg};color:${tc.color};border-left:2px solid ${tc.color}" title="${v.title}">${short}</div>`;
+        }).join('')}
+      </div>`;
+    }
+    html += '</div>';
+  }
+  gridEl.innerHTML = html;
+}
 
 function toggleCollapse(id) {
   event.stopPropagation();
@@ -2574,6 +2649,8 @@ async function loadPipeline() {
   renderPipelineSummary();
   renderGroupControls();
   renderKanban();
+  applyCalendarLayout();
+  renderCalendar();
 }
 
 function plGroupField() {
