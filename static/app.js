@@ -2778,7 +2778,11 @@ function renderKanban() {
 
   // 그룹 없음
   if (!plGroupBy) {
-    el.innerHTML = videos.map(v => plRow(v)).join('');
+    try {
+      el.innerHTML = videos.map(v => plRow(v)).join('');
+    } catch(e) {
+      el.innerHTML = `<div class="pl-empty" style="color:#ef4444">렌더링 오류: ${e.message}<br><button onclick="loadPipeline()" style="margin-top:8px;padding:6px 14px;background:#ef4444;color:#fff;border:none;border-radius:6px;cursor:pointer">새로고침</button></div>`;
+    }
     return;
   }
 
@@ -2822,7 +2826,7 @@ function renderKanban() {
 function plRow(v) {
   const tc = TYPE_COLORS[v.content_type] || TYPE_COLORS['기타'];
   const curIdx = PIPELINE_STAGES.findIndex(s => s.key === v.stage);
-  const cur = PIPELINE_STAGES[curIdx];
+  const cur = PIPELINE_STAGES[curIdx] || { key: v.stage || 'unknown', label: v.stage || '알수없음', emoji: '❓', color: '#6b7280', bg: '#f3f4f6' };
   const dateStr = v.planned_date ? `📅 ${v.planned_date}` : '';
   const editorStr = v.editor ? `✂️ ${v.editor}` : '';
   const collapsed = plCollapsed.has(v.id);
