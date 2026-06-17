@@ -2539,13 +2539,14 @@ function copyBlogBody() {
 // ── 콘텐츠 파이프라인 ───────────────────────────────────────────────
 
 const PIPELINE_STAGES = [
-  { key: 'filming',   label: '촬영 완료',   emoji: '📹', color: '#8b5cf6', bg: '#f5f3ff' },
-  { key: 'sent',      label: '편집자 전달', emoji: '📤', color: '#f97316', bg: '#fff7ed' },
-  { key: 'editing',   label: '편집 중',     emoji: '✂️', color: '#eab308', bg: '#fefce8' },
-  { key: 'done',      label: '편집 완료',   emoji: '✅', color: '#22c55e', bg: '#f0fdf4' },
-  { key: 'scheduled', label: '업로드 예정', emoji: '📅', color: '#3b82f6', bg: '#eff6ff' },
-  { key: 'uploaded',  label: '업로드 완료', emoji: '🎬', color: '#06b6d4', bg: '#ecfeff' },
-  { key: 'blog',      label: '블로그 완료', emoji: '📝', color: '#6b7280', bg: '#f9fafb' },
+  { key: 'planning',   label: '기획',        emoji: '📋', color: '#6366f1', bg: '#eef2ff' },
+  { key: 'filming',    label: '촬영',        emoji: '📹', color: '#8b5cf6', bg: '#f5f3ff' },
+  { key: 'sent',       label: '편집자 전달', emoji: '📤', color: '#f97316', bg: '#fff7ed' },
+  { key: 'editing',    label: '편집 중',     emoji: '✂️', color: '#eab308', bg: '#fefce8' },
+  { key: 'done',       label: '편집 완료',   emoji: '✅', color: '#22c55e', bg: '#f0fdf4' },
+  { key: 'thumbnail',  label: '섬네일 제작', emoji: '🖼️', color: '#ec4899', bg: '#fdf2f8' },
+  { key: 'uploaded',   label: '업로드',      emoji: '🎬', color: '#06b6d4', bg: '#ecfeff' },
+  { key: 'sns',        label: '기타 SNS 배포', emoji: '📣', color: '#10b981', bg: '#f0fdf4' },
 ];
 
 const TYPE_COLORS = {
@@ -2871,7 +2872,7 @@ function escHtml(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function openVideoModal(id = null, defaultStage = 'filming') {
+function openVideoModal(id = null, defaultStage = 'planning') {
   document.getElementById('pl-modal-title').textContent = id ? '영상 수정' : '영상 추가';
   document.getElementById('pl-edit-id').value = id || '';
   if (id) {

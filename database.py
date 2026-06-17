@@ -91,6 +91,10 @@ def init_pipeline():
         )
     """)
     conn.execute("UPDATE pipeline SET content_type='숏폼' WHERE content_type='쇼츠'")
+    # 구 스테이지 키 마이그레이션
+    conn.execute("UPDATE pipeline SET stage='filming' WHERE stage='filming'")  # 촬영 완료 → 촬영 (key 동일)
+    conn.execute("UPDATE pipeline SET stage='uploaded' WHERE stage='scheduled'")  # 업로드 예정 → 업로드
+    conn.execute("UPDATE pipeline SET stage='sns' WHERE stage='blog'")            # 블로그 완료 → 기타 SNS 배포
     conn.commit()
     conn.close()
 
