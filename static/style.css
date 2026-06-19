@@ -1621,11 +1621,59 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .pl-opt-checkmark { font-size: 13px; }
 
 .pl-opt-notes {
-  margin-top: 8px;
+  margin-top: 6px;
   font-size: 12px;
   color: #6b7280;
   font-style: italic;
+  padding: 4px 6px;
+  background: #f9fafb;
+  border-radius: 6px;
 }
+.pl-opt-memo-btn {
+  font-size: 11px;
+  padding: 3px 9px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #f9fafb;
+  color: #6b7280;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pl-opt-memo-btn:hover { background: #f3f4f6; color: #374151; }
+.pl-opt-note-edit { margin-top: 8px; }
+.pl-opt-note-textarea {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: #374151;
+  resize: none;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+.pl-opt-note-textarea:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px #6366f120; }
+.pl-opt-save-btn {
+  padding: 4px 14px;
+  background: #6366f1;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pl-opt-save-btn:hover { background: #4f46e5; }
+.pl-opt-cancel-btn {
+  padding: 4px 12px;
+  background: #f3f4f6;
+  color: #6b7280;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pl-opt-cancel-btn:hover { background: #e5e7eb; }
 .pl-opt-empty {
   padding: 24px;
   text-align: center;

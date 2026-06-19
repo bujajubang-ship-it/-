@@ -3289,10 +3289,20 @@ function renderOptimizeList(list) {
       <div class="pl-opt-row ${allDone ? 'all-done' : ''}" data-id="${v.id}">
         <div class="pl-opt-row-top">
           <span class="pl-opt-video-title ${allDone ? 'done-title' : ''}">${escHtml(v.title)}</span>
-          <button class="pl-opt-del-btn" onclick="deleteOptimize(${v.id})" title="삭제">✕</button>
+          <div style="display:flex;gap:6px;align-items:center">
+            <button class="pl-opt-memo-btn" onclick="editOptimizeNote(${v.id})">✏️ 메모</button>
+            <button class="pl-opt-del-btn" onclick="deleteOptimize(${v.id})" title="삭제">✕</button>
+          </div>
         </div>
         <div class="pl-opt-checks">${chips}</div>
-        ${v.notes ? `<div class="pl-opt-notes">${escHtml(v.notes)}</div>` : ''}
+        <div class="pl-opt-notes" id="opt-notes-${v.id}"${v.notes ? '' : ' style="display:none"'}>${escHtml(v.notes || '')}</div>
+        <div class="pl-opt-note-edit hidden" id="opt-note-edit-${v.id}">
+          <textarea class="pl-opt-note-textarea" id="opt-note-ta-${v.id}" rows="2" placeholder="메모를 입력하세요...">${escHtml(v.notes || '')}</textarea>
+          <div style="display:flex;gap:6px;margin-top:5px">
+            <button class="pl-opt-save-btn" onclick="saveOptimizeNote(${v.id})">저장</button>
+            <button class="pl-opt-cancel-btn" onclick="cancelOptimizeNote(${v.id})">취소</button>
+          </div>
+        </div>
       </div>`;
   }).join('');
 }
@@ -3313,6 +3323,28 @@ async function toggleOptimizeCheck(id, key, val) {
 async function deleteOptimize(id) {
   if (!confirm('삭제할까요?')) return;
   await fetch(`/api/optimize/${id}`, { method: 'DELETE' });
+  loadOptimizeList();
+}
+
+function editOptimizeNote(id) {
+  document.getElementById(`opt-note-edit-${id}`).classList.remove('hidden');
+  document.getElementById(`opt-notes-${id}`).style.display = 'none';
+  document.getElementById(`opt-note-ta-${id}`).focus();
+}
+
+function cancelOptimizeNote(id) {
+  document.getElementById(`opt-note-edit-${id}`).classList.add('hidden');
+  const notesEl = document.getElementById(`opt-notes-${id}`);
+  if (notesEl.textContent.trim()) notesEl.style.display = '';
+}
+
+async function saveOptimizeNote(id) {
+  const notes = document.getElementById(`opt-note-ta-${id}`).value.trim();
+  await fetch(`/api/optimize/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notes }),
+  });
   loadOptimizeList();
 }
 
