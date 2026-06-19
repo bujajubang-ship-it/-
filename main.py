@@ -20,6 +20,7 @@ from naver_service import NaverService
 from youtube_service import YouTubeService
 from analytics_service import AnalyticsService
 from viewtrap_service import ViewTrapService
+from heatmap_service import fetch_heatmap, summarize_for_prompt
 from database import (init_db, save_history, list_history, get_history, delete_history,
                        init_pipeline, list_pipeline, create_pipeline_item,
                        update_pipeline_item, delete_pipeline_item)
@@ -222,6 +223,20 @@ async def analyze(req: AnalyzeRequest):
             total = sum(len(v.get("comments", [])) for v in videos_with_comments)
             yield sse({"step": "comments_done", "message": f"댓글 {total}개 수집 완료!"})
 
+            # Most Replayed 히트맵 수집 (상위 5개 영상, 병렬)
+            yield sse({"step": "heatmap", "message": "Most Replayed 시청 패턴 수집 중..."})
+            heatmap_tasks = [fetch_heatmap(v["id"]) for v in videos_with_comments[:5]]
+            heatmap_results = await asyncio.gather(*heatmap_tasks, return_exceptions=True)
+            heatmap_count = 0
+            for v, result in zip(videos_with_comments[:5], heatmap_results):
+                if isinstance(result, dict) and result.get("heatmap"):
+                    dur = result.get("duration") or v.get("duration_sec", 0)
+                    summary = summarize_for_prompt(result["heatmap"], dur)
+                    if summary:
+                        v["heatmap_summary"] = summary
+                        heatmap_count += 1
+            yield sse({"step": "heatmap_done", "message": f"시청 패턴 수집 완료 ({heatmap_count}개 영상)"})
+
             naver_results = []
             if naver_id and naver_secret:
                 yield sse({"step": "naver", "message": "네이버 카페 반응 수집 중..."})
@@ -296,6 +311,20 @@ async def edit_feedback(req: EditFeedbackRequest):
             total = sum(len(v.get("comments", [])) for v in videos_with_comments)
             yield sse({"step": "comments_done", "message": f"댓글 {total}개 수집 완료!"})
 
+            # Most Replayed 히트맵 수집 (상위 5개 영상, 병렬)
+            yield sse({"step": "heatmap", "message": "Most Replayed 시청 패턴 수집 중..."})
+            heatmap_tasks = [fetch_heatmap(v["id"]) for v in videos_with_comments[:5]]
+            heatmap_results = await asyncio.gather(*heatmap_tasks, return_exceptions=True)
+            heatmap_count = 0
+            for v, result in zip(videos_with_comments[:5], heatmap_results):
+                if isinstance(result, dict) and result.get("heatmap"):
+                    dur = result.get("duration") or v.get("duration_sec", 0)
+                    summary = summarize_for_prompt(result["heatmap"], dur)
+                    if summary:
+                        v["heatmap_summary"] = summary
+                        heatmap_count += 1
+            yield sse({"step": "heatmap_done", "message": f"시청 패턴 수집 완료 ({heatmap_count}개 영상)"})
+
             naver_results = []
             if naver_id and naver_secret:
                 yield sse({"step": "naver", "message": "네이버 카페 반응 수집 중..."})
@@ -314,13 +343,32 @@ async def edit_feedback(req: EditFeedbackRequest):
             if product_page_info:
                 script_with_product = f"[스마트스토어 상품 정보]\n{product_page_info}\n\n[영상 대본]\n{req.script}"
 
+            # ViewTrap 레퍼런스 수집
+            viewtrap_refs = None
+            vt_token = os.getenv("VIEWTRAP_TOKEN", "").strip()
+            if vt_token:
+                yield sse({"step": "viewtrap", "message": "ViewTrap 성과 레퍼런스 수집 중..."})
+                vt_svc = ViewTrapService(vt_token)
+                vt_top, vt_hot = await asyncio.gather(
+                    vt_svc.get_top_videos(),
+                    vt_svc.get_hot_videos(),
+                )
+                viewtrap_refs = {"top_videos": vt_top, "hot_videos": vt_hot}
+                total_refs = len(vt_top) + len(vt_hot)
+                if total_refs:
+                    yield sse({"step": "viewtrap_done", "message": f"ViewTrap 레퍼런스 {total_refs}개 수집 완료!"})
+
             yield sse({"step": "analyzing", "message": "AI가 대본 분석 중... (보통 20~40초 소요)"})
             analyzer = Analyzer()
-            _task = asyncio.create_task(analyzer.analyze_edit_feedback(req.keyword, script_with_product, videos_with_comments, naver_results))
+            _task = asyncio.create_task(analyzer.analyze_edit_feedback(req.keyword, script_with_product, videos_with_comments, naver_results, viewtrap_refs))
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)
             report = _task.result()
+
+            if viewtrap_refs:
+                report["viewtrap_top"] = viewtrap_refs.get("top_videos", [])[:10]
+                report["viewtrap_hot"] = viewtrap_refs.get("hot_videos", [])[:10]
 
             save_history("edit", req.keyword, report)
             yield sse({"step": "done", "report": report, "keyword": req.keyword})
@@ -442,6 +490,19 @@ async def shortform(req: ShortformRequest):
                     total = sum(len(v.get("comments", [])) for v in videos_with_comments)
                     yield sse({"step": "comments_done", "message": f"댓글 {total}개 수집 완료!"})
 
+                    yield sse({"step": "heatmap", "message": "Most Replayed 시청 패턴 수집 중..."})
+                    heatmap_tasks = [fetch_heatmap(v["id"]) for v in videos_with_comments[:5]]
+                    heatmap_results = await asyncio.gather(*heatmap_tasks, return_exceptions=True)
+                    heatmap_count = 0
+                    for v, result in zip(videos_with_comments[:5], heatmap_results):
+                        if isinstance(result, dict) and result.get("heatmap"):
+                            dur = result.get("duration") or v.get("duration_sec", 0)
+                            summary = summarize_for_prompt(result["heatmap"], dur)
+                            if summary:
+                                v["heatmap_summary"] = summary
+                                heatmap_count += 1
+                    yield sse({"step": "heatmap_done", "message": f"시청 패턴 수집 완료 ({heatmap_count}개 영상)"})
+
             if naver_id and naver_secret:
                 yield sse({"step": "naver", "message": "네이버 카페 반응 수집 중..."})
                 naver = NaverService(naver_id, naver_secret)
@@ -500,6 +561,20 @@ async def midform(req: MidformRequest):
             videos_with_comments = await yt.get_comments_for_videos(videos[:10])
             total = sum(len(v.get("comments", [])) for v in videos_with_comments)
             yield sse({"step": "comments_done", "message": f"댓글 {total}개 수집 완료!"})
+
+            # Most Replayed 히트맵 수집 (상위 5개 영상, 병렬)
+            yield sse({"step": "heatmap", "message": "Most Replayed 시청 패턴 수집 중..."})
+            heatmap_tasks = [fetch_heatmap(v["id"]) for v in videos_with_comments[:5]]
+            heatmap_results = await asyncio.gather(*heatmap_tasks, return_exceptions=True)
+            heatmap_count = 0
+            for v, result in zip(videos_with_comments[:5], heatmap_results):
+                if isinstance(result, dict) and result.get("heatmap"):
+                    dur = result.get("duration") or v.get("duration_sec", 0)
+                    summary = summarize_for_prompt(result["heatmap"], dur)
+                    if summary:
+                        v["heatmap_summary"] = summary
+                        heatmap_count += 1
+            yield sse({"step": "heatmap_done", "message": f"시청 패턴 수집 완료 ({heatmap_count}개 영상)"})
 
             naver_results = []
             if naver_id and naver_secret:
@@ -858,30 +933,63 @@ async def blog(req: BlogRequest):
 
 @app.post("/api/video-feedback")
 async def video_feedback(file: UploadFile = File(...)):
-    # StreamingResponse 시작 전에 파일 먼저 읽기
-    content = await file.read()
+    # 파일을 청크 단위로 임시 파일에 저장 (대용량 파일 메모리 문제 방지)
+    uid = uuid.uuid4().hex
+    video_path = f"/tmp/vf_{uid}.mp4"
+    audio_path = f"/tmp/vf_{uid}.mp3"
+    filename = file.filename or "영상 피드백"
+
+    with open(video_path, "wb") as f_out:
+        while True:
+            chunk = await file.read(1024 * 1024)  # 1MB씩 읽기
+            if not chunk:
+                break
+            f_out.write(chunk)
 
     async def stream():
         if not os.getenv("ANTHROPIC_API_KEY", "").strip():
             yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
             return
 
-        uid = uuid.uuid4().hex
-        video_path = f"/tmp/vf_{uid}.mp4"
-        audio_path = f"/tmp/vf_{uid}.mp3"
-
         try:
-            # 1. 파일 저장
-            yield sse({"step": "uploading", "message": "영상 파일 저장 중..."})
-            with open(video_path, "wb") as f_out:
-                f_out.write(content)
+            # 1. 파일 저장 완료 알림
+            yield sse({"step": "uploading", "message": "영상 파일 저장 완료, 파일 검사 중..."})
+            await asyncio.sleep(0)
 
-            # 2. 오디오 추출
+            # 1b. 파일 유효성 빠른 검사 (ffprobe ~1초)
+            try:
+                probe = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+                    capture_output=True, text=True, timeout=15
+                )
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("파일 검사 시간이 초과되었습니다. 파일이 손상되었을 수 있습니다.")
+            if probe.returncode != 0:
+                raise RuntimeError(
+                    "유효하지 않은 파일입니다. mp4, mov, avi 등 동영상 파일을 업로드해주세요.\n"
+                    f"상세: {probe.stderr.strip()[-200:]}"
+                )
+
+            loop = asyncio.get_event_loop()
+
+            # 2. 오디오 추출 (executor로 비동기 처리 — 긴 영상도 ping 유지)
             yield sse({"step": "extracting", "message": "오디오 추출 중..."})
-            result = subprocess.run(
-                ["ffmpeg", "-i", video_path, "-vn", "-acodec", "mp3", "-q:a", "2", audio_path, "-y"],
-                capture_output=True, text=True
-            )
+
+            def _run_ffmpeg():
+                return subprocess.run(
+                    ["ffmpeg", "-i", video_path, "-vn", "-acodec", "mp3", "-q:a", "2", audio_path, "-y"],
+                    capture_output=True, text=True, timeout=300
+                )
+
+            ffmpeg_future = loop.run_in_executor(None, _run_ffmpeg)
+            while not ffmpeg_future.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(5)
+            try:
+                result = await ffmpeg_future
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("오디오 추출 시간이 초과되었습니다 (5분). 파일이 너무 크거나 손상되었을 수 있습니다.")
             if result.returncode != 0:
                 raise RuntimeError(f"ffmpeg 오류: {result.stderr[-500:]}")
 
@@ -890,12 +998,17 @@ async def video_feedback(file: UploadFile = File(...)):
 
             def run_whisper():
                 import whisper
-                model = whisper.load_model("base")
+                model = whisper.load_model("small")
                 result_w = model.transcribe(audio_path, language="ko")
                 return result_w["text"]
 
-            loop = asyncio.get_event_loop()
-            transcript = await loop.run_in_executor(None, run_whisper)
+            try:
+                transcript = await asyncio.wait_for(
+                    loop.run_in_executor(None, run_whisper),
+                    timeout=600  # 10분
+                )
+            except asyncio.TimeoutError:
+                raise RuntimeError("자막 추출 시간이 초과되었습니다 (10분). 영상이 너무 길거나 손상되었을 수 있습니다.")
 
             # 4. Claude AI 분석
             yield sse({"step": "analyzing", "message": "AI 피드백 분석 중..."})
@@ -906,7 +1019,7 @@ async def video_feedback(file: UploadFile = File(...)):
                 await asyncio.sleep(8)
             feedback = _task.result()
 
-            save_history("video_feedback", file.filename or "영상 피드백", {"transcript": transcript, "feedback": feedback})
+            save_history("video_feedback", filename, {"transcript": transcript, "feedback": feedback})
             yield sse({"step": "done", "transcript": transcript, "feedback": feedback})
 
         except Exception as e:
@@ -1004,6 +1117,31 @@ async def pipeline_update(id: int, item: dict):
 @app.delete("/api/pipeline/{id}")
 async def pipeline_delete(id: int):
     delete_pipeline_item(id)
+    return {"ok": True}
+
+
+# ── 기존 영상 최적화 체크리스트 ──────────────────────────────────────
+from database import list_optimize, create_optimize, update_optimize, delete_optimize
+
+@app.get("/api/optimize")
+async def optimize_list():
+    return list_optimize()
+
+@app.post("/api/optimize")
+async def optimize_create(request: Request):
+    data = await request.json()
+    id_ = create_optimize(data.get("title", ""), data.get("notes", ""))
+    return {"id": id_}
+
+@app.put("/api/optimize/{id}")
+async def optimize_update(id: int, request: Request):
+    data = await request.json()
+    update_optimize(id, data)
+    return {"ok": True}
+
+@app.delete("/api/optimize/{id}")
+async def optimize_delete(id: int):
+    delete_optimize(id)
     return {"ok": True}
 
 

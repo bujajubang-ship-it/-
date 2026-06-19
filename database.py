@@ -138,3 +138,68 @@ def delete_pipeline_item(id_: int):
     conn.execute("DELETE FROM pipeline WHERE id=?", (id_,))
     conn.commit()
     conn.close()
+
+
+# ── 기존 영상 최적화 체크리스트 ──────────────────────────────────────
+
+def _ensure_optimize_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS optimize_videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            thumbnail INTEGER DEFAULT 0,
+            title_edit INTEGER DEFAULT 0,
+            cut INTEGER DEFAULT 0,
+            description INTEGER DEFAULT 0,
+            notes TEXT DEFAULT '',
+            sort_order INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+
+
+def list_optimize():
+    conn = get_db()
+    _ensure_optimize_table(conn)
+    rows = conn.execute(
+        "SELECT * FROM optimize_videos ORDER BY sort_order, id"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def create_optimize(title: str, notes: str = "") -> int:
+    conn = get_db()
+    _ensure_optimize_table(conn)
+    cur = conn.execute(
+        "INSERT INTO optimize_videos (title, notes) VALUES (?,?)",
+        (title, notes),
+    )
+    conn.commit()
+    id_ = cur.lastrowid
+    conn.close()
+    return id_
+
+
+def update_optimize(id_: int, data: dict):
+    allowed = {"title", "thumbnail", "title_edit", "cut", "description", "notes", "sort_order"}
+    fields = {k: v for k, v in data.items() if k in allowed}
+    if not fields:
+        return
+    sets = ", ".join(f"{k}=?" for k in fields)
+    vals = list(fields.values()) + [id_]
+    conn = get_db()
+    _ensure_optimize_table(conn)
+    conn.execute(f"UPDATE optimize_videos SET {sets}, updated_at=CURRENT_TIMESTAMP WHERE id=?", vals)
+    conn.commit()
+    conn.close()
+
+
+def delete_optimize(id_: int):
+    conn = get_db()
+    _ensure_optimize_table(conn)
+    conn.execute("DELETE FROM optimize_videos WHERE id=?", (id_,))
+    conn.commit()
+    conn.close()

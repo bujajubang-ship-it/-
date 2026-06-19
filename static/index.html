@@ -937,11 +937,38 @@
             <div class="pl-page-sub">촬영 완료된 영상들을 단계별로 추적하고 편집자 협업을 관리합니다</div>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
+            <button class="pl-cal-toggle-btn" id="pl-opt-toggle-btn" onclick="toggleOptimize()">🔧 기존 영상 최적화</button>
             <button class="pl-cal-toggle-btn" id="pl-cal-toggle-btn" onclick="toggleCalendar()">📅 업로드 일정</button>
             <button class="pl-add-btn" onclick="openVideoModal()">+ 영상 추가</button>
           </div>
         </div>
         <div class="pl-stage-summary" id="pl-stage-summary"></div>
+
+        <!-- 기존 영상 최적화 체크리스트 패널 -->
+        <div class="pl-opt-panel" id="pl-opt-panel" style="display:none">
+          <div class="pl-opt-header">
+            <div>
+              <span style="font-weight:700;font-size:15px">🔧 기존 영상 최적화 체크리스트</span>
+              <span class="pl-opt-progress" id="pl-opt-progress"></span>
+            </div>
+            <button class="pl-opt-add-btn" onclick="openOptimizeAdd()">+ 영상 추가</button>
+          </div>
+          <div class="pl-opt-legend">
+            <span class="pl-opt-chip thumb">썸네일 교체</span>
+            <span class="pl-opt-chip title">제목 수정</span>
+            <span class="pl-opt-chip cut">영상 컷팅</span>
+            <span class="pl-opt-chip desc">본문 수정</span>
+          </div>
+          <div id="pl-opt-list"></div>
+          <!-- 추가 인라인 폼 -->
+          <div class="pl-opt-add-form hidden" id="pl-opt-add-form">
+            <input type="text" id="pl-opt-new-title" placeholder="영상 제목 입력..." class="pl-opt-new-input" />
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="pl-opt-save-btn" onclick="submitOptimizeAdd()">추가</button>
+              <button class="pl-opt-cancel-btn" onclick="cancelOptimizeAdd()">취소</button>
+            </div>
+          </div>
+        </div>
 
         <!-- 업로드 일정 달력 -->
         <div class="pl-calendar-panel" id="pl-calendar-panel">

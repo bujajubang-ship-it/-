@@ -1513,3 +1513,162 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .perf-good { background: #d1fae5; color: #065f46; }
 .perf-avg  { background: #fef3c7; color: #92400e; }
 .perf-bad  { background: #fee2e2; color: #991b1b; }
+
+/* ── 기존 영상 최적화 체크리스트 ──────────────────────────────────── */
+.pl-opt-panel {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.pl-opt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid #f1f5f9;
+  background: linear-gradient(135deg, #fefce8, #fef9c3);
+}
+.pl-opt-progress {
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 500;
+  margin-left: 8px;
+}
+.pl-opt-legend {
+  display: flex;
+  gap: 8px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #f8fafc;
+  background: #f8fafc;
+  flex-wrap: wrap;
+}
+.pl-opt-chip {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid currentColor;
+}
+.pl-opt-chip.thumb { background: #eff6ff; color: #1d4ed8; }
+.pl-opt-chip.title { background: #f0fdf4; color: #15803d; }
+.pl-opt-chip.cut   { background: #fdf4ff; color: #7e22ce; }
+.pl-opt-chip.desc  { background: #fff7ed; color: #c2410c; }
+
+.pl-opt-row {
+  padding: 14px 18px;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background 0.15s;
+}
+.pl-opt-row:last-child { border-bottom: none; }
+.pl-opt-row:hover { background: #fafafa; }
+.pl-opt-row.all-done { background: #f0fdf4; }
+
+.pl-opt-row-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.pl-opt-video-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+}
+.pl-opt-video-title.done-title {
+  color: #16a34a;
+  text-decoration: line-through;
+  text-decoration-color: #86efac;
+}
+.pl-opt-del-btn {
+  background: none;
+  border: none;
+  color: #cbd5e1;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.pl-opt-del-btn:hover { color: #ef4444; background: #fee2e2; }
+
+.pl-opt-checks {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pl-opt-check-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1.5px solid currentColor;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s;
+  opacity: 0.55;
+}
+.pl-opt-check-label.checked { opacity: 1; }
+.pl-opt-check-label.thumb { color: #1d4ed8; background: #eff6ff; }
+.pl-opt-check-label.title { color: #15803d; background: #f0fdf4; }
+.pl-opt-check-label.cut   { color: #7e22ce; background: #fdf4ff; }
+.pl-opt-check-label.desc  { color: #c2410c; background: #fff7ed; }
+.pl-opt-check-label:hover { opacity: 1; transform: scale(1.03); }
+.pl-opt-checkmark { font-size: 13px; }
+
+.pl-opt-notes {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #6b7280;
+  font-style: italic;
+}
+.pl-opt-empty {
+  padding: 24px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 14px;
+}
+.pl-opt-add-btn {
+  background: #fbbf24;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pl-opt-add-btn:hover { background: #f59e0b; }
+.pl-opt-add-form {
+  padding: 14px 18px;
+  border-top: 1px solid #f1f5f9;
+  background: #fafafa;
+}
+.pl-opt-new-input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1.5px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+.pl-opt-new-input:focus { outline: none; border-color: #fbbf24; }
+.pl-opt-save-btn {
+  background: #fbbf24; color: #fff; border: none;
+  border-radius: 7px; padding: 7px 18px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.pl-opt-cancel-btn {
+  background: #f1f5f9; color: #64748b; border: none;
+  border-radius: 7px; padding: 7px 14px;
+  font-size: 13px; cursor: pointer;
+}
+#pl-opt-toggle-btn.active {
+  background: #fbbf24;
+  color: #fff;
+  border-color: #fbbf24;
+}

@@ -20,7 +20,7 @@ function switchTab(tab) {
     if (pane) pane.classList.toggle('hidden', t !== tab);
   });
   if (tab === 'history') loadHistory('');
-  if (tab === 'pipeline') loadPipeline();
+  if (tab === 'pipeline') { loadPipeline(); applyOptimizeVisibility(); }
 }
 
 // ===== 공통 유틸 =====
@@ -3223,4 +3223,130 @@ function renderVideoFeedback(data, targetEl) {
   resultEl.innerHTML = html;
   resultEl.classList.remove('hidden');
   resultEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+
+// ── 기존 영상 최적화 체크리스트 ──────────────────────────────────────
+
+let plShowOptimize = JSON.parse(localStorage.getItem('pl_show_optimize') || 'false');
+
+function toggleOptimize() {
+  plShowOptimize = !plShowOptimize;
+  localStorage.setItem('pl_show_optimize', JSON.stringify(plShowOptimize));
+  applyOptimizeVisibility();
+}
+
+function applyOptimizeVisibility() {
+  const panel = document.getElementById('pl-opt-panel');
+  const btn   = document.getElementById('pl-opt-toggle-btn');
+  if (!panel) return;
+  panel.style.display = plShowOptimize ? 'block' : 'none';
+  if (btn) btn.classList.toggle('active', plShowOptimize);
+  if (plShowOptimize) loadOptimizeList();
+}
+
+async function loadOptimizeList() {
+  const res  = await fetch('/api/optimize');
+  const list = await res.json();
+  renderOptimizeList(list);
+}
+
+function renderOptimizeList(list) {
+  const el = document.getElementById('pl-opt-list');
+  const prog = document.getElementById('pl-opt-progress');
+  if (!el) return;
+
+  const CHECK_KEYS = [
+    { key: 'thumbnail',  label: '썸네일 교체', cls: 'thumb' },
+    { key: 'title_edit', label: '제목 수정',   cls: 'title' },
+    { key: 'cut',        label: '영상 컷팅',   cls: 'cut'   },
+    { key: 'description',label: '본문 수정',   cls: 'desc'  },
+  ];
+
+  // 진행률 계산
+  const totalTasks = list.length * CHECK_KEYS.length;
+  const doneTasks  = list.reduce((acc, v) =>
+    acc + CHECK_KEYS.filter(c => v[c.key]).length, 0);
+  if (prog) {
+    const pct = totalTasks ? Math.round(doneTasks / totalTasks * 100) : 0;
+    prog.textContent = totalTasks ? ` ${doneTasks}/${totalTasks} (${pct}%)` : '';
+  }
+
+  if (!list.length) {
+    el.innerHTML = '<div class="pl-opt-empty">최적화할 영상을 추가하세요</div>';
+    return;
+  }
+
+  el.innerHTML = list.map(v => {
+    const allDone = CHECK_KEYS.every(c => v[c.key]);
+    const chips = CHECK_KEYS.map(c => `
+      <label class="pl-opt-check-label ${c.cls} ${v[c.key] ? 'checked' : ''}"
+             onclick="toggleOptimizeCheck(${v.id}, '${c.key}', ${v[c.key] ? 0 : 1})">
+        <span class="pl-opt-checkmark">${v[c.key] ? '✅' : '☐'}</span> ${c.label}
+      </label>`).join('');
+
+    return `
+      <div class="pl-opt-row ${allDone ? 'all-done' : ''}" data-id="${v.id}">
+        <div class="pl-opt-row-top">
+          <span class="pl-opt-video-title ${allDone ? 'done-title' : ''}">${escHtml(v.title)}</span>
+          <button class="pl-opt-del-btn" onclick="deleteOptimize(${v.id})" title="삭제">✕</button>
+        </div>
+        <div class="pl-opt-checks">${chips}</div>
+        ${v.notes ? `<div class="pl-opt-notes">${escHtml(v.notes)}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function toggleOptimizeCheck(id, key, val) {
+  await fetch(`/api/optimize/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ [key]: val }),
+  });
+  loadOptimizeList();
+}
+
+async function deleteOptimize(id) {
+  if (!confirm('삭제할까요?')) return;
+  await fetch(`/api/optimize/${id}`, { method: 'DELETE' });
+  loadOptimizeList();
+}
+
+function openOptimizeAdd() {
+  document.getElementById('pl-opt-add-form').classList.remove('hidden');
+  document.getElementById('pl-opt-new-title').focus();
+}
+
+function cancelOptimizeAdd() {
+  document.getElementById('pl-opt-add-form').classList.add('hidden');
+  document.getElementById('pl-opt-new-title').value = '';
+}
+
+async function submitOptimizeAdd() {
+  const title = document.getElementById('pl-opt-new-title').value.trim();
+  if (!title) return;
+  await fetch('/api/optimize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  cancelOptimizeAdd();
+  loadOptimizeList();
+}
+
+// Enter 키로도 추가
+document.addEventListener('keydown', e => {
+  const inp = document.getElementById('pl-opt-new-title');
+  if (e.key === 'Enter' && document.activeElement === inp) submitOptimizeAdd();
+});
+
+// 파이프라인 탭 진입 시 상태 복원
+const _origLoadPipeline = typeof loadPipeline === 'function' ? loadPipeline : null;
+function loadPipelineWithOptimize() {
+  if (_origLoadPipeline) _origLoadPipeline();
+  applyOptimizeVisibility();
 }

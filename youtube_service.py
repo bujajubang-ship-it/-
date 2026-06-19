@@ -33,7 +33,7 @@ class YouTubeService:
         resp = await self.client.get(f"{BASE}/videos", params={
             "key": self.api_key,
             "id": ",".join(video_ids),
-            "part": "snippet,statistics",
+            "part": "snippet,statistics,contentDetails",
         })
         resp.raise_for_status()
 
@@ -41,8 +41,16 @@ class YouTubeService:
         for item in resp.json().get("items", []):
             s = item.get("statistics", {})
             sn = item.get("snippet", {})
+            cd = item.get("contentDetails", {})
             thumbnails = sn.get("thumbnails", {})
             thumb = (thumbnails.get("maxres") or thumbnails.get("high") or thumbnails.get("medium") or {}).get("url", "")
+            dur = cd.get("duration", "PT0S")
+            h = re.search(r"(\d+)H", dur)
+            m_ = re.search(r"(\d+)M", dur)
+            s2 = re.search(r"(\d+)S", dur)
+            duration_sec = (int(h.group(1)) * 3600 if h else 0) + \
+                           (int(m_.group(1)) * 60 if m_ else 0) + \
+                           (int(s2.group(1)) if s2 else 0)
             videos.append({
                 "id": item["id"],
                 "title": sn.get("title", ""),
@@ -53,6 +61,7 @@ class YouTubeService:
                 "view_count": int(s.get("viewCount", 0)),
                 "like_count": int(s.get("likeCount", 0)),
                 "comment_count": int(s.get("commentCount", 0)),
+                "duration_sec": duration_sec,
                 "url": f"https://www.youtube.com/watch?v={item['id']}",
             })
 
