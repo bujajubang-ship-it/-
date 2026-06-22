@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260527" />
+  <link rel="stylesheet" href="style.css?v=20260622a" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -934,18 +934,55 @@
         <div class="pl-topbar">
           <div>
             <div class="pl-page-title">📋 콘텐츠 파이프라인</div>
-            <div class="pl-page-sub">촬영 완료된 영상들을 단계별로 추적하고 편집자 협업을 관리합니다</div>
+            <div class="pl-page-sub">기획부터 편집·업로드까지 영상을 단계별로 추적합니다</div>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
-            <button class="pl-cal-toggle-btn" id="pl-opt-toggle-btn" onclick="toggleOptimize()">🔧 기존 영상 최적화</button>
-            <button class="pl-cal-toggle-btn" id="pl-cal-toggle-btn" onclick="toggleCalendar()">📅 업로드 일정</button>
-            <button class="pl-add-btn" onclick="openVideoModal()">+ 영상 추가</button>
+            <button class="pl-add-btn plan" onclick="openVideoModal(null,'plan')">+ 기획 영상추가</button>
+            <button class="pl-add-btn" onclick="openVideoModal(null,'edit')">+ 편집 영상 추가</button>
           </div>
         </div>
-        <div class="pl-stage-summary" id="pl-stage-summary"></div>
+        <!-- ===== 1) 업로드 일정 달력 ===== -->
+        <div class="pl-block">
+          <div class="pl-block-title">📅 업로드 일정</div>
+          <div class="pl-calendar-panel" id="pl-calendar-panel">
+            <div class="pl-cal-top">
+              <div class="pl-cal-nav-bar">
+                <button class="pl-cal-nav" onclick="changeCalendarMonth(-1)">‹</button>
+                <span class="pl-cal-month-title" id="pl-cal-month-title"></span>
+                <button class="pl-cal-nav" onclick="changeCalendarMonth(1)">›</button>
+              </div>
+              <div class="pl-cal-legend">
+                <span class="pl-cal-legend-item" style="background:#dbeafe;color:#1e40af;border:1px solid #1e40af40">미드폼</span>
+                <span class="pl-cal-legend-item" style="background:#fed7aa;color:#c2410c;border:1px solid #c2410c40">숏폼</span>
+              </div>
+            </div>
+            <div class="pl-cal-dow-row">
+              <div class="pl-cal-dow sun">일</div><div class="pl-cal-dow">월</div>
+              <div class="pl-cal-dow">화</div><div class="pl-cal-dow">수</div>
+              <div class="pl-cal-dow">목</div><div class="pl-cal-dow">금</div>
+              <div class="pl-cal-dow sat">토</div>
+            </div>
+            <div id="pl-cal-grid"></div>
+          </div>
+        </div>
 
-        <!-- 기존 영상 최적화 체크리스트 패널 -->
-        <div class="pl-opt-panel" id="pl-opt-panel" style="display:none">
+        <!-- ===== 2) 기획 단계 영상 (촬영 전) ===== -->
+        <div class="pl-block">
+          <div class="pl-block-title">🎬 기획 단계 영상 <span class="pl-block-sub">(촬영 전)</span></div>
+          <div class="plan-sticky-q">👀 내가 시청자라도 이거 누르고 싶을까?</div>
+          <div id="pl-plan-list"></div>
+        </div>
+
+        <!-- ===== 3) 편집 단계 영상 ===== -->
+        <div class="pl-block">
+          <div class="pl-block-title">✂️ 편집 단계 영상</div>
+          <div class="pl-stage-summary" id="pl-stage-summary"></div>
+          <div class="pl-controls" id="pl-controls"></div>
+          <div class="pl-kanban" id="pl-kanban"></div>
+        </div>
+
+        <!-- ===== 4) 기존 영상 최적화 ===== -->
+        <div class="pl-opt-panel" id="pl-opt-panel">
           <div class="pl-opt-header">
             <div>
               <span style="font-weight:700;font-size:15px">🔧 기존 영상 최적화 체크리스트</span>
@@ -969,31 +1006,6 @@
             </div>
           </div>
         </div>
-
-        <!-- 업로드 일정 달력 -->
-        <div class="pl-calendar-panel" id="pl-calendar-panel">
-          <div class="pl-cal-top">
-            <div class="pl-cal-nav-bar">
-              <button class="pl-cal-nav" onclick="changeCalendarMonth(-1)">‹</button>
-              <span class="pl-cal-month-title" id="pl-cal-month-title"></span>
-              <button class="pl-cal-nav" onclick="changeCalendarMonth(1)">›</button>
-            </div>
-            <div class="pl-cal-legend">
-              <span class="pl-cal-legend-item" style="background:#dbeafe;color:#1e40af;border:1px solid #1e40af40">미드폼</span>
-              <span class="pl-cal-legend-item" style="background:#fed7aa;color:#c2410c;border:1px solid #c2410c40">숏폼</span>
-            </div>
-          </div>
-          <div class="pl-cal-dow-row">
-            <div class="pl-cal-dow sun">일</div><div class="pl-cal-dow">월</div>
-            <div class="pl-cal-dow">화</div><div class="pl-cal-dow">수</div>
-            <div class="pl-cal-dow">목</div><div class="pl-cal-dow">금</div>
-            <div class="pl-cal-dow sat">토</div>
-          </div>
-          <div id="pl-cal-grid"></div>
-        </div>
-
-        <div class="pl-controls" id="pl-controls"></div>
-        <div class="pl-kanban" id="pl-kanban"></div>
       </div>
 
       <!-- 영상 추가/수정 모달 -->
@@ -1056,7 +1068,7 @@
 
   </main>
 
-  <script src="app.js?v=20260527"></script>
+  <script src="app.js?v=20260622a"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

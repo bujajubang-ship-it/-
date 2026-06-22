@@ -2563,7 +2563,7 @@ let plCollapsed = new Set(JSON.parse(localStorage.getItem('pl_collapsed') || '[]
 let plGroupIdMap = {}; // 그룹키 → [id, ...] 맵 (renderKanban에서 채움)
 
 function collapseAll() {
-  plVideos.forEach(v => plCollapsed.add(v.id));
+  editVideosList().forEach(v => plCollapsed.add(v.id));
   localStorage.setItem('pl_collapsed', JSON.stringify([...plCollapsed]));
   renderKanban();
 }
@@ -2591,16 +2591,9 @@ function toggleCalendar() {
 }
 
 function applyCalendarLayout() {
+  // 달력은 항상 표시 (토글 버튼 제거됨)
   const panel = document.getElementById('pl-calendar-panel');
-  const btn   = document.getElementById('pl-cal-toggle-btn');
-  if (!panel) return;
-  if (plShowCalendar) {
-    panel.style.display = 'flex';
-    btn && btn.classList.add('active');
-  } else {
-    panel.style.display = 'none';
-    btn && btn.classList.remove('active');
-  }
+  if (panel) panel.style.display = 'flex';
 }
 
 function changeCalendarMonth(dir) {
@@ -2671,11 +2664,13 @@ function toggleCollapse(id) {
 async function loadPipeline() {
   const res = await fetch('/api/pipeline');
   plVideos = await res.json();
+  renderPlanVideos();
   renderPipelineSummary();
   renderGroupControls();
   renderKanban();
   applyCalendarLayout();
   renderCalendar();
+  loadOptimizeList();
 }
 
 function plGroupField() {
@@ -2716,7 +2711,7 @@ function renderGroupControls() {
   if (plGroupBy) {
     const field = plGroupField();
     const stageOrder = PIPELINE_STAGES.map(s => s.key);
-    let vals = [...new Set(plVideos.map(v => v[field] || '미지정'))];
+    let vals = [...new Set(editVideosList().map(v => v[field] || '미지정'))];
     if (plGroupBy === 'stage') vals.sort((a, b) => stageOrder.indexOf(a) - stageOrder.indexOf(b));
     const chips = vals.map(val => {
       const stage = plGroupBy === 'stage' ? PIPELINE_STAGES.find(s => s.key === val) : null;
@@ -2748,7 +2743,7 @@ function renderGroupControls() {
 function renderPipelineSummary() {
   const counts = {};
   PIPELINE_STAGES.forEach(s => counts[s.key] = 0);
-  plVideos.forEach(v => { if (counts[v.stage] !== undefined) counts[v.stage]++; });
+  editVideosList().forEach(v => { if (counts[v.stage] !== undefined) counts[v.stage]++; });
   document.getElementById('pl-stage-summary').innerHTML = PIPELINE_STAGES.map(s => `
     <div class="pl-sum-chip" style="background:${s.bg};border-color:${s.color}20;color:${s.color}">
       <span>${s.emoji}</span>
@@ -2760,16 +2755,17 @@ function renderPipelineSummary() {
 
 function renderKanban() {
   const el = document.getElementById('pl-kanban');
-  if (!plVideos.length) {
-    el.innerHTML = '<div class="pl-empty">아직 추가된 영상이 없습니다.<br>우상단 <strong>+ 영상 추가</strong>를 눌러 시작하세요.</div>';
+  const baseVideos = editVideosList();
+  if (!baseVideos.length) {
+    el.innerHTML = '<div class="pl-empty">아직 편집 단계 영상이 없습니다.<br>우상단 <strong>+ 편집 영상 추가</strong>를 눌러 시작하세요.</div>';
     return;
   }
 
   // 필터 적용
   const field = plGroupField();
   const videos = plFilterVal
-    ? plVideos.filter(v => (v[field] || '미지정') === plFilterVal)
-    : plVideos;
+    ? baseVideos.filter(v => (v[field] || '미지정') === plFilterVal)
+    : baseVideos;
 
   if (!videos.length) {
     el.innerHTML = '<div class="pl-empty">조건에 맞는 영상이 없습니다.</div>';
@@ -2876,22 +2872,32 @@ function escHtml(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function openVideoModal(id = null, defaultStage = 'planning') {
-  document.getElementById('pl-modal-title').textContent = id ? '영상 수정' : '영상 추가';
-  document.getElementById('pl-edit-id').value = id || '';
-  if (id) {
-    const v = plVideos.find(x => x.id === id);
+function openVideoModal(id = null, track = 'edit') {
+  const editing = !!id;
+  let v = null;
+  if (editing) {
+    v = plVideos.find(x => x.id === id);
     if (!v) return;
+    track = isPlanStage(v.stage) ? 'plan' : 'edit';
+  }
+  const stages = track === 'plan' ? PLAN_STEPS : PIPELINE_STAGES;
+  document.getElementById('pl-modal-title').textContent =
+    editing ? '영상 수정' : (track === 'plan' ? '기획 영상 추가' : '편집 영상 추가');
+  document.getElementById('pl-edit-id').value = id || '';
+  // 단계 select 옵션을 트랙에 맞게 재구성
+  const stageSel = document.getElementById('pl-f-stage');
+  stageSel.innerHTML = stages.map(s => `<option value="${s.key}">${s.emoji} ${s.label}</option>`).join('');
+  if (editing) {
     document.getElementById('pl-f-title').value = v.title;
     document.getElementById('pl-f-type').value = v.content_type;
-    document.getElementById('pl-f-stage').value = v.stage;
+    stageSel.value = v.stage;
     document.getElementById('pl-f-editor').value = v.editor || '';
     document.getElementById('pl-f-date').value = v.planned_date || '';
     document.getElementById('pl-f-notes').value = v.notes || '';
   } else {
     document.getElementById('pl-f-title').value = '';
     document.getElementById('pl-f-type').value = '미드폼';
-    document.getElementById('pl-f-stage').value = defaultStage;
+    stageSel.value = track === 'plan' ? 'pick' : 'editing';
     document.getElementById('pl-f-editor').value = '';
     document.getElementById('pl-f-date').value = '';
     document.getElementById('pl-f-notes').value = '';
@@ -3237,12 +3243,11 @@ function toggleOptimize() {
 }
 
 function applyOptimizeVisibility() {
+  // 최적화 패널은 항상 표시 (토글 버튼 제거됨)
   const panel = document.getElementById('pl-opt-panel');
-  const btn   = document.getElementById('pl-opt-toggle-btn');
   if (!panel) return;
-  panel.style.display = plShowOptimize ? 'block' : 'none';
-  if (btn) btn.classList.toggle('active', plShowOptimize);
-  if (plShowOptimize) loadOptimizeList();
+  panel.style.display = 'block';
+  loadOptimizeList();
 }
 
 async function loadOptimizeList() {
@@ -3381,4 +3386,288 @@ const _origLoadPipeline = typeof loadPipeline === 'function' ? loadPipeline : nu
 function loadPipelineWithOptimize() {
   if (_origLoadPipeline) _origLoadPipeline();
   applyOptimizeVisibility();
+}
+
+/* ============================================================
+   🎬 영상 기획 단계 (촬영 전) — 영상별 단계 추적 트랙
+   - PLAN_STEPS(7단계)를 영상별 stage로 사용 (pipeline 테이블 재사용)
+   - 각 기획 영상 행: 7단계 스테퍼 + ⓘ 가이드(기본 접힘, 열면 표시)
+   ============================================================ */
+const PLAN_STEPS = [
+  {
+    key: 'pick', emoji: '🔍', label: '영상 고르기', color: '#6366f1', bg: '#eef2ff',
+    tag: '잘 된 영상 하나 찾아서 본보기로 삼기',
+    detail: `
+      <div class="plan-block">
+        <div class="plan-block-t">🎯 본보기로 삼을 영상 1개 고르기</div>
+        <ul class="plan-ul">
+          <li><b>썸끝</b>에 내 키워드를 넣고 검색해요 <span class="plan-eg">예: 간헐적 단식</span></li>
+          <li>썸네일이 잘 된 순서로 나와요. 그중 제일 마음에 드는 영상 <b>1개</b>를 골라요.</li>
+          <li>시트에 <b>날짜 / 영상 링크 / 키워드</b>를 적어둬요.</li>
+        </ul>
+      </div>`
+  },
+  {
+    key: 'analyze', emoji: '🔬', label: '영상 뜯어보기', color: '#8b5cf6', bg: '#f5f3ff',
+    tag: '왜 잘 됐는지 3가지로 살펴보기',
+    detail: `
+      <div class="plan-three">
+        <div class="plan-three-item">
+          <div class="t3-h">① 썸네일 보기 — 왜 눌렀을까?</div>
+          <p>무슨 주제인가? 글씨 때문인가 그림 때문인가, 어떤 고민을 풀어줘서 누른 걸까 살펴봐요.</p>
+          <span class="plan-gpt">잘 모르겠으면 썸네일 사진을 <b>GPT</b>에 넣고 "이 썸네일 주제랑 누른 이유 알려줘" → 나온 답을 내가 한번 점검해요.</span>
+        </div>
+        <div class="plan-three-item">
+          <div class="t3-h">② 도입부 보기 — 어떻게 끌었을까?</div>
+          <p>영상 앞 <b>30초</b>를 문장 단위로 받아 적어요. 무슨 말로 "어? 궁금한데?"를 만들었나, 어떻게 "이 사람 믿을 만하네"를 보여줬나 살펴봐요.</p>
+          <span class="plan-gpt">잘 모르겠으면 도입부 글을 <b>GPT</b>에 넣고 "도입부 어떻게 짠 건지 알려줘" → 점검.</span>
+        </div>
+        <div class="plan-three-item">
+          <div class="t3-h">③ 댓글 보기 — 진짜 공감 포인트 찾기</div>
+          <p>· 댓글을 전부 복사해 <b>GPT</b>에 넣고 "이 영상 누가 보고, 왜 봤는지 알려줘"<br>
+          · 좋아요 많은(댓글 몰린) 부분 = 사람들이 꽂힌 곳 → 따로 메모<br>
+          · 지루해서 나갈 것 같은 부분도 메모</p>
+        </div>
+      </div>
+      <div class="plan-q-inline">👀 내가 시청자라도 이거 누르고 싶을까? — 스스로 묻고 그 이유를 적어요</div>
+      <div class="plan-block">
+        <div class="plan-block-t">💬 '간헐적 단식' 댓글에서 나온 진짜 속마음 (이렇게 구체적으로 뽑아내기)</div>
+        <div class="plan-voice-wrap">
+          <span class="plan-voice">당뇨·혈압 수치가 무섭다</span>
+          <span class="plan-voice">너무 많이 먹는다는 죄책감</span>
+          <span class="plan-voice">해보고 싶은데 실패할까 봐 겁난다</span>
+          <span class="plan-voice">해봤더니 진짜 효과 봤다는 후기</span>
+          <span class="plan-voice">나이 들수록 피부·기억력 걱정</span>
+          <span class="plan-voice">정보 많아 헷갈렸는데 이건 믿음이 간다</span>
+        </div>
+        <span class="plan-gpt">→ 불안·죄책감·기대·실패경험 같은 <b>속마음</b>을 구체적으로 뽑아내는 게 목표예요.</span>
+      </div>`
+  },
+  {
+    key: 'collect', emoji: '📚', label: '비슷한 영상 모으기', color: '#ec4899', bg: '#fdf2f8',
+    tag: '본보기 1개론 부족 — 2~3개 더 모아 합치기',
+    detail: `
+      <div class="plan-block">
+        <div class="plan-block-t">왜 하나면 안 될까?</div>
+        <ul class="plan-ul">
+          <li>영상 한 개만 따라 하면 거기서 <b>못 벗어나요</b>.</li>
+          <li>비슷한 영상 2~3개를 더 찾아 각자 좋은 점만 섞으면, 원본보다 더 좋은 내 영상이 나와요.</li>
+        </ul>
+        <div class="plan-block-t" style="margin-top:10px">하는 법</div>
+        <ul class="plan-ul">
+          <li><b>핫비디오</b>, <b>뷰트랩 레터</b>에서 비슷한 주제 영상을 찾아요.</li>
+          <li>"비슷한 영상" 판단 기준: 그 영상 썸네일 문구를 내 제목에 넣어봤을 때 ① 누르고 싶은 이유가 그대로 살아있고 ② 도입부 흐름이 안 어색하면 → 같은 주제로 봐요.</li>
+          <li>고른 2~3개의 썸네일·도입부·댓글을 보고 <b>각자 좋은 점만</b> 골라 섞어요.</li>
+        </ul>
+      </div>
+      <div class="plan-block">
+        <div class="plan-block-t">🔀 흐름 예시 — 주제 "간헐적 단식"</div>
+        <div class="plan-flow">
+          <div class="plan-flow-box origin"><span class="pf-t">본보기 영상</span><span class="pf-d">"단식하면 몸에 생기는 변화"</span></div>
+          <div class="plan-flow-arrow">↓ 같은 속마음('나도 하면 효과 있을까?')을 건드리는 비슷한 영상 찾기</div>
+          <div class="plan-flow-grid">
+            <div class="plan-flow-box plan-flow-ref"><span class="pf-t">비슷한 A</span><span class="pf-d">"굶었더니 생긴 놀라운 변화"<br>→ 살 빠진 전후 <b>숫자</b>가 강점</span></div>
+            <div class="plan-flow-box plan-flow-ref"><span class="pf-t">비슷한 B</span><span class="pf-d">"공복 16시간 뒤 내 몸"<br>→ <b>시간대별</b> 변화 설명이 강점</span></div>
+            <div class="plan-flow-box plan-flow-ref"><span class="pf-t">비슷한 C</span><span class="pf-d">"단식 일주일 해봤다"<br>→ 직접 해본 <b>후기</b> 도입부가 강점</span></div>
+          </div>
+          <div class="plan-flow-arrow">↓ A의 숫자 + B의 시간대 설명 + C의 후기 도입부를 섞기</div>
+          <div class="plan-flow-box result"><span class="pf-t">내 영상 (한 단계 업그레이드)</span><span class="pf-d">"간헐적 단식 3일차, 내 몸에 생긴 일 (숫자 공개)"</span></div>
+        </div>
+      </div>`
+  },
+  {
+    key: 'copy', emoji: '✏️', label: '제목·썸네일 문구', color: '#f97316', bg: '#fff7ed',
+    tag: '문구 뽑고 끝내지 말고 4가지로 더 다듬기',
+    detail: `
+      <div class="plan-block">
+        <div class="plan-block-t">먼저 문구를 뽑은 뒤, 더 좋은 표현이 없나 4가지로 바꿔봐요</div>
+        <div class="plan-ways">
+          <div class="plan-way"><b>방법1</b> 잘 된 영상 문구를 그대로 가져와 써보기</div>
+          <div class="plan-way"><b>방법2</b> 어려운 단어를 쉬운 말로 바꿔보기</div>
+          <div class="plan-way"><b>방법3</b> 더 많은 사람이 걸리도록 단어 범위를 넓히기</div>
+          <div class="plan-way"><b>방법4</b> 눈길 끄는 꾸밈말을 붙여보기</div>
+        </div>
+      </div>
+      <div class="plan-q-inline">👀 바꿔본 것 중 "내가 시청자라도 이 문구 누르고 싶을까?" → 제일 끌리는 걸로 확정</div>
+      <div class="plan-block">
+        <div class="plan-block-t">✅ 확정 예시</div>
+        <ul class="plan-ul">
+          <li>썸네일 문구: <b>간헐적 단식 고민이라면 꼭 시청하세요!</b></li>
+          <li>제목: <b>단식! 굶을 때 벌어지는 놀라운 효과</b></li>
+        </ul>
+      </div>`
+  },
+  {
+    key: 'thumb', emoji: '🖼️', label: '썸네일 이미지', color: '#eab308', bg: '#fefce8',
+    tag: '누르고 싶은 이미지 + 최소 3개',
+    detail: `
+      <div class="plan-block">
+        <div class="plan-block-t">🎨 만드는 순서</div>
+        <ul class="plan-ul">
+          <li>어떤 느낌으로 갈지 먼저 정해요 <span class="plan-eg">예: 살 빠진 전후를 숫자로, 믿음 가는 얼굴 넣기</span></li>
+          <li><b>GPT</b>에 "이 썸네일, 더 누르고 싶게 만들 이미지 추천해줘" 하고 아이디어 받기</li>
+          <li><b>썸네일 템플릿 / 핫비디오 구조</b>를 참고해 완성</li>
+        </ul>
+      </div>
+      <div class="plan-warn">⚠️ 무조건 3개 이상 만들기 — 클릭이 안 나오면 다음 썸네일로 바꿔 끼우려고</div>
+      <div class="plan-block">
+        <div class="plan-block-t">🔑 썸네일에 꼭 들어가야 할 3가지</div>
+        <div class="plan-thumb3">
+          <div class="plan-thumb3-item" style="border-color:#f59e0b;background:#fffbeb;color:#92400e">
+            <span class="pt3-n">❓</span><span class="pt3-t">왜 봐야 하는지</span>궁금증
+          </div>
+          <div class="plan-thumb3-item" style="border-color:#ec4899;background:#fdf2f8;color:#9d174d">
+            <span class="pt3-n">🙋</span><span class="pt3-t">누가 말하는지</span>얼굴 넣기 = 믿음
+          </div>
+          <div class="plan-thumb3-item" style="border-color:#22c55e;background:#f0fdf4;color:#166534">
+            <span class="pt3-n">🎁</span><span class="pt3-t">보면 뭘 얻는지</span>결과
+          </div>
+        </div>
+        <span class="plan-gpt">단식 예시 — 그래프만 있으면 "나랑 무슨 상관?" 싶어 약해요. <b>얼굴 + 시간별 변화(12·16·24·72시간) + 몸 속 변하는 그림</b>을 넣으면 누르고 싶어져요.</span>
+      </div>
+      <div class="plan-links">
+        <a class="plan-link-btn drive" href="https://drive.google.com/drive/folders/1xGxnONHVS5f-KE13Fn1RctuWTlvYDhlH?usp=drive_link" target="_blank" rel="noopener">📁 썸네일 이미지 예시</a>
+        <a class="plan-link-btn drive" href="https://drive.google.com/drive/folders/1Qt99HM6ExWbh0_56ei6fAEiKzr1nS4Mk?usp=drive_link" target="_blank" rel="noopener">📁 썸네일 문장(문구) 예시</a>
+      </div>`
+  },
+  {
+    key: 'intro', emoji: '🪝', label: '도입부 쓰기', color: '#06b6d4', bg: '#ecfeff',
+    tag: '잘 된 도입부 틀을 가져와 내 주제로 갈아끼우기',
+    detail: `
+      <div class="plan-block">
+        <div class="plan-block-t">✍️ 하는 법</div>
+        <ul class="plan-ul">
+          <li><b>뷰트랩 AI</b>로 내 영상과 속마음이 비슷한 영상의 도입부를 찾아요. <span class="plan-eg">제목에서 주어를 빼고 검색하면 비슷한 게 잘 나옴</span></li>
+          <li><b>GPT</b>에 "이 도입부 틀에 맞춰서 [내 주제]로 도입부 써줘"</li>
+          <li>GPT 티 나는(어색한) 부분은 <b>내 이야기</b>로 바꿔요.</li>
+          <li>여러 개 써보고 제일 자연스러운 걸 골라요.</li>
+        </ul>
+      </div>
+      <div class="plan-block">
+        <div class="plan-block-t">🧩 틀 가져오기 예시</div>
+        <ul class="plan-ul">
+          <li>잘 된 영상 틀: 누구나 겪는 일(멍 때리기) → 과학 설명 → "원래 인간이 그렇다" → 웃음 포인트</li>
+          <li>내 주제에 끼우기: 누구나 겪는 일(배고프고 짜증남) → 과학 설명(몸이 지방 태우는 모드로) → "원래 옛날 인간은 늘 배불리 못 살았다" → 웃음 포인트</li>
+          <li>= <b>"단식하면 짜증나는 건 고장난 게 아니라 원래 몸 설정이 튀어나오는 것뿐이다"</b></li>
+        </ul>
+      </div>`
+  },
+  {
+    key: 'body', emoji: '📝', label: '본문 쓰기', color: '#22c55e', bg: '#f0fdf4',
+    tag: '원고 도우미로 본론까지 완성',
+    detail: `
+      <div class="plan-block">
+        <div class="plan-block-t">✍️ 하는 법</div>
+        <ul class="plan-ul">
+          <li><b>유튜브 원고 도우미(GPT)</b>로 본문을 써요. 도입부에서 궁금하게 만든 걸 본론에서 풀어주는 흐름으로.</li>
+          <li>보다가 나가지 않게: 갑자기 어려운 원리부터 들이대지 말고 <b>"이런 문제 있죠?"</b>로 시작.</li>
+          <li>추천 흐름: 문제 보여주기 → 왜 그런지 설명 → 해결법 → 하면 뭐가 좋은지</li>
+          <li>다 쓰면 <b>트레이너 검토</b> 받고 → 촬영 단계로 넘어가요.</li>
+        </ul>
+      </div>
+      <div class="plan-links">
+        <a class="plan-link-btn tool" href="https://chatgpt.com/g/g-67d2d80d9d6481918d1aba2b476fb03e-yutyubeu-weongo-jejag-doumi" target="_blank" rel="noopener">🤖 유튜브 원고 제작 도우미</a>
+      </div>`
+  },
+];
+
+// 기획 단계: PLAN_STEPS를 단계로 사용하는 per-video 트랙 (영상별 진행 단계 추적)
+const PLAN_STAGE_KEYS = PLAN_STEPS.map(s => s.key);
+function isPlanStage(stage) { return PLAN_STAGE_KEYS.includes(stage); }
+function planVideosList() { return plVideos.filter(v => isPlanStage(v.stage)); }
+function editVideosList() { return plVideos.filter(v => !isPlanStage(v.stage)); }
+
+// 가이드(ⓘ) 펼침 상태 — 기본은 접힘, 열면 보이게
+let planGuideOpen = new Set();
+
+function togglePlanGuide(id) {
+  event.stopPropagation();
+  if (planGuideOpen.has(id)) planGuideOpen.delete(id); else planGuideOpen.add(id);
+  renderPlanVideos();
+}
+
+async function setPlanStage(id, idx) {
+  if (idx < 0 || idx >= PLAN_STEPS.length) return;
+  await fetch(`/api/pipeline/${id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stage: PLAN_STEPS[idx].key })
+  });
+  loadPipeline();
+}
+
+async function movePlanStage(id, dir) {
+  const v = plVideos.find(x => x.id === id);
+  if (!v) return;
+  const idx = PLAN_STEPS.findIndex(s => s.key === v.stage);
+  await setPlanStage(id, idx + dir);
+}
+
+function renderPlanVideos() {
+  const el = document.getElementById('pl-plan-list');
+  if (!el) return;
+  const vids = planVideosList();
+  if (!vids.length) {
+    el.innerHTML = '<div class="pl-empty">아직 기획 중인 영상이 없습니다.<br>우상단 <strong>+ 기획 영상추가</strong>를 눌러 시작하세요.</div>';
+    return;
+  }
+  el.innerHTML = vids.map(v => planRow(v)).join('');
+}
+
+function planRow(v) {
+  const tc = TYPE_COLORS[v.content_type] || TYPE_COLORS['기타'];
+  let curIdx = PLAN_STEPS.findIndex(s => s.key === v.stage);
+  if (curIdx < 0) curIdx = 0;
+  const cur = PLAN_STEPS[curIdx];
+  const dateStr = v.planned_date ? `📅 ${v.planned_date}` : '';
+  const guideOpen = planGuideOpen.has(v.id);
+
+  const stepper = PLAN_STEPS.map((s, i) => {
+    const done = i < curIdx;
+    const active = i === curIdx;
+    const dotStyle = active
+      ? `background:${s.color};border-color:${s.color};color:#fff;box-shadow:0 0 0 4px ${s.color}40,0 4px 14px ${s.color}70`
+      : done
+        ? `background:${s.color}22;border-color:${s.color};color:${s.color}`
+        : 'background:#f3f4f6;border-color:#d1d5db;color:#9ca3af';
+    const labelStyle = active ? `color:${s.color};font-weight:800;font-size:11px` : done ? `color:${s.color}` : 'color:#9ca3af';
+    const lineStyle = (done || active) ? `background:${s.color}` : 'background:#e5e7eb';
+    const dot = done ? '✓' : s.emoji;
+    return `
+      <div class="pl-step-wrap">
+        <button class="pl-step-dot${active ? ' pl-step-dot-active' : ''}" style="${dotStyle}" onclick="event.stopPropagation();setPlanStage(${v.id},${i})" title="${s.label} 단계로 이동">${dot}</button>
+        <div class="pl-step-label" style="${labelStyle}">${s.label}</div>
+      </div>
+      ${i < PLAN_STEPS.length - 1 ? `<div class="pl-step-line" style="${lineStyle}"></div>` : ''}`;
+  }).join('');
+
+  const guideHtml = guideOpen ? `
+    <div class="plan-detail" onclick="event.stopPropagation()">
+      <div class="plan-detail-head" style="background:linear-gradient(90deg, ${cur.color}, ${cur.color}cc)">
+        <span class="plan-dh-title">${cur.emoji} ${curIdx + 1}. ${cur.label}</span>
+        <span class="plan-dh-tag">— ${cur.tag}</span>
+        <div class="plan-dh-nav">
+          <button class="pl-arrow" onclick="event.stopPropagation();movePlanStage(${v.id},-1)" ${curIdx > 0 ? '' : 'disabled'}>← 이전</button>
+          <button class="pl-arrow" onclick="event.stopPropagation();movePlanStage(${v.id},1)" ${curIdx < PLAN_STEPS.length - 1 ? '' : 'disabled'}>다음 →</button>
+        </div>
+      </div>
+      <div class="plan-detail-body">${cur.detail}</div>
+    </div>` : '';
+
+  return `
+  <div class="pl-row plan-vrow" onclick="openVideoModal(${v.id})">
+    <div class="pl-row-head">
+      <div class="pl-row-left">
+        <span class="pl-type-badge" style="background:${tc.bg};color:${tc.color}">${v.content_type}</span>
+        <span class="pl-row-title">${escHtml(v.title)}</span>
+        ${dateStr ? `<span class="pl-row-meta">${dateStr}</span>` : ''}
+      </div>
+      <div class="pl-row-actions" onclick="event.stopPropagation()">
+        <span class="pl-cur-stage" style="color:${cur.color};background:${cur.bg}">${cur.emoji} ${cur.label}</span>
+        <button class="pl-info-toggle${guideOpen ? ' open' : ''}" onclick="togglePlanGuide(${v.id})" title="단계 가이드 보기">ⓘ 가이드</button>
+        <button class="pl-del" onclick="event.stopPropagation();deleteVideo(${v.id})">🗑</button>
+      </div>
+    </div>
+    <div class="pl-stepper">${stepper}</div>
+    ${guideHtml}
+  </div>`;
 }

@@ -927,6 +927,36 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   cursor: pointer; white-space: nowrap; transition: opacity .15s;
 }
 .pl-add-btn:hover { opacity: .85; }
+.pl-add-btn.plan { background: #6366f1; }
+
+/* ── 파이프라인 블록 섹션 ── */
+.pl-block { margin: 18px 0; }
+.pl-block-title {
+  font-size: 16px; font-weight: 800; color: #111827;
+  margin: 0 0 10px; display: flex; align-items: center; gap: 6px;
+}
+.pl-block-sub { font-size: 12px; font-weight: 600; color: #9ca3af; }
+
+/* ── 기획 영상 행: 가이드(ⓘ) 토글 ── */
+.pl-info-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 700; cursor: pointer;
+  background: #eef2ff; color: #6366f1; border: 1.5px solid #c7d2fe;
+  padding: 4px 10px; border-radius: 16px; white-space: nowrap;
+}
+.pl-info-toggle:hover { background: #e0e7ff; }
+.pl-info-toggle.open { background: #6366f1; color: #fff; border-color: #6366f1; }
+
+/* 기획 영상 행 안의 가이드 패널 (접힘→열림) */
+.plan-vrow .plan-detail { margin: 12px 0 2px; }
+.plan-dh-nav { margin-left: auto; display: flex; gap: 6px; }
+.plan-dh-nav .pl-arrow {
+  width: auto; height: auto; padding: 5px 12px; border-radius: 16px;
+  background: rgba(255,255,255,.2); color: #fff; border: 1.5px solid rgba(255,255,255,.5);
+  font-size: 12px; font-weight: 700; white-space: nowrap;
+}
+.plan-dh-nav .pl-arrow:hover:not(:disabled) { background: #fff; color: #111827; border-color: #fff; }
+.plan-dh-nav .pl-arrow:disabled { opacity: .4; cursor: default; }
 
 /* ── 요약 칩 ── */
 .pl-stage-summary { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -1719,4 +1749,197 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   background: #fbbf24;
   color: #fff;
   border-color: #fbbf24;
+}
+
+/* ============================================================
+   🎬 영상 기획 단계 (촬영 전) — 신규 컴포넌트 전용 스타일
+   (기존 .pl-* 스타일은 일절 수정하지 않음. plan-* 네임스페이스만 사용)
+   ============================================================ */
+.plan-section {
+  background: linear-gradient(180deg, #fafaff 0%, #fff 100%);
+  border: 1.5px solid #e0e7ff; border-radius: 14px;
+  padding: 0; display: flex; flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 2px 14px rgba(99,102,241,.06);
+}
+
+/* 상단 고정 질문 */
+.plan-sticky-q {
+  position: sticky; top: 0; z-index: 5;
+  background: linear-gradient(90deg, #4f46e5, #7c3aed);
+  color: #fff; font-size: 14px; font-weight: 800;
+  padding: 11px 18px; text-align: center; letter-spacing: -0.2px;
+  box-shadow: 0 2px 8px rgba(79,70,229,.25);
+}
+
+/* 헤더 (기획 배지 + 제목 + 진행률) */
+.plan-header {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 14px 18px 6px;
+}
+.plan-badge {
+  font-size: 11px; font-weight: 800; padding: 3px 10px; border-radius: 7px;
+  background: #eef2ff; color: #6366f1; border: 1.5px solid #6366f140;
+  white-space: nowrap;
+}
+.plan-title { font-size: 17px; font-weight: 800; color: #1e1b4b; }
+.plan-title .plan-sub { font-size: 12px; font-weight: 600; color: #8b8ba7; }
+.plan-progress {
+  margin-left: auto; font-size: 12px; font-weight: 800;
+  color: #4f46e5; background: #eef2ff; padding: 4px 12px; border-radius: 14px;
+}
+
+/* 가로 스테퍼 (기존 pl-stepper 톤 통일) */
+.plan-stepper {
+  display: flex; align-items: flex-start;
+  padding: 8px 18px 18px; overflow-x: auto;
+}
+.plan-node {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  flex-shrink: 0; cursor: pointer; background: none; border: none;
+  padding: 0; width: 78px;
+}
+.plan-dot {
+  width: 38px; height: 38px; border-radius: 50%; border: 2.5px solid;
+  font-size: 16px; display: flex; align-items: center; justify-content: center;
+  transition: box-shadow .14s, transform .12s; position: relative;
+}
+.plan-node:hover .plan-dot { transform: translateY(-2px); }
+.plan-dot.open {
+  box-shadow: 0 0 0 4px currentColor, 0 6px 16px rgba(0,0,0,.18);
+  filter: brightness(1.02);
+}
+.plan-node-label {
+  font-size: 10px; font-weight: 700; text-align: center; line-height: 1.3;
+  word-break: keep-all;
+}
+.plan-info-i {
+  font-size: 9px; font-weight: 700; color: #9ca3af;
+  border: 1px solid #d1d5db; border-radius: 50%;
+  width: 13px; height: 13px; display: flex; align-items: center; justify-content: center;
+}
+.plan-node:hover .plan-info-i { color: #6366f1; border-color: #6366f1; }
+.plan-line {
+  flex: 1; height: 2.5px; min-width: 10px; margin-top: 18px;
+  border-radius: 2px; transition: background .3s;
+}
+
+/* 펼침 상세 패널 */
+.plan-detail {
+  margin: 0 18px 18px; border-radius: 12px;
+  border: 1.5px solid #e5e7eb; background: #fff;
+  overflow: hidden; animation: plan-slide .18s ease;
+}
+@keyframes plan-slide { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+.plan-detail-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 16px; color: #fff;
+}
+.plan-detail-head .plan-dh-title { font-size: 15px; font-weight: 800; }
+.plan-detail-head .plan-dh-tag { font-size: 12px; font-weight: 600; opacity: .92; }
+.plan-done-toggle {
+  margin-left: auto; display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 700; cursor: pointer;
+  background: rgba(255,255,255,.2); padding: 5px 12px; border-radius: 16px;
+  border: 1.5px solid rgba(255,255,255,.5); color: #fff; white-space: nowrap;
+}
+.plan-done-toggle.done { background: #fff; color: #16a34a; border-color: #fff; }
+.plan-detail-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+
+.plan-block {
+  background: #f9fafb; border: 1px solid #f0f1f3; border-radius: 10px;
+  padding: 12px 14px;
+}
+.plan-block-t { font-size: 13px; font-weight: 800; color: #111827; margin-bottom: 8px; }
+.plan-ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.plan-ul li { font-size: 13px; line-height: 1.6; color: #374151; }
+.plan-ul li b { color: #4f46e5; }
+.plan-eg {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  background: #eef2ff; color: #6366f1; padding: 1px 7px; border-radius: 6px; margin-left: 4px;
+}
+.plan-gpt {
+  display: block; font-size: 12px; color: #6b7280; line-height: 1.55;
+  background: #fff; border-left: 3px solid #c7d2fe; padding: 6px 10px;
+  border-radius: 0 6px 6px 0; margin-top: 6px;
+}
+.plan-gpt b { color: #7c3aed; }
+
+/* 3가지로 살펴보기 (2단계) */
+.plan-three { display: flex; flex-direction: column; gap: 10px; }
+.plan-three-item {
+  background: #fff; border: 1px solid #eef2ff; border-radius: 10px;
+  border-left: 4px solid #8b5cf6; padding: 10px 13px;
+}
+.plan-three-item .t3-h { font-size: 13px; font-weight: 800; color: #6d28d9; margin-bottom: 5px; }
+.plan-three-item p { margin: 0; font-size: 12.5px; line-height: 1.6; color: #374151; }
+
+/* 인라인 질문 재강조 */
+.plan-q-inline {
+  background: #fef3c7; border: 1.5px dashed #f59e0b; color: #92400e;
+  font-size: 13px; font-weight: 800; text-align: center;
+  padding: 10px 14px; border-radius: 10px;
+}
+
+/* 속마음 예시 칩 */
+.plan-voice-wrap { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.plan-voice {
+  font-size: 12px; font-weight: 600; color: #9d174d;
+  background: #fce7f3; border: 1px solid #fbcfe8; border-radius: 14px;
+  padding: 4px 11px; line-height: 1.4;
+}
+
+/* 흐름도 (3단계) */
+.plan-flow { display: flex; flex-direction: column; gap: 8px; }
+.plan-flow-box {
+  border-radius: 10px; padding: 10px 13px; font-size: 13px; line-height: 1.5;
+}
+.plan-flow-box .pf-t { font-weight: 800; font-size: 12px; display: block; margin-bottom: 2px; }
+.plan-flow-box .pf-d { font-size: 12px; color: #374151; }
+.plan-flow-box.origin { background: #eef2ff; border: 1.5px solid #6366f1; }
+.plan-flow-box.origin .pf-t { color: #4f46e5; }
+.plan-flow-ref {
+  background: #fdf2f8; border: 1px solid #fbcfe8; color: #9d174d;
+}
+.plan-flow-ref .pf-t { color: #be185d; }
+.plan-flow-box.result { background: #f0fdf4; border: 1.5px solid #22c55e; }
+.plan-flow-box.result .pf-t { color: #16a34a; }
+.plan-flow-arrow {
+  text-align: center; font-size: 12px; font-weight: 700; color: #9ca3af;
+  line-height: 1.3;
+}
+.plan-flow-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 8px; }
+
+/* 4가지 방법 (4단계) */
+.plan-ways { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px,1fr)); gap: 8px; }
+.plan-way {
+  background: #fff7ed; border: 1px solid #fed7aa; border-radius: 9px;
+  padding: 9px 12px; font-size: 12.5px; line-height: 1.55; color: #7c2d12;
+}
+.plan-way b { color: #ea580c; }
+
+/* 썸네일 꼭 들어갈 3가지 (5단계) */
+.plan-thumb3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+.plan-thumb3-item {
+  border-radius: 10px; padding: 12px 10px; text-align: center;
+  border: 2px solid; font-size: 12px; line-height: 1.5;
+}
+.plan-thumb3-item .pt3-n { font-size: 20px; display: block; margin-bottom: 4px; }
+.plan-thumb3-item .pt3-t { font-weight: 800; display: block; margin-bottom: 2px; }
+@media (max-width: 600px) { .plan-thumb3 { grid-template-columns: 1fr; } }
+
+/* 외부 링크 버튼 */
+.plan-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.plan-link-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 700; text-decoration: none;
+  padding: 9px 15px; border-radius: 10px; transition: opacity .15s, transform .12s;
+}
+.plan-link-btn:hover { opacity: .9; transform: translateY(-1px); }
+.plan-link-btn.drive { background: #fef9c3; color: #854d0e; border: 1.5px solid #fde047; }
+.plan-link-btn.tool  { background: #dcfce7; color: #166534; border: 1.5px solid #86efac; }
+
+.plan-warn {
+  background: #fef2f2; border: 1.5px solid #fecaca; color: #b91c1c;
+  font-size: 12.5px; font-weight: 700; padding: 9px 13px; border-radius: 9px; line-height: 1.5;
 }
