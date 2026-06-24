@@ -10,7 +10,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'topic', 'detail', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'chat', 'history', 'pipeline', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'topic', 'detail', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'chat', 'history', 'pipeline', 'worksheet', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -21,6 +21,13 @@ function switchTab(tab) {
   });
   if (tab === 'history') loadHistory('');
   if (tab === 'pipeline') { loadPipeline(); applyOptimizeVisibility(); }
+  if (tab === 'worksheet') loadWorksheetTab();
+}
+
+// 워크시트 탭: 진행 동기화를 위해 plVideos도 함께 로드
+async function loadWorksheetTab() {
+  try { plVideos = await (await fetch('/api/pipeline')).json(); } catch (e) {}
+  loadWorksheet();
 }
 
 // ===== 공통 유틸 =====
@@ -2661,6 +2668,31 @@ function toggleCollapse(id) {
   renderKanban();
 }
 
+// 섹션(업로드 일정 / 기획 / 편집) 표시·숨김 토글 상태
+let plSections = Object.assign(
+  { calendar: true, plan: true, worksheet: true, edit: true, optimize: true },
+  JSON.parse(localStorage.getItem('pl_sections') || '{}')
+);
+
+function toggleSection(key) {
+  plSections[key] = !plSections[key];
+  localStorage.setItem('pl_sections', JSON.stringify(plSections));
+  applySectionToggles();
+}
+
+function applySectionToggles() {
+  ['calendar', 'plan', 'edit', 'optimize'].forEach(key => {
+    const on = plSections[key] !== false;
+    const body = document.getElementById('sec-body-' + key);
+    const btn  = document.getElementById('sec-toggle-' + key);
+    if (body) body.style.display = on ? '' : 'none';
+    if (btn) {
+      btn.classList.toggle('active', on);
+      btn.textContent = on ? '표시 중' : '숨김';
+    }
+  });
+}
+
 async function loadPipeline() {
   const res = await fetch('/api/pipeline');
   plVideos = await res.json();
@@ -2671,6 +2703,7 @@ async function loadPipeline() {
   applyCalendarLayout();
   renderCalendar();
   loadOptimizeList();
+  applySectionToggles();
 }
 
 function plGroupField() {
@@ -2884,6 +2917,12 @@ function openVideoModal(id = null, track = 'edit') {
   document.getElementById('pl-modal-title').textContent =
     editing ? '영상 수정' : (track === 'plan' ? '기획 영상 추가' : '편집 영상 추가');
   document.getElementById('pl-edit-id').value = id || '';
+  // 기획 영상은 단계·편집자·예정일 칸 숨김 (기획은 항상 첫 단계에서 시작, 진행은 워크시트로 자동)
+  const isPlan = track === 'plan';
+  const fStage = document.getElementById('pl-field-stage');
+  const fEditor = document.getElementById('pl-field-row-editor');
+  if (fStage) fStage.style.display = isPlan ? 'none' : '';
+  if (fEditor) fEditor.style.display = isPlan ? 'none' : '';
   // 단계 select 옵션을 트랙에 맞게 재구성
   const stageSel = document.getElementById('pl-f-stage');
   stageSel.innerHTML = stages.map(s => `<option value="${s.key}">${s.emoji} ${s.label}</option>`).join('');
@@ -2927,7 +2966,17 @@ async function saveVideo() {
   if (editId) {
     await fetch(`/api/pipeline/${editId}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
   } else {
-    await fetch('/api/pipeline', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const r = await fetch('/api/pipeline', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    // 기획 영상이면 워크시트 행 자동 생성(같은 이름·연동)
+    if (isPlanStage(payload.stage)) {
+      try {
+        const j = await r.json();
+        if (j && j.id) {
+          await fetch('/api/worksheet', { method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ data: { videoId: j.id, name: title } }) });
+        }
+      } catch (e) {}
+    }
   }
   closeVideoModal();
   loadPipeline();
@@ -3670,4 +3719,178 @@ function planRow(v) {
     <div class="pl-stepper">${stepper}</div>
     ${guideHtml}
   </div>`;
+}
+
+
+/* ============================================================
+   📝 기획 워크시트 — 스프레드시트형 작업공간
+   - 행=영상 아이디어, 열=가이드 단계별 칸
+   - 이미지 칸: Ctrl/⌘+V 붙여넣기 또는 📎 업로드 (자동 축소 저장)
+   - 글/이미지 자동 저장 (/api/worksheet)
+   ============================================================ */
+const WS_COLS = [
+  { k: 'date',    label: '날짜',           type: 'date', hint: '시작일' },
+  { k: 'keyword', label: '① 키워드 고르기', type: 'text', hint: '썸끝에 키워드 검색' },
+  { k: 'refImg',  label: '① 본보기 영상',   type: 'img',  hint: '썸네일 잘된 영상 1개' },
+  { k: 'thumbA',  label: '② 썸네일 분석',   type: 'area', hint: '왜 눌렀나? 주제·글씨·그림·고민해결' },
+  { k: 'introA',  label: '② 도입부 분석',   type: 'area', hint: '앞 30초: 어떻게 궁금증·신뢰를 줬나' },
+  { k: 'empathy', label: '② 공감 포인트',   type: 'area', hint: '댓글 속마음(불안·죄책감·기대·후기)' },
+  { k: 'similar', label: '③ 비슷한 영상 모으기', type: 'img', hint: '2~3개 더 → 좋은 점 섞기' },
+  { k: 'titleCopy', label: '④ 제목·썸네일 문구', type: 'area', hint: '①그대로 ②쉬운말 ③범위확장 ④꾸밈말' },
+  { k: 'thumbImg',  label: '⑤ 썸네일 이미지',  type: 'img',  hint: '3개 이상! 궁금증+얼굴+결과' },
+  { k: 'introScript', label: '⑥ 도입부 원고',  type: 'area', hint: '잘된 틀 가져와 내 주제로 30초' },
+  { k: 'bodyScript',  label: '⑦ 본문 원고',    type: 'area', hint: '문제→이유→해결→이득' },
+  { k: 'memo',    label: '메모·링크',       type: 'area', hint: '영상 링크, 기타' },
+];
+let wsRows = [];
+let wsTimers = {};
+
+function _wsParse(s) { try { return JSON.parse(s || '{}'); } catch (e) { return {}; } }
+
+async function loadWorksheet() {
+  try {
+    const r = await fetch('/api/worksheet');
+    const raw = await r.json();
+    wsRows = raw.map(x => ({ id: x.id, data: _wsParse(x.data) }));
+  } catch (e) { wsRows = []; }
+  renderWorksheet();
+}
+
+async function addWsRow() {
+  await fetch('/api/worksheet', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: {} }) });
+  loadWorksheet();
+}
+
+async function deleteWsRow(id) {
+  if (!confirm('이 행을 삭제할까요?')) return;
+  await fetch(`/api/worksheet/${id}`, { method: 'DELETE' });
+  loadWorksheet();
+}
+
+// 워크시트 채움 정도 → 기획 단계(furthest filled) 계산
+function wsStageFromData(d) {
+  const has = k => { const v = d[k]; return Array.isArray(v) ? v.length > 0 : (v != null && String(v).trim() !== ''); };
+  const order = [
+    ['pick',    has('keyword') || has('refImg')],
+    ['analyze', has('thumbA') || has('introA') || has('empathy')],
+    ['collect', has('similar')],
+    ['copy',    has('titleCopy')],
+    ['thumb',   has('thumbImg')],
+    ['intro',   has('introScript')],
+    ['body',    has('bodyScript')],
+  ];
+  let stage = 'pick';
+  order.forEach(([k, f]) => { if (f) stage = k; });
+  return stage;
+}
+
+function saveWsRow(id) {
+  const row = wsRows.find(r => r.id === id); if (!row) return;
+  fetch(`/api/worksheet/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: row.data }) });
+  // 연동된 기획 영상 진행단계 자동 전진
+  if (row.data.videoId) {
+    const stage = wsStageFromData(row.data);
+    const v = plVideos.find(x => x.id === row.data.videoId);
+    if (v && v.stage !== stage) {
+      v.stage = stage;
+      fetch(`/api/pipeline/${row.data.videoId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stage }) });
+      renderPlanVideos();
+      const badge = document.getElementById('ws-stage-' + id);
+      if (badge) badge.textContent = '진행: ' + ((PLAN_STEPS.find(s => s.key === stage) || {}).label || '');
+    }
+  }
+}
+function wsDirty(id) { clearTimeout(wsTimers[id]); wsTimers[id] = setTimeout(() => saveWsRow(id), 700); }
+
+function wsOnText(id, col, val) {
+  const row = wsRows.find(r => r.id === id); if (!row) return;
+  row.data[col] = val; wsDirty(id);
+}
+
+// 이미지 축소(캔버스) → JPEG base64
+function wsShrink(dataURL, maxW = 720) {
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const sc = Math.min(1, maxW / img.width);
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      try { res(c.toDataURL('image/jpeg', 0.72)); } catch (e) { res(dataURL); }
+    };
+    img.onerror = () => res(dataURL);
+    img.src = dataURL;
+  });
+}
+async function wsAddImage(id, col, dataURL) {
+  const row = wsRows.find(r => r.id === id); if (!row) return;
+  const small = await wsShrink(dataURL);
+  if (!Array.isArray(row.data[col])) row.data[col] = [];
+  row.data[col].push(small);
+  saveWsRow(id); renderWorksheet();
+}
+function wsRemoveImage(id, col, idx) {
+  const row = wsRows.find(r => r.id === id); if (!row || !Array.isArray(row.data[col])) return;
+  row.data[col].splice(idx, 1); saveWsRow(id); renderWorksheet();
+}
+function wsUpload(ev, id, col) {
+  const f = ev.target.files[0]; if (!f) return;
+  const rd = new FileReader(); rd.onload = () => wsAddImage(id, col, rd.result); rd.readAsDataURL(f);
+}
+
+function wsImgCell(id, col) {
+  const row = wsRows.find(r => r.id === id);
+  const imgs = (row && Array.isArray(row.data[col])) ? row.data[col] : [];
+  const thumbs = imgs.map((src, i) =>
+    `<div class="ws-thumb"><img src="${src}" onclick="window.open().document.write('<img src=\\'' + this.src + '\\'>')"/><span class="ws-thumb-x" onclick="wsRemoveImage(${id},'${col}',${i})">✕</span></div>`
+  ).join('');
+  return `<div class="ws-imgcell" data-imgcell data-rowid="${id}" data-col="${col}" tabindex="0" title="클릭 후 Ctrl/⌘+V로 붙여넣기">
+    ${thumbs}
+    <label class="ws-up">📎<input type="file" accept="image/*" style="display:none" onchange="wsUpload(event,${id},'${col}')"></label>
+  </div>`;
+}
+
+function renderWorksheet() {
+  const el = document.getElementById('ws-table'); if (!el) return;
+  if (!wsRows.length) {
+    el.innerHTML = '<div class="ws-empty">기획 단계 영상을 추가하면 여기에 워크시트가 자동 생성돼요.<br>또는 <b>+ 행 추가</b>로 직접 만드세요.</div>';
+    return;
+  }
+  el.innerHTML = wsRows.map(row => {
+    const d = row.data || {};
+    const blocks = WS_COLS.map(c => {
+      let inner;
+      if (c.type === 'img') inner = wsImgCell(row.id, c.k);
+      else if (c.type === 'area') inner = `<textarea class="ws-area" oninput="wsOnText(${row.id},'${c.k}',this.value)" placeholder="여기에 작성...">${escHtml(d[c.k] || '')}</textarea>`;
+      else { const itype = c.type === 'date' ? 'date' : (c.type === 'url' ? 'url' : 'text'); inner = `<input class="ws-inp" type="${itype}" value="${(d[c.k] || '').toString().replace(/"/g, '&quot;')}" oninput="wsOnText(${row.id},'${c.k}',this.value)" />`; }
+      return `<div class="ws-step${c.type === 'img' ? ' img' : ''}"><div class="ws-step-h">${c.label}${c.hint ? `<span class="ws-step-hint">${c.hint}</span>` : ''}</div>${inner}</div>`;
+    }).join('');
+    const stage = row.data.videoId ? wsStageFromData(d) : null;
+    const stageLabel = stage ? ((PLAN_STEPS.find(s => s.key === stage) || {}).label || '') : '';
+    return `<div class="ws-card">
+      <div class="ws-card-head">
+        <input class="ws-card-name" value="${(d.name || '').toString().replace(/"/g, '&quot;')}" placeholder="영상 제목" oninput="wsOnText(${row.id},'name',this.value)" />
+        ${stage ? `<span class="ws-card-stage" id="ws-stage-${row.id}">진행: ${stageLabel}</span>` : ''}
+        <button class="ws-card-del" onclick="deleteWsRow(${row.id})" title="삭제">🗑 삭제</button>
+      </div>
+      <div class="ws-steps">${blocks}</div>
+    </div>`;
+  }).join('');
+}
+
+// 이미지 칸에 포커스된 상태에서 붙여넣기(캡쳐) 처리 — 한 번만 등록
+if (!window._wsPasteBound) {
+  window._wsPasteBound = true;
+  document.addEventListener('paste', (e) => {
+    const cell = document.activeElement;
+    if (!cell || !cell.dataset || cell.dataset.imgcell === undefined) return;
+    const items = (e.clipboardData || {}).items || [];
+    for (const it of items) {
+      if (it.type && it.type.indexOf('image') === 0) {
+        const f = it.getAsFile(); const rd = new FileReader();
+        rd.onload = () => wsAddImage(+cell.dataset.rowid, cell.dataset.col, rd.result);
+        rd.readAsDataURL(f); e.preventDefault(); break;
+      }
+    }
+  });
 }

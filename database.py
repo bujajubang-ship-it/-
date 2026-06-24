@@ -203,3 +203,37 @@ def delete_optimize(id_: int):
     conn.execute("DELETE FROM optimize_videos WHERE id=?", (id_,))
     conn.commit()
     conn.close()
+
+
+# ── 기획 워크시트 (스프레드시트형 작업공간) ──────────────────────────
+def _ensure_worksheet(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS worksheet_rows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sort_order INTEGER DEFAULT 0,
+            data TEXT DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+
+def list_worksheet():
+    conn = get_db(); _ensure_worksheet(conn)
+    rows = conn.execute("SELECT * FROM worksheet_rows ORDER BY sort_order, id").fetchall()
+    conn.close(); return [dict(r) for r in rows]
+
+def create_worksheet_row(data: str = "{}") -> int:
+    conn = get_db(); _ensure_worksheet(conn)
+    cur = conn.execute("INSERT INTO worksheet_rows (data) VALUES (?)", (data,))
+    conn.commit(); id_ = cur.lastrowid; conn.close(); return id_
+
+def update_worksheet_row(id_: int, data: str):
+    conn = get_db(); _ensure_worksheet(conn)
+    conn.execute("UPDATE worksheet_rows SET data=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (data, id_))
+    conn.commit(); conn.close()
+
+def delete_worksheet_row(id_: int):
+    conn = get_db(); _ensure_worksheet(conn)
+    conn.execute("DELETE FROM worksheet_rows WHERE id=?", (id_,))
+    conn.commit(); conn.close()

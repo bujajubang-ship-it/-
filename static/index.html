@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260622a" />
+  <link rel="stylesheet" href="style.css?v=20260624e" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -30,6 +30,7 @@
         <button class="tab-btn tab-btn-chat" id="tab-chat" onclick="switchTab('chat')">💬 AI 상담</button>
         <button class="tab-btn" id="tab-history" onclick="switchTab('history')">히스토리</button>
         <button class="tab-btn tab-btn-pipeline" id="tab-pipeline" onclick="switchTab('pipeline')">📋 파이프라인</button>
+        <button class="tab-btn tab-btn-pipeline" id="tab-worksheet" onclick="switchTab('worksheet')">📝 기획 워크시트</button>
       </div>
     </div>
   </header>
@@ -943,7 +944,11 @@
         </div>
         <!-- ===== 1) 업로드 일정 달력 ===== -->
         <div class="pl-block">
-          <div class="pl-block-title">📅 업로드 일정</div>
+          <div class="pl-block-head">
+            <div class="pl-block-title">📅 업로드 일정</div>
+            <button class="pl-sec-toggle" id="sec-toggle-calendar" onclick="toggleSection('calendar')"></button>
+          </div>
+          <div class="pl-sec-body" id="sec-body-calendar">
           <div class="pl-calendar-panel" id="pl-calendar-panel">
             <div class="pl-cal-top">
               <div class="pl-cal-nav-bar">
@@ -964,46 +969,62 @@
             </div>
             <div id="pl-cal-grid"></div>
           </div>
+          </div>
         </div>
 
         <!-- ===== 2) 기획 단계 영상 (촬영 전) ===== -->
         <div class="pl-block">
-          <div class="pl-block-title">🎬 기획 단계 영상 <span class="pl-block-sub">(촬영 전)</span></div>
-          <div class="plan-sticky-q">👀 내가 시청자라도 이거 누르고 싶을까?</div>
-          <div id="pl-plan-list"></div>
+          <div class="pl-block-head">
+            <div class="pl-block-title">🎬 기획 단계 영상 <span class="pl-block-sub">(촬영 전)</span></div>
+            <button class="pl-sec-toggle" id="sec-toggle-plan" onclick="toggleSection('plan')"></button>
+          </div>
+          <div class="pl-sec-body" id="sec-body-plan">
+            <div class="plan-sticky-q">👀 내가 시청자라도 이거 누르고 싶을까?</div>
+            <div id="pl-plan-list"></div>
+          </div>
         </div>
+
 
         <!-- ===== 3) 편집 단계 영상 ===== -->
         <div class="pl-block">
-          <div class="pl-block-title">✂️ 편집 단계 영상</div>
-          <div class="pl-stage-summary" id="pl-stage-summary"></div>
-          <div class="pl-controls" id="pl-controls"></div>
-          <div class="pl-kanban" id="pl-kanban"></div>
+          <div class="pl-block-head">
+            <div class="pl-block-title">✂️ 편집 단계 영상</div>
+            <button class="pl-sec-toggle" id="sec-toggle-edit" onclick="toggleSection('edit')"></button>
+          </div>
+          <div class="pl-sec-body" id="sec-body-edit">
+            <div class="pl-stage-summary" id="pl-stage-summary"></div>
+            <div class="pl-controls" id="pl-controls"></div>
+            <div class="pl-kanban" id="pl-kanban"></div>
+          </div>
         </div>
 
         <!-- ===== 4) 기존 영상 최적화 ===== -->
-        <div class="pl-opt-panel" id="pl-opt-panel">
-          <div class="pl-opt-header">
-            <div>
-              <span style="font-weight:700;font-size:15px">🔧 기존 영상 최적화 체크리스트</span>
-              <span class="pl-opt-progress" id="pl-opt-progress"></span>
-            </div>
-            <button class="pl-opt-add-btn" onclick="openOptimizeAdd()">+ 영상 추가</button>
+        <div class="pl-block">
+          <div class="pl-block-head">
+            <div class="pl-block-title">🔧 기존 영상 최적화 <span class="pl-opt-progress" id="pl-opt-progress"></span></div>
+            <button class="pl-sec-toggle" id="sec-toggle-optimize" onclick="toggleSection('optimize')"></button>
           </div>
-          <div class="pl-opt-legend">
-            <span class="pl-opt-chip thumb">썸네일 교체</span>
-            <span class="pl-opt-chip title">제목 수정</span>
-            <span class="pl-opt-chip cut">영상 컷팅</span>
-            <span class="pl-opt-chip desc">본문 수정</span>
-          </div>
-          <div id="pl-opt-list"></div>
-          <!-- 추가 인라인 폼 -->
-          <div class="pl-opt-add-form hidden" id="pl-opt-add-form">
-            <input type="text" id="pl-opt-new-title" placeholder="영상 제목 입력..." class="pl-opt-new-input" />
-            <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="pl-opt-save-btn" onclick="submitOptimizeAdd()">추가</button>
-              <button class="pl-opt-cancel-btn" onclick="cancelOptimizeAdd()">취소</button>
+          <div class="pl-sec-body" id="sec-body-optimize">
+          <div class="pl-opt-panel" id="pl-opt-panel">
+            <div class="pl-opt-header">
+              <div class="pl-opt-legend">
+                <span class="pl-opt-chip thumb">썸네일 교체</span>
+                <span class="pl-opt-chip title">제목 수정</span>
+                <span class="pl-opt-chip cut">영상 컷팅</span>
+                <span class="pl-opt-chip desc">본문 수정</span>
+              </div>
+              <button class="pl-opt-add-btn" onclick="openOptimizeAdd()">+ 영상 추가</button>
             </div>
+            <div id="pl-opt-list"></div>
+            <!-- 추가 인라인 폼 -->
+            <div class="pl-opt-add-form hidden" id="pl-opt-add-form">
+              <input type="text" id="pl-opt-new-title" placeholder="영상 제목 입력..." class="pl-opt-new-input" />
+              <div style="display:flex;gap:8px;margin-top:8px">
+                <button class="pl-opt-save-btn" onclick="submitOptimizeAdd()">추가</button>
+                <button class="pl-opt-cancel-btn" onclick="cancelOptimizeAdd()">취소</button>
+              </div>
+            </div>
+          </div>
           </div>
         </div>
       </div>
@@ -1030,7 +1051,7 @@
                 <option>기타</option>
               </select>
             </div>
-            <div class="pl-field">
+            <div class="pl-field" id="pl-field-stage">
               <label>현재 단계</label>
               <select id="pl-f-stage">
                 <option value="planning">📋 기획</option>
@@ -1044,7 +1065,7 @@
               </select>
             </div>
           </div>
-          <div class="pl-field-row">
+          <div class="pl-field-row" id="pl-field-row-editor">
             <div class="pl-field">
               <label>담당 편집자</label>
               <input type="text" id="pl-f-editor" placeholder="편집자 이름" />
@@ -1066,9 +1087,24 @@
       </div>
     </div>
 
+    <!-- ===== 📝 기획 워크시트 탭 ===== -->
+    <div id="pane-worksheet" class="hidden">
+      <div class="pl-page">
+        <div class="pl-topbar">
+          <div>
+            <div class="pl-page-title">📝 기획 워크시트</div>
+            <div class="pl-page-sub">썸네일 모으고 가이드대로 기획 — 진행단계는 📋 파이프라인에서 자동 반영돼요</div>
+          </div>
+          <button class="pl-add-btn plan" onclick="addWsRow()">+ 행 추가</button>
+        </div>
+        <div class="ws-hint">💡 <b>파이프라인 → 기획 영상 추가</b>를 하면 여기에 같은 제목의 카드가 자동 생성돼요. 가이드 순서대로 채우면 파이프라인의 진행단계가 자동으로 넘어가요. 이미지 칸은 클릭 후 <b>Ctrl/⌘+V</b>로 캡쳐 붙여넣기(또는 📎 업로드).</div>
+        <div id="ws-table" class="ws-cards"></div>
+      </div>
+    </div>
+
   </main>
 
-  <script src="app.js?v=20260622a"></script>
+  <script src="app.js?v=20260624e"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

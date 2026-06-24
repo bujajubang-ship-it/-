@@ -1145,6 +1145,32 @@ async def optimize_delete(id: int):
     return {"ok": True}
 
 
+# ── 기획 워크시트 (스프레드시트형 작업공간) ──────────────────────────
+from database import (list_worksheet, create_worksheet_row,
+                      update_worksheet_row, delete_worksheet_row)
+
+@app.get("/api/worksheet")
+async def worksheet_list():
+    return list_worksheet()
+
+@app.post("/api/worksheet")
+async def worksheet_create(request: Request):
+    data = await request.json()
+    id_ = create_worksheet_row(json.dumps(data.get("data", {}), ensure_ascii=False))
+    return {"id": id_}
+
+@app.put("/api/worksheet/{id}")
+async def worksheet_update(id: int, request: Request):
+    data = await request.json()
+    update_worksheet_row(id, json.dumps(data.get("data", {}), ensure_ascii=False))
+    return {"ok": True}
+
+@app.delete("/api/worksheet/{id}")
+async def worksheet_delete(id: int):
+    delete_worksheet_row(id)
+    return {"ok": True}
+
+
 @app.get("/")
 async def root():
     return FileResponse("static/index.html", headers={"Cache-Control": "no-store, no-cache, must-revalidate"})

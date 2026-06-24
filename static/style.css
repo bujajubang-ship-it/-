@@ -931,11 +931,27 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 
 /* ── 파이프라인 블록 섹션 ── */
 .pl-block { margin: 18px 0; }
+.pl-block-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 10px;
+}
+.pl-block-head .pl-block-title { margin: 0; }
 .pl-block-title {
   font-size: 16px; font-weight: 800; color: #111827;
   margin: 0 0 10px; display: flex; align-items: center; gap: 6px;
 }
 .pl-block-sub { font-size: 12px; font-weight: 600; color: #9ca3af; }
+/* 섹션 표시/숨김 토글 버튼 */
+.pl-sec-toggle {
+  padding: 5px 14px; border: 1.5px solid #d1d5db; background: #fff;
+  color: #6b7280; border-radius: 16px; font-size: 12px; font-weight: 700;
+  cursor: pointer; white-space: nowrap; transition: all .15s;
+}
+.pl-sec-toggle:hover { border-color: #9ca3af; background: #f3f4f6; }
+.pl-sec-toggle.active { background: #111827; color: #fff; border-color: #111827; }
+.pl-sec-body { transition: opacity .12s; }
+/* 최적화 헤더 안으로 옮긴 범례 정리 */
+.pl-opt-header .pl-opt-legend { padding: 0; border-bottom: none; flex-wrap: wrap; }
 
 /* ── 기획 영상 행: 가이드(ⓘ) 토글 ── */
 .pl-info-toggle {
@@ -1943,3 +1959,52 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   background: #fef2f2; border: 1.5px solid #fecaca; color: #b91c1c;
   font-size: 12.5px; font-weight: 700; padding: 9px 13px; border-radius: 9px; line-height: 1.5;
 }
+
+/* ── 📝 기획 워크시트 (스프레드시트) ── */
+.ws-add-btn { padding: 6px 14px; background: #6366f1; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.ws-add-btn:hover { opacity: .88; }
+.ws-hint { font-size: 12.5px; color: #6b7280; background: #f5f3ff; border: 1px solid #ede9fe; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; }
+.ws-wrap { overflow-x: auto; border: 1px solid #e5e7eb; border-radius: 10px; }
+.ws-table { border-collapse: collapse; width: max-content; min-width: 100%; background: #fff; }
+.ws-table th, .ws-table td { border: 1px solid #eceef1; padding: 0; vertical-align: top; }
+.ws-table thead th { background: #f3f0ff; color: #4b3a8f; font-size: 12.5px; font-weight: 800; padding: 8px 10px; position: sticky; top: 0; white-space: nowrap; }
+.ws-table td { min-width: 150px; }
+.ws-no { width: 34px; min-width: 34px; text-align: center; color: #9ca3af; font-size: 12px; background: #fafafa; }
+.ws-inp { width: 100%; box-sizing: border-box; border: none; padding: 8px 9px; font-size: 13px; font-family: inherit; background: transparent; }
+.ws-area { width: 100%; box-sizing: border-box; border: none; padding: 8px 9px; font-size: 13px; font-family: inherit; resize: vertical; min-height: 70px; background: transparent; line-height: 1.5; }
+.ws-inp:focus, .ws-area:focus { outline: 2px solid #c7d2fe; outline-offset: -2px; background: #fbfaff; }
+.ws-c-img { min-width: 170px; }
+.ws-imgcell { display: flex; flex-wrap: wrap; gap: 5px; padding: 7px; min-height: 60px; align-content: flex-start; cursor: text; }
+.ws-imgcell:focus { outline: 2px solid #8b5cf6; outline-offset: -2px; background: #faf9ff; }
+.ws-thumb { position: relative; }
+.ws-thumb img { max-height: 64px; max-width: 150px; border-radius: 4px; border: 1px solid #e5e7eb; display: block; cursor: zoom-in; }
+.ws-thumb-x { position: absolute; top: -6px; right: -6px; background: #ef4444; color: #fff; border-radius: 50%; width: 16px; height: 16px; font-size: 10px; line-height: 16px; text-align: center; cursor: pointer; }
+.ws-up { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 1.5px dashed #c7d2fe; border-radius: 6px; cursor: pointer; font-size: 14px; color: #7c3aed; align-self: center; }
+.ws-up:hover { background: #f3f0ff; }
+.ws-del-c { text-align: center; }
+.ws-del-c button { border: none; background: none; cursor: pointer; font-size: 15px; }
+.ws-del-c button:hover { transform: scale(1.15); }
+.ws-empty { text-align: center; color: #9ca3af; padding: 24px; font-size: 14px; }
+.ws-th-l { font-size: 12.5px; font-weight: 800; }
+.ws-th-hint { font-size: 10.5px; font-weight: 500; color: #8b7fc7; margin-top: 3px; white-space: normal; max-width: 180px; line-height: 1.3; }
+
+/* ── 기획 워크시트: 카드형(넓고 쾌적) ── */
+.ws-cards { display: flex; flex-direction: column; gap: 16px; }
+.ws-card { border: 1.5px solid #ddd6fe; border-radius: 14px; background: #fff; overflow: hidden; box-shadow: 0 1px 6px rgba(0,0,0,.04); }
+.ws-card-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #f3f0ff; border-bottom: 1px solid #ede9fe; }
+.ws-card-name { flex: 1; min-width: 0; border: none; background: transparent; font-size: 16px; font-weight: 800; color: #4b3a8f; padding: 5px 7px; border-radius: 6px; }
+.ws-card-name:focus { outline: none; background: #fff; box-shadow: 0 0 0 2px #c7d2fe; }
+.ws-card-stage { font-size: 12px; font-weight: 700; color: #6d28d9; background: #ede9fe; padding: 5px 11px; border-radius: 13px; white-space: nowrap; }
+.ws-card-del { border: none; background: none; color: #b0b0bb; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.ws-card-del:hover { color: #ef4444; }
+.ws-steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; padding: 14px; }
+.ws-step { border: 1px solid #eceef1; border-radius: 10px; padding: 11px 13px; background: #fcfcff; display: flex; flex-direction: column; }
+.ws-step.img { grid-column: 1 / -1; }
+.ws-step-h { font-size: 13px; font-weight: 800; color: #5b21b6; margin-bottom: 8px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; }
+.ws-step-hint { font-size: 11px; font-weight: 500; color: #9889c9; }
+.ws-step .ws-inp { border: 1px solid #e5e7eb; border-radius: 7px; padding: 9px 11px; font-size: 14px; width: 100%; box-sizing: border-box; background: #fff; font-family: inherit; }
+.ws-step .ws-area { border: 1px solid #e5e7eb; border-radius: 7px; padding: 10px 12px; font-size: 14px; min-height: 130px; width: 100%; box-sizing: border-box; background: #fff; resize: vertical; line-height: 1.65; font-family: inherit; }
+.ws-step .ws-inp:focus, .ws-step .ws-area:focus { outline: none; border-color: #8b5cf6; box-shadow: 0 0 0 2px #ede9fe; }
+.ws-step .ws-imgcell { border: 1.5px dashed #c7d2fe; border-radius: 8px; min-height: 130px; background: #fafaff; gap: 8px; padding: 10px; }
+.ws-step.img .ws-imgcell { min-height: 100px; }
+.ws-thumb img { max-height: 160px; max-width: 320px; }
