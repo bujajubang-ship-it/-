@@ -43,6 +43,28 @@ function renderList(id, items) {
   });
 }
 
+// 공감 포인트(실제 댓글/카페 근거) 카드 — anchorId 바로 뒤에 삽입
+function renderEmpathyPoints(anchorId, points) {
+  const anchor = document.getElementById(anchorId);
+  if (!anchor) return;
+  // 기존 것 제거
+  const exist = document.getElementById(anchorId + '-empathy');
+  if (exist) exist.remove();
+  if (!points || !points.length) return;
+  const box = document.createElement('div');
+  box.id = anchorId + '-empathy';
+  box.style.cssText = 'background:#fff7ed;border:1px solid #fed7aa;border-left:4px solid #ea580c;border-radius:10px;padding:14px 16px;margin:12px 0';
+  box.innerHTML = '<div style="font-weight:700;color:#c2410c;margin-bottom:8px">💬 공감 포인트 (실제 댓글·카페 근거)</div>' +
+    points.map(p => `
+      <div style="border-bottom:1px solid #fde9d3;padding:8px 0">
+        <div style="font-size:14px;color:#1f2937;line-height:1.6">"${(p.quote||'').replace(/</g,'&lt;')}"</div>
+        <div style="font-size:12px;color:#9a6a3a;margin-top:3px">📍 ${p.source||''}</div>
+        ${p.insight?`<div style="font-size:13px;color:#374151;margin-top:4px"><b>속마음:</b> ${p.insight}</div>`:''}
+        ${(p.use_in||p.use_in_intro)?`<div style="font-size:13px;color:#c2410c;margin-top:3px"><b>활용:</b> ${p.use_in||p.use_in_intro}</div>`:''}
+      </div>`).join('');
+  anchor.insertAdjacentElement('afterend', box);
+}
+
 function fmt(n) {
   if (n >= 100000000) return Math.floor(n / 100000000) + '억';
   if (n >= 10000) return Math.floor(n / 10000) + '만';
@@ -337,6 +359,8 @@ function renderMidformReport(r, keyword) {
   cb.textContent = r.concept || '';
   cb.style.display = r.concept ? '' : 'none';
 
+  renderEmpathyPoints('midform-concept', r.empathy_points);
+
   document.getElementById('midform-market-summary').textContent = r.market_summary || '';
 
   const desires = r.viewer_desires || {};
@@ -617,6 +641,8 @@ function renderShortformReport(r, keyword) {
   const cm = document.getElementById('shortform-core-message');
   cm.textContent = r.core_message || '';
   cm.style.display = r.core_message ? '' : 'none';
+
+  renderEmpathyPoints('shortform-core-message', r.empathy_points);
 
   const hooksEl = document.getElementById('shortform-hooks');
   hooksEl.innerHTML = '';
