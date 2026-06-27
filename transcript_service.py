@@ -57,12 +57,16 @@ def _cookiefile():
 
 
 def _base_opts(**extra):
-    """공통 yt-dlp 옵션 (android 클라이언트 + 쿠키 자동 주입)."""
-    opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
-            "extractor_args": _YT_CLIENTS}
+    """공통 yt-dlp 옵션.
+    쿠키가 있으면 web 클라이언트(쿠키 인증을 제대로 씀)를, 없으면 android
+    클라이언트(무인증 자막 우회)를 쓴다 — android는 쿠키 인증을 무시하기 때문."""
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
     cf = _cookiefile()
     if cf:
         opts["cookiefile"] = cf
+        opts["extractor_args"] = {"youtube": {"player_client": ["web", "android"]}}
+    else:
+        opts["extractor_args"] = _YT_CLIENTS  # android 우선 (무인증 자막)
     opts.update(extra)
     return opts
 
