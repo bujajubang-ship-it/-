@@ -1171,6 +1171,29 @@ async def worksheet_delete(id: int):
     return {"ok": True}
 
 
+@app.get("/api/transcript-debug")
+async def transcript_debug():
+    """쿠키/스크립트 수집 진단 (배포·경로·마운트 확인용)."""
+    import transcript_service as ts
+    resolved = ts._cookiefile()
+    info = {
+        "code_version": "cookie-v1",  # 16c4667 배포 확인 마커
+        "YT_COOKIES_FILE_env": os.getenv("YT_COOKIES_FILE", ""),
+        "YT_COOKIES_B64_set": bool(os.getenv("YT_COOKIES_B64", "").strip()),
+        "cookiefile_resolved": resolved,
+        "cookiefile_exists": bool(resolved and os.path.exists(resolved)),
+    }
+    try:
+        if resolved and os.path.exists(resolved):
+            with open(resolved) as f:
+                lines = f.readlines()
+            info["cookiefile_lines"] = len(lines)
+            info["has_login_cookies"] = any("__Secure-1PSID" in l or "LOGIN_INFO" in l for l in lines)
+    except Exception as e:
+        info["read_error"] = str(e)
+    return info
+
+
 @app.post("/api/worksheet/autofill")
 async def worksheet_autofill(request: Request):
     """키워드 → 경쟁영상·댓글·카페·스크립트 수집 후 Opus 4.8가 워크시트 카드 자동 작성."""
