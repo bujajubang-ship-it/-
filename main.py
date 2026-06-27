@@ -1172,12 +1172,12 @@ async def worksheet_delete(id: int):
 
 
 @app.get("/api/transcript-debug")
-async def transcript_debug():
-    """쿠키/스크립트 수집 진단 (배포·경로·마운트 확인용)."""
+async def transcript_debug(request: Request):
+    """쿠키/스크립트 수집 진단. ?url=<영상url> 주면 그 영상으로 실제 수집 시도."""
     import transcript_service as ts
     resolved = ts._cookiefile()
     info = {
-        "code_version": "cookie-v1",  # 16c4667 배포 확인 마커
+        "code_version": "cookie-v2",
         "YT_COOKIES_FILE_env": os.getenv("YT_COOKIES_FILE", ""),
         "YT_COOKIES_B64_set": bool(os.getenv("YT_COOKIES_B64", "").strip()),
         "cookiefile_resolved": resolved,
@@ -1191,6 +1191,31 @@ async def transcript_debug():
             info["has_login_cookies"] = any("__Secure-1PSID" in l or "LOGIN_INFO" in l for l in lines)
     except Exception as e:
         info["read_error"] = str(e)
+
+    url = request.query_params.get("url", "").strip()
+    if url:
+        import yt_dlp
+        diag = {}
+        try:
+            with yt_dlp.YoutubeDL(ts._base_opts(skip_download=True)) as ydl:
+                meta = ydl.extract_info(url, download=False)
+            diag["extract_ok"] = True
+            diag["title"] = (meta.get("title") or "")[:60]
+            diag["auto_caption_langs"] = sorted(list((meta.get("automatic_captions") or {}).keys()))[:30]
+            diag["subtitle_langs"] = sorted(list((meta.get("subtitles") or {}).keys()))[:30]
+            ko = (meta.get("automatic_captions") or {}).get("ko") or (meta.get("subtitles") or {}).get("ko") or []
+            diag["ko_track_exts"] = [t.get("ext") for t in ko]
+        except Exception as e:
+            diag["extract_ok"] = False
+            diag["extract_error"] = str(e)[:300]
+        # 실제 fetch_transcript (자막만, whisper 제외 — 빠르게)
+        loop = asyncio.get_event_loop()
+        res = await loop.run_in_executor(None, ts.fetch_transcript, url, False)
+        diag["fetch_method"] = res.get("method")
+        diag["fetch_error"] = res.get("error")
+        diag["fetch_len"] = len(res.get("text", ""))
+        diag["text_head"] = res.get("text", "")[:150]
+        info["url_test"] = diag
     return info
 
 
