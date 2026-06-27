@@ -1177,7 +1177,7 @@ async def transcript_debug(request: Request):
     import transcript_service as ts
     resolved = ts._cookiefile()
     info = {
-        "code_version": "cookie-v5",
+        "code_version": "cookie-v6",
         "YT_COOKIES_FILE_env": os.getenv("YT_COOKIES_FILE", ""),
         "YT_COOKIES_B64_set": bool(os.getenv("YT_COOKIES_B64", "").strip()),
         "cookiefile_resolved": resolved,
@@ -1195,26 +1195,38 @@ async def transcript_debug(request: Request):
     url = request.query_params.get("url", "").strip()
     if url:
         import yt_dlp
-        diag = {}
+        clients_param = request.query_params.get("clients", "").strip()
+        diag = {"clients": clients_param or "default"}
         try:
-            with yt_dlp.YoutubeDL(ts._base_opts(skip_download=True)) as ydl:
+            if clients_param:
+                opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
+                        "skip_download": True, "ignore_no_formats_error": True,
+                        "extractor_args": {"youtube": {"player_client": clients_param.split(",")}}}
+                cf = ts._cookiefile()
+                if cf:
+                    opts["cookiefile"] = cf
+            else:
+                opts = ts._base_opts(skip_download=True)
+            with yt_dlp.YoutubeDL(opts) as ydl:
                 meta = ydl.extract_info(url, download=False)
             diag["extract_ok"] = True
-            diag["title"] = (meta.get("title") or "")[:60]
-            diag["auto_caption_langs"] = sorted(list((meta.get("automatic_captions") or {}).keys()))[:30]
-            diag["subtitle_langs"] = sorted(list((meta.get("subtitles") or {}).keys()))[:30]
+            diag["title"] = (meta.get("title") or "")[:50]
+            diag["fmt_count"] = len(meta.get("formats") or [])
+            ac = sorted(list((meta.get("automatic_captions") or {}).keys()))
+            diag["auto_caption_total"] = len(ac)
+            diag["ko_caption"] = [l for l in ac if l.startswith("ko")]
             ko = (meta.get("automatic_captions") or {}).get("ko") or (meta.get("subtitles") or {}).get("ko") or []
             diag["ko_track_exts"] = [t.get("ext") for t in ko]
         except Exception as e:
             diag["extract_ok"] = False
-            diag["extract_error"] = str(e)[:300]
-        # 실제 fetch_transcript (자막만, whisper 제외 — 빠르게)
-        loop = asyncio.get_event_loop()
-        res = await loop.run_in_executor(None, ts.fetch_transcript, url, False)
-        diag["fetch_method"] = res.get("method")
-        diag["fetch_error"] = res.get("error")
-        diag["fetch_len"] = len(res.get("text", ""))
-        diag["text_head"] = res.get("text", "")[:150]
+            diag["extract_error"] = str(e)[:200]
+        if not clients_param:
+            loop = asyncio.get_event_loop()
+            res = await loop.run_in_executor(None, ts.fetch_transcript, url, False)
+            diag["fetch_method"] = res.get("method")
+            diag["fetch_error"] = res.get("error")
+            diag["fetch_len"] = len(res.get("text", ""))
+            diag["text_head"] = res.get("text", "")[:150]
         info["url_test"] = diag
     return info
 
