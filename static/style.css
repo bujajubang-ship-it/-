@@ -859,6 +859,7 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 }
 .pl-page-title { font-size: 22px; font-weight: 800; }
 .pl-page-sub { font-size: 13px; color: #6b7280; margin-top: 3px; }
+.ws-topbar-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* ── 달력 토글 버튼 ── */
 .pl-cal-toggle-btn {

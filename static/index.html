@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260624e" />
+  <link rel="stylesheet" href="style.css?v=20260627a" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -1095,7 +1095,10 @@
             <div class="pl-page-title">📝 기획 워크시트</div>
             <div class="pl-page-sub">썸네일 모으고 가이드대로 기획 — 진행단계는 📋 파이프라인에서 자동 반영돼요</div>
           </div>
-          <button class="pl-add-btn plan" onclick="addWsRow()">+ 행 추가</button>
+          <div class="ws-topbar-btns">
+            <button class="pl-add-btn plan" onclick="wsAutofill()">🤖 키워드로 AI 자동작성</button>
+            <button class="pl-add-btn plan" onclick="addWsRow()">+ 행 추가</button>
+          </div>
         </div>
         <div class="ws-hint">💡 <b>파이프라인 → 기획 영상 추가</b>를 하면 여기에 같은 제목의 카드가 자동 생성돼요. 가이드 순서대로 채우면 파이프라인의 진행단계가 자동으로 넘어가요. 이미지 칸은 클릭 후 <b>Ctrl/⌘+V</b>로 캡쳐 붙여넣기(또는 📎 업로드).</div>
         <div id="ws-table" class="ws-cards"></div>
@@ -1104,7 +1107,7 @@
 
   </main>
 
-  <script src="app.js?v=20260626a"></script>
+  <script src="app.js?v=20260627a"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

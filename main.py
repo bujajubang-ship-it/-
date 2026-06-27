@@ -1171,6 +1171,100 @@ async def worksheet_delete(id: int):
     return {"ok": True}
 
 
+@app.post("/api/worksheet/autofill")
+async def worksheet_autofill(request: Request):
+    """키워드 → 경쟁영상·댓글·카페·스크립트 수집 후 Opus 4.8가 워크시트 카드 자동 작성."""
+    from transcript_service import fetch_transcript
+    body = await request.json()
+    keyword = (body.get("keyword") or "").strip()
+    youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+    naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
+    naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+
+    async def stream():
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            yield sse({"step": "error", "message": ".env에 ANTHROPIC_API_KEY를 설정해주세요."})
+            return
+        if not keyword:
+            yield sse({"step": "error", "message": "키워드를 입력해주세요."})
+            return
+
+        videos_with_comments = []
+        naver_results = []
+        transcripts = []
+        yt = YouTubeService(youtube_key) if youtube_key else None
+        try:
+            if yt:
+                yield sse({"step": "searching", "message": f'"{keyword}" 경쟁영상(조회수순) 수집 중...'})
+                videos = await yt.search_videos(keyword, max_results=12)
+                if videos:
+                    yield sse({"step": "found", "message": f"상위 {len(videos)}개 영상 발견! 인기댓글 수집 중..."})
+                    videos_with_comments = await yt.get_comments_for_videos(videos[:6])
+
+            if naver_id and naver_secret:
+                yield sse({"step": "naver", "message": "네이버 카페 반응 수집 중..."})
+                naver = NaverService(naver_id, naver_secret)
+                naver_results = await naver.search_cafe(keyword)
+                await naver.close()
+
+            viewtrap_refs = None
+            vt_token = os.getenv("VIEWTRAP_TOKEN", "").strip()
+            if vt_token:
+                yield sse({"step": "viewtrap", "message": "ViewTrap 성과영상·핫비디오 레퍼런스 수집 중..."})
+                try:
+                    svc = ViewTrapService(vt_token)
+                    vt_top, vt_hot = await asyncio.gather(svc.get_top_videos(), svc.get_hot_videos())
+                    viewtrap_refs = {"top_videos": vt_top[:15], "hot_videos": vt_hot[:15]}
+                    yield sse({"step": "viewtrap_done",
+                               "message": f"ViewTrap 성과 {len(vt_top)}개·핫비디오 {len(vt_hot)}개 수집 완료!"})
+                except Exception:
+                    yield sse({"step": "warn", "message": "ViewTrap 수집 실패(토큰 만료 가능) — 나머지 데이터로 진행."})
+
+            # 상위 2개 영상 스크립트 (자막 우선 → 없으면 Whisper)
+            top = (videos_with_comments or [])[:2]
+            loop = asyncio.get_event_loop()
+            for i, v in enumerate(top, 1):
+                yield sse({"step": "transcribing",
+                           "message": f"경쟁영상 {i}/{len(top)} 스크립트 추출 중... (자막 우선, 없으면 받아쓰기 2~5분)"})
+                fut = loop.run_in_executor(None, fetch_transcript, v["url"])
+                while not fut.done():
+                    yield sse({"step": "ping"})
+                    await asyncio.sleep(5)
+                res = fut.result()
+                res["title"] = v["title"]
+                transcripts.append(res)
+                if res.get("error") == "youtube_gate":
+                    yield sse({"step": "warn",
+                               "message": "⚠️ 유튜브 봇 차단으로 일부 스크립트 수집 실패(서버 IP 제한). 자막 있는 영상은 정상."})
+            ok = sum(1 for t in transcripts if t.get("text"))
+            yield sse({"step": "transcribed", "message": f"스크립트 {ok}/{len(top)}개 확보"})
+
+            yield sse({"step": "writing", "message": "Opus 4.8가 워크시트 작성 중... (30~60초)"})
+            analyzer = Analyzer()
+            _task = asyncio.create_task(analyzer.autofill_worksheet(
+                keyword, videos_with_comments or None, naver_results or None,
+                transcripts or None, viewtrap_refs))
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            data = _task.result()
+            if "keyword" not in data:
+                data["keyword"] = keyword
+            row_id = create_worksheet_row(json.dumps(data, ensure_ascii=False))
+            yield sse({"step": "done", "id": row_id, "data": data, "keyword": keyword})
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
+        finally:
+            if yt:
+                await yt.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/")
 async def root():
     return FileResponse("static/index.html", headers={"Cache-Control": "no-store, no-cache, must-revalidate"})

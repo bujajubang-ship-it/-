@@ -3787,6 +3787,60 @@ async function addWsRow() {
   loadWorksheet();
 }
 
+// 키워드 → 경쟁영상·댓글·카페·스크립트 분석 후 Opus 4.8가 워크시트 카드 자동 작성
+async function wsAutofill() {
+  const input = prompt('어떤 주제/키워드로 워크시트를 자동 작성할까요?\n경쟁영상(조회수순)·인기댓글·네이버카페·영상 스크립트를 분석해 칸을 채웁니다.\n(상위 2개 영상 받아쓰기로 2~5분 걸릴 수 있어요)');
+  if (!input || !input.trim()) return;
+  const kw = input.trim();
+
+  let status = document.getElementById('ws-autofill-status');
+  if (!status) {
+    status = document.createElement('div');
+    status.id = 'ws-autofill-status';
+    status.className = 'ws-hint';
+    const table = document.getElementById('ws-table');
+    table.parentNode.insertBefore(status, table);
+  }
+  status.style.display = 'block';
+  status.innerHTML = `⏳ <b>"${escHtml(kw)}"</b> 자동 작성 준비 중...`;
+
+  let buffer = '';
+  try {
+    const resp = await fetch('/api/worksheet/autofill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keyword: kw }),
+    });
+    if (!resp.ok) throw new Error(`서버 오류: ${resp.status}`);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) { status.innerHTML = '⚠️ 연결이 끊어졌어요. 다시 시도해주세요.'; return; }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.step === 'ping') continue;
+          if (data.step === 'error') { status.innerHTML = '❌ ' + escHtml(data.message); return; }
+          if (data.step === 'done') {
+            status.innerHTML = `✅ <b>"${escHtml(kw)}"</b> 워크시트 카드가 생성됐어요!`;
+            await loadWorksheet();
+            setTimeout(() => { status.style.display = 'none'; }, 5000);
+            return;
+          }
+          if (data.message) status.innerHTML = '⏳ ' + escHtml(data.message);
+        } catch (e) {}
+      }
+    }
+  } catch (err) {
+    status.innerHTML = '❌ ' + escHtml(err.message);
+  }
+}
+
 async function deleteWsRow(id) {
   if (!confirm('이 행을 삭제할까요?')) return;
   await fetch(`/api/worksheet/${id}`, { method: 'DELETE' });
