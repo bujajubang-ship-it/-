@@ -123,14 +123,30 @@ def _fetch_auto_caption(info: dict) -> str:
     return ""
 
 
+# 워크시트엔 도입부가 핵심 → 앞부분만 받아쓰면 빠르고 안정적
+WHISPER_SECONDS = 150
+_WHISPER_MODEL = None
+
+
+def _get_whisper():
+    global _WHISPER_MODEL
+    if _WHISPER_MODEL is None:
+        import whisper
+        _WHISPER_MODEL = whisper.load_model("small")
+    return _WHISPER_MODEL
+
+
 def _whisper_from_audio(video_url: str) -> str:
-    """오디오 다운로드 후 Whisper(small)로 받아쓰기. 느림(2~5분). 실패 시 빈 문자열."""
+    """앞 WHISPER_SECONDS초 오디오만 받아 Whisper로 받아쓰기. 실패 시 빈 문자열."""
     import yt_dlp
+    from yt_dlp.utils import download_range_func
     tmpdir = tempfile.mkdtemp(prefix="ws_audio_")
     out = os.path.join(tmpdir, "a.%(ext)s")
     ydl_opts = _base_opts(
         format="bestaudio/best",
         outtmpl=out,
+        download_ranges=download_range_func(None, [(0, WHISPER_SECONDS)]),
+        force_keyframes_at_cuts=True,
         postprocessors=[{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
     )
     audio_path = None
@@ -143,9 +159,7 @@ def _whisper_from_audio(video_url: str) -> str:
                 break
         if not audio_path:
             return ""
-        import whisper
-        model = whisper.load_model("small")
-        result = model.transcribe(audio_path, language="ko")
+        result = _get_whisper().transcribe(audio_path, language="ko")
         return (result.get("text") or "").strip()[:MAX_CHARS]
     except Exception:
         return ""
