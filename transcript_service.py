@@ -23,25 +23,37 @@ _COOKIE_PATH = None
 
 
 def _cookiefile():
-    """yt-dlp에 넘길 cookies.txt 경로. 없으면 None."""
+    """yt-dlp에 넘길 cookies.txt 경로. 없으면 None.
+    yt-dlp는 쿠키를 파일에 되써서 갱신하므로, 원본(읽기전용 시크릿파일 포함)을
+    항상 쓰기 가능한 /tmp 사본으로 복사해 그 경로를 돌려준다."""
     global _COOKIE_PATH
     if _COOKIE_PATH and os.path.exists(_COOKIE_PATH):
         return _COOKIE_PATH
+    raw = None
     path = os.getenv("YT_COOKIES_FILE", "").strip()
     if path and os.path.exists(path):
-        _COOKIE_PATH = path
-        return path
-    b64 = os.getenv("YT_COOKIES_B64", "").strip()
-    if b64:
         try:
-            fd, tmp = tempfile.mkstemp(prefix="ytcookies_", suffix=".txt")
-            with os.fdopen(fd, "wb") as f:
-                f.write(base64.b64decode(b64))
-            _COOKIE_PATH = tmp
-            return tmp
+            with open(path, "rb") as f:
+                raw = f.read()
         except Exception:
-            return None
-    return None
+            raw = None
+    if raw is None:
+        b64 = os.getenv("YT_COOKIES_B64", "").strip()
+        if b64:
+            try:
+                raw = base64.b64decode(b64)
+            except Exception:
+                raw = None
+    if raw is None:
+        return None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix="ytcookies_", suffix=".txt")
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+        _COOKIE_PATH = tmp
+        return tmp
+    except Exception:
+        return None
 
 
 def _base_opts(**extra):
