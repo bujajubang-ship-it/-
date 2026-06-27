@@ -7,6 +7,7 @@
 """
 import os
 import re
+import base64
 import tempfile
 import httpx
 
@@ -15,6 +16,43 @@ MAX_CHARS = 6000
 
 # web 클라이언트는 데이터센터 IP에서 자막·포맷을 제한당함 → android 클라이언트가 우회됨
 _YT_CLIENTS = {"youtube": {"player_client": ["android", "web"]}}
+
+# 데이터센터 IP 봇차단의 확실한 우회 = 로그인 쿠키.
+# Render 환경변수 YT_COOKIES_B64(cookies.txt를 base64 인코딩)에 넣으면 자동 사용.
+_COOKIE_PATH = None
+
+
+def _cookiefile():
+    """yt-dlp에 넘길 cookies.txt 경로. 없으면 None."""
+    global _COOKIE_PATH
+    if _COOKIE_PATH and os.path.exists(_COOKIE_PATH):
+        return _COOKIE_PATH
+    path = os.getenv("YT_COOKIES_FILE", "").strip()
+    if path and os.path.exists(path):
+        _COOKIE_PATH = path
+        return path
+    b64 = os.getenv("YT_COOKIES_B64", "").strip()
+    if b64:
+        try:
+            fd, tmp = tempfile.mkstemp(prefix="ytcookies_", suffix=".txt")
+            with os.fdopen(fd, "wb") as f:
+                f.write(base64.b64decode(b64))
+            _COOKIE_PATH = tmp
+            return tmp
+        except Exception:
+            return None
+    return None
+
+
+def _base_opts(**extra):
+    """공통 yt-dlp 옵션 (android 클라이언트 + 쿠키 자동 주입)."""
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
+            "extractor_args": _YT_CLIENTS}
+    cf = _cookiefile()
+    if cf:
+        opts["cookiefile"] = cf
+    opts.update(extra)
+    return opts
 
 
 def _parse_vtt(text: str) -> str:
@@ -69,15 +107,11 @@ def _whisper_from_audio(video_url: str) -> str:
     import yt_dlp
     tmpdir = tempfile.mkdtemp(prefix="ws_audio_")
     out = os.path.join(tmpdir, "a.%(ext)s")
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": out,
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "extractor_args": _YT_CLIENTS,
-        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
-    }
+    ydl_opts = _base_opts(
+        format="bestaudio/best",
+        outtmpl=out,
+        postprocessors=[{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
+    )
     audio_path = None
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -108,9 +142,7 @@ def fetch_transcript(video_url: str, allow_whisper: bool = True) -> dict:
     import yt_dlp
     info = None
     try:
-        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True,
-                               "noplaylist": True, "writesubtitles": False,
-                               "extractor_args": _YT_CLIENTS}) as ydl:
+        with yt_dlp.YoutubeDL(_base_opts(skip_download=True, writesubtitles=False)) as ydl:
             info = ydl.extract_info(video_url, download=False)
     except Exception as e:
         msg = str(e)
