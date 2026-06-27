@@ -1177,7 +1177,7 @@ async def transcript_debug(request: Request):
     import transcript_service as ts
     resolved = ts._cookiefile()
     info = {
-        "code_version": "cookie-v6",
+        "code_version": "cookie-v7",
         "YT_COOKIES_FILE_env": os.getenv("YT_COOKIES_FILE", ""),
         "YT_COOKIES_B64_set": bool(os.getenv("YT_COOKIES_B64", "").strip()),
         "cookiefile_resolved": resolved,
@@ -1221,12 +1221,14 @@ async def transcript_debug(request: Request):
             diag["extract_ok"] = False
             diag["extract_error"] = str(e)[:200]
         if not clients_param:
+            allow_whisper = request.query_params.get("whisper", "") == "1"
             loop = asyncio.get_event_loop()
-            res = await loop.run_in_executor(None, ts.fetch_transcript, url, False)
+            res = await loop.run_in_executor(None, ts.fetch_transcript, url, allow_whisper)
+            diag["whisper_allowed"] = allow_whisper
             diag["fetch_method"] = res.get("method")
             diag["fetch_error"] = res.get("error")
             diag["fetch_len"] = len(res.get("text", ""))
-            diag["text_head"] = res.get("text", "")[:150]
+            diag["text_head"] = res.get("text", "")[:200]
         info["url_test"] = diag
     return info
 
