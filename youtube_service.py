@@ -68,6 +68,36 @@ class YouTubeService:
         videos.sort(key=lambda x: x["view_count"], reverse=True)
         return videos
 
+    async def get_videos_by_ids(self, video_ids: List[str]) -> List[Dict]:
+        """영상 ID 목록 → 제목·썸네일·통계 (search_videos와 같은 dict 형태)."""
+        if not video_ids:
+            return []
+        resp = await self.client.get(f"{BASE}/videos", params={
+            "key": self.api_key,
+            "id": ",".join(video_ids),
+            "part": "snippet,statistics,contentDetails",
+        })
+        resp.raise_for_status()
+        videos = []
+        for item in resp.json().get("items", []):
+            s = item.get("statistics", {})
+            sn = item.get("snippet", {})
+            thumbnails = sn.get("thumbnails", {})
+            thumb = (thumbnails.get("maxres") or thumbnails.get("high") or thumbnails.get("medium") or {}).get("url", "")
+            videos.append({
+                "id": item["id"],
+                "title": sn.get("title", ""),
+                "description": sn.get("description", "")[:500],
+                "channel": sn.get("channelTitle", ""),
+                "published_at": sn.get("publishedAt", "")[:10],
+                "thumbnail_url": thumb,
+                "view_count": int(s.get("viewCount", 0)),
+                "like_count": int(s.get("likeCount", 0)),
+                "comment_count": int(s.get("commentCount", 0)),
+                "url": f"https://www.youtube.com/watch?v={item['id']}",
+            })
+        return videos
+
     async def get_comments(self, video_id: str, max_comments: int = 50) -> List[Dict]:
         try:
             resp = await self.client.get(f"{BASE}/commentThreads", params={

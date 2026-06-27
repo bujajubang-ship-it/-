@@ -3788,35 +3788,80 @@ async function addWsRow() {
 }
 
 // 키워드 → 경쟁영상·댓글·카페·스크립트 분석 후 Opus 4.8가 워크시트 카드 자동 작성
-async function wsAutofill() {
-  const input = prompt('어떤 주제/키워드로 워크시트를 자동 작성할까요?\n경쟁영상(조회수순)·인기댓글·네이버카페·영상 스크립트를 분석해 칸을 채웁니다.\n(상위 2개 영상 받아쓰기로 2~5분 걸릴 수 있어요)');
-  if (!input || !input.trim()) return;
-  const kw = input.trim();
+// AI 자동작성 모달 — 키워드 + 레퍼런스 영상(링크 + 붙여넣은 스크립트)
+function wsAutofill() {
+  let m = document.getElementById('ws-af-modal');
+  if (m) m.remove();
+  m = document.createElement('div');
+  m.id = 'ws-af-modal';
+  m.className = 'ws-af-overlay';
+  m.innerHTML = `
+    <div class="ws-af-box">
+      <div class="ws-af-head">
+        <b>🤖 AI 자동작성</b>
+        <span class="ws-af-x" onclick="wsAfClose()">✕</span>
+      </div>
+      <div class="ws-af-sub">카피하기 좋은 영상의 <b>링크</b>와 <b>스크립트</b>(유튜브 ⋯더보기 → 스크립트 표시에서 복사)를 붙여넣으면, 썸네일·제목·댓글은 자동으로 가져와 분석합니다.</div>
+      <label class="ws-af-label">주제/키워드 <span>(선택 — 비우면 첫 영상 제목 사용)</span></label>
+      <input id="ws-af-kw" class="ws-af-inp" placeholder="예: 식당 창업" />
+      <div id="ws-af-refs"></div>
+      <button class="ws-af-add" onclick="wsAfAddRow()">+ 레퍼런스 영상 추가</button>
+      <div id="ws-af-status" class="ws-af-status"></div>
+      <div class="ws-af-actions">
+        <button class="ws-af-cancel" onclick="wsAfClose()">취소</button>
+        <button id="ws-af-run" class="ws-af-run" onclick="wsAfRun()">자동작성 시작</button>
+      </div>
+    </div>`;
+  document.body.appendChild(m);
+  wsAfAddRow();
+}
 
-  let status = document.getElementById('ws-autofill-status');
-  if (!status) {
-    status = document.createElement('div');
-    status.id = 'ws-autofill-status';
-    status.className = 'ws-hint';
-    const table = document.getElementById('ws-table');
-    table.parentNode.insertBefore(status, table);
-  }
-  status.style.display = 'block';
-  status.innerHTML = `⏳ <b>"${escHtml(kw)}"</b> 자동 작성 준비 중...`;
+function wsAfClose() {
+  const m = document.getElementById('ws-af-modal');
+  if (m) m.remove();
+}
+
+function wsAfAddRow() {
+  const wrap = document.getElementById('ws-af-refs');
+  if (!wrap || wrap.children.length >= 3) return;
+  const n = wrap.children.length + 1;
+  const row = document.createElement('div');
+  row.className = 'ws-af-ref';
+  row.innerHTML = `
+    <div class="ws-af-ref-head">레퍼런스 영상 ${n}
+      <span class="ws-af-ref-del" onclick="this.closest('.ws-af-ref').remove()">삭제</span></div>
+    <input class="ws-af-inp ws-af-url" placeholder="유튜브 영상 링크 (https://youtube.com/watch?v=...)" />
+    <textarea class="ws-af-area ws-af-script" placeholder="이 영상 스크립트 붙여넣기 (선택 — 비워도 됨)"></textarea>`;
+  wrap.appendChild(row);
+}
+
+async function wsAfRun() {
+  const kw = (document.getElementById('ws-af-kw').value || '').trim();
+  const refs = [];
+  document.querySelectorAll('#ws-af-refs .ws-af-ref').forEach(r => {
+    const url = r.querySelector('.ws-af-url').value.trim();
+    const script = r.querySelector('.ws-af-script').value.trim();
+    if (url) refs.push({ url, script });
+  });
+  const status = document.getElementById('ws-af-status');
+  if (!refs.length && !kw) { status.innerHTML = '❗ 영상 링크 또는 키워드를 하나는 입력해주세요.'; return; }
+  const runBtn = document.getElementById('ws-af-run');
+  runBtn.disabled = true; runBtn.textContent = '작성 중...';
+  status.innerHTML = '⏳ 준비 중...';
 
   let buffer = '';
   try {
     const resp = await fetch('/api/worksheet/autofill', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keyword: kw }),
+      body: JSON.stringify({ keyword: kw, ref_videos: refs }),
     });
     if (!resp.ok) throw new Error(`서버 오류: ${resp.status}`);
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     while (true) {
       const { done, value } = await reader.read();
-      if (done) { status.innerHTML = '⚠️ 연결이 끊어졌어요. 다시 시도해주세요.'; return; }
+      if (done) { status.innerHTML = '⚠️ 연결이 끊어졌어요. 다시 시도해주세요.'; break; }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop();
@@ -3825,11 +3870,11 @@ async function wsAutofill() {
         try {
           const data = JSON.parse(line.slice(6));
           if (data.step === 'ping') continue;
-          if (data.step === 'error') { status.innerHTML = '❌ ' + escHtml(data.message); return; }
+          if (data.step === 'error') { status.innerHTML = '❌ ' + escHtml(data.message); runBtn.disabled = false; runBtn.textContent = '자동작성 시작'; return; }
           if (data.step === 'done') {
-            status.innerHTML = `✅ <b>"${escHtml(kw)}"</b> 워크시트 카드가 생성됐어요!`;
+            status.innerHTML = '✅ 워크시트 카드가 생성됐어요!';
             await loadWorksheet();
-            setTimeout(() => { status.style.display = 'none'; }, 5000);
+            setTimeout(wsAfClose, 1200);
             return;
           }
           if (data.message) status.innerHTML = '⏳ ' + escHtml(data.message);
@@ -3839,6 +3884,7 @@ async function wsAutofill() {
   } catch (err) {
     status.innerHTML = '❌ ' + escHtml(err.message);
   }
+  runBtn.disabled = false; runBtn.textContent = '자동작성 시작';
 }
 
 async function deleteWsRow(id) {
