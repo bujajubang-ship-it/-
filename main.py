@@ -1177,7 +1177,7 @@ async def transcript_debug(request: Request):
     import transcript_service as ts
     resolved = ts._cookiefile()
     info = {
-        "code_version": "cookie-v4",
+        "code_version": "cookie-v5",
         "YT_COOKIES_FILE_env": os.getenv("YT_COOKIES_FILE", ""),
         "YT_COOKIES_B64_set": bool(os.getenv("YT_COOKIES_B64", "").strip()),
         "cookiefile_resolved": resolved,

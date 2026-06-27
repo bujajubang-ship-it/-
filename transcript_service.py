@@ -22,36 +22,39 @@ _YT_CLIENTS = {"youtube": {"player_client": ["android", "web"]}}
 _COOKIE_PATH = None
 
 
-def _cookiefile():
-    """yt-dlp에 넘길 cookies.txt 경로. 없으면 None.
-    yt-dlp는 쿠키를 파일에 되써서 갱신하므로, 원본(읽기전용 시크릿파일 포함)을
-    항상 쓰기 가능한 /tmp 사본으로 복사해 그 경로를 돌려준다."""
-    global _COOKIE_PATH
-    if _COOKIE_PATH and os.path.exists(_COOKIE_PATH):
-        return _COOKIE_PATH
-    raw = None
+def _cookie_source():
+    """원본 쿠키 바이트 (시크릿파일 우선, 없으면 B64). 없으면 None."""
     path = os.getenv("YT_COOKIES_FILE", "").strip()
     if path and os.path.exists(path):
         try:
             with open(path, "rb") as f:
-                raw = f.read()
+                return f.read()
         except Exception:
-            raw = None
-    if raw is None:
-        b64 = os.getenv("YT_COOKIES_B64", "").strip()
-        if b64:
-            try:
-                raw = base64.b64decode(b64)
-            except Exception:
-                raw = None
+            pass
+    b64 = os.getenv("YT_COOKIES_B64", "").strip()
+    if b64:
+        try:
+            return base64.b64decode(b64)
+        except Exception:
+            pass
+    return None
+
+
+def _cookiefile():
+    """yt-dlp에 넘길 cookies.txt 경로. 없으면 None.
+    yt-dlp가 사용 후 쿠키를 되쓰며 깎아먹으므로(차단 재발), 매 호출마다 원본을
+    /tmp 사본에 새로 써서 항상 '풀쿠키'로 시작하게 한다."""
+    global _COOKIE_PATH
+    raw = _cookie_source()
     if raw is None:
         return None
     try:
-        fd, tmp = tempfile.mkstemp(prefix="ytcookies_", suffix=".txt")
-        with os.fdopen(fd, "wb") as f:
+        if not _COOKIE_PATH:
+            fd, _COOKIE_PATH = tempfile.mkstemp(prefix="ytcookies_", suffix=".txt")
+            os.close(fd)
+        with open(_COOKIE_PATH, "wb") as f:  # 매번 원본으로 리셋
             f.write(raw)
-        _COOKIE_PATH = tmp
-        return tmp
+        return _COOKIE_PATH
     except Exception:
         return None
 
