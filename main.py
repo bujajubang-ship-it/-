@@ -1272,6 +1272,7 @@ async def worksheet_autofill(request: Request):
     Opus 4.8가 워크시트 카드 자동 작성. (서버 스크래핑 없음 — 사용자가 스크립트 제공)"""
     body = await request.json()
     keyword = (body.get("keyword") or "").strip()
+    brief = (body.get("brief") or "").strip()  # 이번 영상 핵심 내용
     refs_in = body.get("ref_videos") or []  # [{url, script}]
     youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
     naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
@@ -1332,7 +1333,7 @@ async def worksheet_autofill(request: Request):
             yield sse({"step": "writing", "message": "Opus 4.8가 썸네일 분석 + 워크시트 작성 중... (30~60초)"})
             analyzer = Analyzer()
             _task = asyncio.create_task(analyzer.autofill_worksheet(
-                kw, ref_videos or None, naver_results or None, viewtrap_refs, knowledge or None))
+                kw, ref_videos or None, naver_results or None, viewtrap_refs, knowledge or None, brief))
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)

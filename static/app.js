@@ -3803,8 +3803,10 @@ function wsAutofill() {
         <span class="ws-af-x" onclick="wsAfClose()">✕</span>
       </div>
       <div class="ws-af-sub">카피하기 좋은 영상의 <b>링크</b>와 <b>스크립트</b>(유튜브 ⋯더보기 → 스크립트 표시에서 복사)를 붙여넣으면, 썸네일·제목·댓글은 자동으로 가져와 분석합니다.</div>
-      <label class="ws-af-label">주제/키워드 <span>(선택 — 비우면 첫 영상 제목 사용)</span></label>
+      <label class="ws-af-label">주제/키워드 <span>(검색용 한 단어 — 예: 식당 창업)</span></label>
       <input id="ws-af-kw" class="ws-af-inp" placeholder="예: 식당 창업" />
+      <label class="ws-af-label">이번 영상 핵심 내용 <span>(이 영상에서 실제로 다룰 내용·전하고 싶은 메시지·제품/서비스·앵글)</span></label>
+      <textarea id="ws-af-brief" class="ws-af-area" placeholder="예: 식당 창업 전 '권리금'에서 호구 안 잡히는 법. 부동산이 안 알려주는 협상 포인트 3가지 + 우리 도면설계 서비스로 연결. 실제로 권리금 깎은 사장님 사례 강조."></textarea>
       <div id="ws-af-refs"></div>
       <button class="ws-af-add" onclick="wsAfAddRow()">+ 레퍼런스 영상 추가</button>
       <div id="ws-af-status" class="ws-af-status"></div>
@@ -3838,6 +3840,7 @@ function wsAfAddRow() {
 
 async function wsAfRun() {
   const kw = (document.getElementById('ws-af-kw').value || '').trim();
+  const brief = (document.getElementById('ws-af-brief').value || '').trim();
   const refs = [];
   document.querySelectorAll('#ws-af-refs .ws-af-ref').forEach(r => {
     const url = r.querySelector('.ws-af-url').value.trim();
@@ -3845,7 +3848,7 @@ async function wsAfRun() {
     if (url) refs.push({ url, script });
   });
   const status = document.getElementById('ws-af-status');
-  if (!refs.length && !kw) { status.innerHTML = '❗ 영상 링크 또는 키워드를 하나는 입력해주세요.'; return; }
+  if (!refs.length && !kw && !brief) { status.innerHTML = '❗ 키워드·핵심 내용·영상 링크 중 하나는 입력해주세요.'; return; }
   const runBtn = document.getElementById('ws-af-run');
   runBtn.disabled = true; runBtn.textContent = '작성 중...';
   status.innerHTML = '⏳ 준비 중...';
@@ -3855,7 +3858,7 @@ async function wsAfRun() {
     const resp = await fetch('/api/worksheet/autofill', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keyword: kw, ref_videos: refs }),
+      body: JSON.stringify({ keyword: kw, brief: brief, ref_videos: refs }),
     });
     if (!resp.ok) throw new Error(`서버 오류: ${resp.status}`);
     const reader = resp.body.getReader();
