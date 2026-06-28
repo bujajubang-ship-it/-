@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260627b" />
+  <link rel="stylesheet" href="style.css?v=20260627c" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -31,6 +31,7 @@
         <button class="tab-btn" id="tab-history" onclick="switchTab('history')">히스토리</button>
         <button class="tab-btn tab-btn-pipeline" id="tab-pipeline" onclick="switchTab('pipeline')">📋 파이프라인</button>
         <button class="tab-btn tab-btn-pipeline" id="tab-worksheet" onclick="switchTab('worksheet')">📝 기획 워크시트</button>
+        <button class="tab-btn tab-btn-pipeline" id="tab-knowledge" onclick="switchTab('knowledge')">📚 지식</button>
       </div>
     </div>
   </header>
@@ -1105,9 +1106,24 @@
       </div>
     </div>
 
+    <!-- ===== 📚 지식 탭 ===== -->
+    <div id="pane-knowledge" class="hidden">
+      <div class="pl-page">
+        <div class="pl-topbar">
+          <div>
+            <div class="pl-page-title">📚 지식 (키 컨텐츠 작성법)</div>
+            <div class="pl-page-sub">강의·자료를 모아두면 AI가 키 컨텐츠(워크시트 자동작성) 쓸 때 이 작성법을 적용해요. 끄거나 삭제하면 즉시 반영.</div>
+          </div>
+          <button class="pl-add-btn plan" onclick="kbAdd()">+ 자료 추가</button>
+        </div>
+        <div class="ws-hint">💡 강의 녹음 파일은 담당자(AI)에게 전달하면 받아쓰기·요약해서 여기 넣어드려요. 직접 메모/자료를 붙여넣어 추가할 수도 있어요.</div>
+        <div id="kb-list" class="kb-list"></div>
+      </div>
+    </div>
+
   </main>
 
-  <script src="app.js?v=20260627b"></script>
+  <script src="app.js?v=20260627c"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

@@ -237,3 +237,53 @@ def delete_worksheet_row(id_: int):
     conn = get_db(); _ensure_worksheet(conn)
     conn.execute("DELETE FROM worksheet_rows WHERE id=?", (id_,))
     conn.commit(); conn.close()
+
+
+# ── 키 컨텐츠 지식 저장소 (강의 받아쓰기·요약) ───────────────────────
+def _ensure_knowledge(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT DEFAULT '',
+            category TEXT DEFAULT '키컨텐츠',
+            summary TEXT DEFAULT '',
+            content TEXT DEFAULT '',
+            active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+
+def list_knowledge(active_only: bool = False, category: str = ""):
+    conn = get_db(); _ensure_knowledge(conn)
+    q = "SELECT * FROM knowledge"
+    cond = []
+    if active_only:
+        cond.append("active=1")
+    if category:
+        cond.append("category=?")
+    if cond:
+        q += " WHERE " + " AND ".join(cond)
+    q += " ORDER BY id"
+    rows = conn.execute(q, ([category] if category else [])).fetchall()
+    conn.close(); return [dict(r) for r in rows]
+
+def create_knowledge(title: str, category: str, summary: str, content: str) -> int:
+    conn = get_db(); _ensure_knowledge(conn)
+    cur = conn.execute(
+        "INSERT INTO knowledge (title, category, summary, content) VALUES (?,?,?,?)",
+        (title, category, summary, content))
+    conn.commit(); id_ = cur.lastrowid; conn.close(); return id_
+
+def update_knowledge(id_: int, fields: dict):
+    if not fields:
+        return
+    cols = ", ".join(f"{k}=?" for k in fields)
+    conn = get_db(); _ensure_knowledge(conn)
+    conn.execute(f"UPDATE knowledge SET {cols} WHERE id=?", (*fields.values(), id_))
+    conn.commit(); conn.close()
+
+def delete_knowledge(id_: int):
+    conn = get_db(); _ensure_knowledge(conn)
+    conn.execute("DELETE FROM knowledge WHERE id=?", (id_,))
+    conn.commit(); conn.close()

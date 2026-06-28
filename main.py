@@ -1171,6 +1171,33 @@ async def worksheet_delete(id: int):
     return {"ok": True}
 
 
+# ── 키 컨텐츠 지식 저장소 ─────────────────────────────────────────
+from database import (list_knowledge, create_knowledge, update_knowledge, delete_knowledge)
+
+@app.get("/api/knowledge")
+async def knowledge_list():
+    return list_knowledge()
+
+@app.post("/api/knowledge")
+async def knowledge_create(request: Request):
+    d = await request.json()
+    id_ = create_knowledge(d.get("title", ""), d.get("category", "키컨텐츠"),
+                           d.get("summary", ""), d.get("content", ""))
+    return {"id": id_}
+
+@app.put("/api/knowledge/{id}")
+async def knowledge_update(id: int, request: Request):
+    d = await request.json()
+    fields = {k: d[k] for k in ("title", "category", "summary", "content", "active") if k in d}
+    update_knowledge(id, fields)
+    return {"ok": True}
+
+@app.delete("/api/knowledge/{id}")
+async def knowledge_delete(id: int):
+    delete_knowledge(id)
+    return {"ok": True}
+
+
 @app.get("/api/transcript-debug")
 async def transcript_debug(request: Request):
     """쿠키/스크립트 수집 진단. ?url=<영상url> 주면 그 영상으로 실제 수집 시도."""
@@ -1298,11 +1325,13 @@ async def worksheet_autofill(request: Request):
                 except Exception:
                     pass
 
-            # 4) AI 작성 (썸네일 비전 + 실제 스크립트)
+            # 4) AI 작성 (썸네일 비전 + 실제 스크립트 + 키컨텐츠 강의 지식)
+            knowledge = [k for k in list_knowledge(active_only=True)
+                         if k.get("category") in ("키컨텐츠", "원고작성")]
             yield sse({"step": "writing", "message": "Opus 4.8가 썸네일 분석 + 워크시트 작성 중... (30~60초)"})
             analyzer = Analyzer()
             _task = asyncio.create_task(analyzer.autofill_worksheet(
-                kw, ref_videos or None, naver_results or None, viewtrap_refs))
+                kw, ref_videos or None, naver_results or None, viewtrap_refs, knowledge or None))
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)

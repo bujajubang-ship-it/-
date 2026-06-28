@@ -10,7 +10,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'topic', 'detail', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'chat', 'history', 'pipeline', 'worksheet', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'topic', 'detail', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'chat', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -22,6 +22,7 @@ function switchTab(tab) {
   if (tab === 'history') loadHistory('');
   if (tab === 'pipeline') { loadPipeline(); applyOptimizeVisibility(); }
   if (tab === 'worksheet') loadWorksheetTab();
+  if (tab === 'knowledge') loadKnowledge();
 }
 
 // 워크시트 탭: 진행 동기화를 위해 plVideos도 함께 로드
@@ -4019,4 +4020,88 @@ if (!window._wsPasteBound) {
       }
     }
   });
+}
+
+// ===== 📚 지식 탭 (키 컨텐츠 작성법) =====
+let kbRows = [];
+const KB_CATS = ['키컨텐츠', '원고작성', '기타'];
+
+async function loadKnowledge() {
+  try {
+    const r = await fetch('/api/knowledge');
+    kbRows = await r.json();
+  } catch (e) { kbRows = []; }
+  renderKnowledge();
+}
+
+function renderKnowledge() {
+  const el = document.getElementById('kb-list');
+  if (!el) return;
+  if (!kbRows.length) {
+    el.innerHTML = '<div class="ws-empty">아직 지식 자료가 없어요.<br>강의 녹음 파일을 전달하면 받아쓰기·요약해서 넣어드리고, <b>+ 자료 추가</b>로 직접 붙여넣을 수도 있어요.</div>';
+    return;
+  }
+  el.innerHTML = kbRows.map(k => {
+    const opts = KB_CATS.map(c => `<option value="${c}"${k.category === c ? ' selected' : ''}>${c}</option>`).join('');
+    const on = k.active ? 'checked' : '';
+    return `<div class="kb-card${k.active ? '' : ' off'}">
+      <div class="kb-head">
+        <input class="kb-title" value="${(k.title||'').replace(/"/g,'&quot;')}" onchange="kbSave(${k.id},'title',this.value)" placeholder="제목" />
+        <select class="kb-cat" onchange="kbSave(${k.id},'category',this.value)">${opts}</select>
+        <label class="kb-toggle" title="AI 참고 켜기/끄기"><input type="checkbox" ${on} onchange="kbSave(${k.id},'active',this.checked?1:0)"/> 적용</label>
+        <button class="kb-del" onclick="kbDelete(${k.id})">🗑</button>
+      </div>
+      <div class="kb-summary">${escHtml(k.summary||'(요약 없음)')}</div>
+      <details class="kb-full"><summary>전문 보기 (${(k.content||'').length.toLocaleString()}자)</summary>
+        <div class="kb-content">${escHtml(k.content||'')}</div></details>
+    </div>`;
+  }).join('');
+}
+
+function kbSave(id, field, val) {
+  const row = kbRows.find(x => x.id === id); if (row) row[field] = val;
+  fetch(`/api/knowledge/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [field]: val }) });
+  if (field === 'active') { renderKnowledge(); }
+}
+
+async function kbDelete(id) {
+  if (!confirm('이 자료를 삭제할까요?')) return;
+  await fetch(`/api/knowledge/${id}`, { method: 'DELETE' });
+  loadKnowledge();
+}
+
+function kbAdd() {
+  let m = document.getElementById('kb-add-modal');
+  if (m) m.remove();
+  m = document.createElement('div');
+  m.id = 'kb-add-modal';
+  m.className = 'ws-af-overlay';
+  m.innerHTML = `<div class="ws-af-box">
+    <div class="ws-af-head"><b>📚 자료 추가</b><span class="ws-af-x" onclick="document.getElementById('kb-add-modal').remove()">✕</span></div>
+    <label class="ws-af-label">제목</label>
+    <input id="kb-add-title" class="ws-af-inp" placeholder="예: 키 컨텐츠 33주 4회" />
+    <label class="ws-af-label">카테고리</label>
+    <select id="kb-add-cat" class="ws-af-inp">${KB_CATS.map(c=>`<option>${c}</option>`).join('')}</select>
+    <label class="ws-af-label">요약 <span>(선택 — AI가 주로 참고)</span></label>
+    <textarea id="kb-add-summary" class="ws-af-area" placeholder="핵심 요약 (비우면 전문에서 참고)"></textarea>
+    <label class="ws-af-label">전문 내용</label>
+    <textarea id="kb-add-content" class="ws-af-area" placeholder="강의 텍스트·자료 붙여넣기"></textarea>
+    <div class="ws-af-actions">
+      <button class="ws-af-cancel" onclick="document.getElementById('kb-add-modal').remove()">취소</button>
+      <button class="ws-af-run" onclick="kbAddSave()">저장</button>
+    </div></div>`;
+  document.body.appendChild(m);
+}
+
+async function kbAddSave() {
+  const body = {
+    title: document.getElementById('kb-add-title').value.trim(),
+    category: document.getElementById('kb-add-cat').value,
+    summary: document.getElementById('kb-add-summary').value.trim(),
+    content: document.getElementById('kb-add-content').value.trim(),
+  };
+  if (!body.content && !body.summary) { alert('내용을 입력해주세요.'); return; }
+  await fetch('/api/knowledge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const m = document.getElementById('kb-add-modal'); if (m) m.remove();
+  loadKnowledge();
 }
