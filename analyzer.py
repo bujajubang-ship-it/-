@@ -488,9 +488,17 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
                 )
         return "\n".join(lines)
 
-    async def analyze_midform(self, keyword: str, product_desc: str, videos: List[Dict], naver: List[Dict], viewtrap_refs: Optional[Dict] = None) -> Dict:
+    async def analyze_midform(self, keyword: str, product_desc: str, videos: List[Dict], naver: List[Dict], viewtrap_refs: Optional[Dict] = None, knowledge: List[Dict] = None) -> Dict:
         videos_text = self._build_videos_text(videos)
         naver_text = self._build_naver_text(naver)
+        kt = ""
+        if knowledge:
+            blocks = [f"[{k.get('title','강의')}]\n{(k.get('summary') or (k.get('content') or '')[:1500]).strip()}"
+                      for k in knowledge if (k.get('summary') or k.get('content'))]
+            if blocks:
+                kt = ("\n== ★ 사장님 영상 제작·키 컨텐츠 강의 (제목·도입부·원고 작성 시 이 작성법을 적용) ==\n"
+                      + "\n".join(blocks)
+                      + "\n[적용] 위 강의의 작성 원리를 제목·썸네일 문구·도입부·원고에 실제로 녹이되, 억지로 끼워넣지는 마세요.\n")
 
         thumb_blocks = []
         for v in videos[:3]:
@@ -539,6 +547,7 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
 - 썸네일에서: 핫비디오 썸네일 패턴을 분석해 동일한 심리 자극 방식 적용
 - viewtrap_insights 필드에 어떤 영상을 참고했고 어떻게 변형 적용했는지 명시하세요
 ''' if viewtrap_text else ''}
+{kt}
 위 시장 데이터를 바탕으로 영상 제작의 모든 단계를 포함한 완성된 기획안을 작성하세요.
 
 [벤치마크 분석 — 먼저 할 것]

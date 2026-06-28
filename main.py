@@ -610,7 +610,8 @@ async def midform(req: MidformRequest):
 
             yield sse({"step": "analyzing", "message": "AI가 전체 영상 기획 작성 중... (1~2분 소요)"})
             analyzer = Analyzer()
-            _task = asyncio.create_task(analyzer.analyze_midform(req.keyword, combined_desc, videos_with_comments, naver_results, viewtrap_refs))
+            kb = [k for k in list_knowledge(active_only=True)] or None
+            _task = asyncio.create_task(analyzer.analyze_midform(req.keyword, combined_desc, videos_with_comments, naver_results, viewtrap_refs, kb))
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)
