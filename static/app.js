@@ -3772,6 +3772,7 @@ const WS_COLS = [
   { k: 'memo',    label: '메모·링크',       type: 'area', hint: '영상 링크, 기타' },
 ];
 let wsRows = [];
+let wsExpanded = new Set();  // 펼쳐진 카드 id (기본은 다 접힘)
 let wsTimers = {};
 
 function _wsParse(s) { try { return JSON.parse(s || '{}'); } catch (e) { return {}; } }
@@ -3786,7 +3787,8 @@ async function loadWorksheet() {
 }
 
 async function addWsRow() {
-  await fetch('/api/worksheet', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: {} }) });
+  const r = await fetch('/api/worksheet', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: {} }) });
+  try { const j = await r.json(); if (j.id) wsExpanded.add(j.id); } catch (e) {}
   loadWorksheet();
 }
 
@@ -3879,6 +3881,7 @@ async function wsAfRun() {
           if (data.step === 'error') { status.innerHTML = '❌ ' + escHtml(data.message); runBtn.disabled = false; runBtn.textContent = '자동작성 시작'; return; }
           if (data.step === 'done') {
             status.innerHTML = '✅ 워크시트 카드가 생성됐어요!';
+            if (data.id) wsExpanded.add(data.id);
             await loadWorksheet();
             setTimeout(wsAfClose, 1200);
             return;
@@ -3999,15 +4002,28 @@ function renderWorksheet() {
     }).join('');
     const stage = row.data.videoId ? wsStageFromData(d) : null;
     const stageLabel = stage ? ((PLAN_STEPS.find(s => s.key === stage) || {}).label || '') : '';
-    return `<div class="ws-card">
-      <div class="ws-card-head">
-        <input class="ws-card-name" value="${(d.name || '').toString().replace(/"/g, '&quot;')}" placeholder="영상 제목" oninput="wsOnText(${row.id},'name',this.value)" />
+    const open = wsExpanded.has(row.id);
+    const txtCols = WS_COLS.filter(c => c.type === 'area' || c.type === 'text');
+    const filled = txtCols.filter(c => (d[c.k] || '').toString().trim()).length;
+    return `<div class="ws-card${open ? ' open' : ''}" id="ws-card-${row.id}">
+      <div class="ws-card-head" onclick="wsToggleCard(event, ${row.id})">
+        <button class="ws-card-chev" title="펼치기/접기">▸</button>
+        <input class="ws-card-name" value="${(d.name || '').toString().replace(/"/g, '&quot;')}" placeholder="영상 제목" onclick="event.stopPropagation()" oninput="wsOnText(${row.id},'name',this.value)" />
+        <span class="ws-card-fill">${filled}/${txtCols.length}</span>
         ${stage ? `<span class="ws-card-stage" id="ws-stage-${row.id}">진행: ${stageLabel}</span>` : ''}
-        <button class="ws-card-del" onclick="deleteWsRow(${row.id})" title="삭제">🗑 삭제</button>
+        <button class="ws-card-del" onclick="event.stopPropagation();deleteWsRow(${row.id})" title="삭제">🗑 삭제</button>
       </div>
       <div class="ws-steps">${blocks}</div>
     </div>`;
   }).join('');
+}
+
+function wsToggleCard(e, id) {
+  if (e) e.stopPropagation();
+  const card = document.getElementById('ws-card-' + id);
+  if (!card) return;
+  const open = card.classList.toggle('open');
+  if (open) wsExpanded.add(id); else wsExpanded.delete(id);
 }
 
 // 이미지 칸에 포커스된 상태에서 붙여넣기(캡쳐) 처리 — 한 번만 등록
