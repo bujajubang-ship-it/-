@@ -3773,6 +3773,15 @@ const WS_COLS = [
 ];
 let wsRows = [];
 let wsExpanded = new Set();  // 펼쳐진 카드 id (기본은 다 접힘)
+// 카드별 색상 순환 [강조색, 헤더 연한색, 헤더 진한색(펼침)]
+const WS_PALETTE = [
+  ['#7c3aed', '#f5f3ff', '#ede9fe'],
+  ['#0ea5e9', '#eff6ff', '#dbeafe'],
+  ['#10b981', '#ecfdf5', '#d1fae5'],
+  ['#f59e0b', '#fffbeb', '#fef3c7'],
+  ['#ef4444', '#fef2f2', '#fee2e2'],
+  ['#ec4899', '#fdf2f8', '#fce7f3'],
+];
 let wsTimers = {};
 
 function _wsParse(s) { try { return JSON.parse(s || '{}'); } catch (e) { return {}; } }
@@ -3991,7 +4000,7 @@ function renderWorksheet() {
     el.innerHTML = '<div class="ws-empty">기획 단계 영상을 추가하면 여기에 워크시트가 자동 생성돼요.<br>또는 <b>+ 행 추가</b>로 직접 만드세요.</div>';
     return;
   }
-  el.innerHTML = wsRows.map(row => {
+  el.innerHTML = wsRows.map((row, idx) => {
     const d = row.data || {};
     const blocks = WS_COLS.map(c => {
       let inner;
@@ -4005,7 +4014,8 @@ function renderWorksheet() {
     const open = wsExpanded.has(row.id);
     const txtCols = WS_COLS.filter(c => c.type === 'area' || c.type === 'text');
     const filled = txtCols.filter(c => (d[c.k] || '').toString().trim()).length;
-    return `<div class="ws-card${open ? ' open' : ''}" id="ws-card-${row.id}">
+    const pal = WS_PALETTE[idx % WS_PALETTE.length];
+    return `<div class="ws-card${open ? ' open' : ''}" id="ws-card-${row.id}" style="--ws-accent:${pal[0]};--ws-tint:${pal[1]};--ws-tint2:${pal[2]}">
       <div class="ws-card-head" onclick="wsToggleCard(event, ${row.id})">
         <button class="ws-card-chev" title="펼치기/접기">▸</button>
         <input class="ws-card-name" value="${(d.name || '').toString().replace(/"/g, '&quot;')}" placeholder="영상 제목" onclick="event.stopPropagation()" oninput="wsOnText(${row.id},'name',this.value)" />
