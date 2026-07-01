@@ -2050,3 +2050,8 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ws-step .ws-imgcell { border: 1.5px dashed #c7d2fe; border-radius: 8px; min-height: 130px; background: #fafaff; gap: 8px; padding: 10px; }
 .ws-step.img .ws-imgcell { min-height: 100px; }
 .ws-thumb img { max-height: 160px; max-width: 320px; }
+
+/* 섬네일 AI 생성 버튼 */
+.ws-genthumb { background: #10a37f; color: #fff; border: none; border-radius: 7px; padding: 6px 11px; font-size: 12px; font-weight: 700; cursor: pointer; margin-left: 4px; }
+.ws-genthumb:disabled { opacity: .55; cursor: default; }
+.ws-gen-status { font-size: 11px; color: #6b7280; display: block; width: 100%; margin-top: 4px; }

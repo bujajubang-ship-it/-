@@ -3988,10 +3988,59 @@ function wsImgCell(id, col) {
   const thumbs = imgs.map((src, i) =>
     `<div class="ws-thumb"><img src="${src}" onclick="window.open().document.write('<img src=\\'' + this.src + '\\'>')"/><span class="ws-thumb-x" onclick="wsRemoveImage(${id},'${col}',${i})">✕</span></div>`
   ).join('');
+  const genBtn = col === 'thumbImg'
+    ? `<button class="ws-genthumb" onclick="wsGenThumb(${id})" title="섬네일 디자인+문구로 AI 예시 이미지 생성">🎨 AI 생성</button>` : '';
   return `<div class="ws-imgcell" data-imgcell data-rowid="${id}" data-col="${col}" tabindex="0" title="클릭 후 Ctrl/⌘+V로 붙여넣기">
     ${thumbs}
     <label class="ws-up">📎<input type="file" accept="image/*" style="display:none" onchange="wsUpload(event,${id},'${col}')"></label>
+    ${genBtn}
+    <span class="ws-gen-status" id="ws-gen-${id}"></span>
   </div>`;
+}
+
+// 섬네일 디자인(thumbDesign)+문구(thumbCopy)로 gpt-image 예시 섬네일 생성
+async function wsGenThumb(id) {
+  const row = wsRows.find(r => r.id === id); if (!row) return;
+  const d = row.data || {};
+  const design = (d.thumbDesign || '').trim();
+  const copy = (d.thumbCopy || '').trim();
+  if (!design && !copy) { alert('먼저 ⑤ 섬네일 디자인 또는 ④ 섬네일 문구를 채워주세요 (자동작성하면 채워져요).'); return; }
+  const st = document.getElementById('ws-gen-' + id);
+  const btn = st && st.parentNode.querySelector('.ws-genthumb');
+  if (btn) { btn.disabled = true; }
+  if (st) st.textContent = '⏳ 생성 중... (1~2분)';
+  let buffer = '';
+  try {
+    const resp = await fetch('/api/worksheet/thumbnail', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ design, copy }),
+    });
+    if (!resp.ok) throw new Error(`서버 오류: ${resp.status}`);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) { if (st) st.textContent = '⚠️ 연결 끊김'; break; }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n'); buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.step === 'ping') continue;
+          if (data.step === 'error') { if (st) st.textContent = '❌ ' + data.message; if (btn) btn.disabled = false; return; }
+          if (data.step === 'done') {
+            await wsAddImage(id, 'thumbImg', data.image);
+            return; // wsAddImage가 재렌더 → 상태·버튼 갱신됨
+          }
+          if (data.message && st) st.textContent = '⏳ ' + data.message;
+        } catch (e) {}
+      }
+    }
+  } catch (err) {
+    if (st) st.textContent = '❌ ' + err.message;
+  }
+  if (btn) btn.disabled = false;
 }
 
 function renderWorksheet() {

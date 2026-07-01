@@ -1199,6 +1199,40 @@ async def knowledge_delete(id: int):
     return {"ok": True}
 
 
+@app.post("/api/worksheet/thumbnail")
+async def worksheet_thumbnail(request: Request):
+    """섬네일 디자인 묘사(+문구)로 gpt-image 예시 썸네일 생성 → 유튜브 16:9 이미지."""
+    from image_gen import generate_thumbnail
+    body = await request.json()
+    design = (body.get("design") or "").strip()
+    copy = (body.get("copy") or "").strip()
+
+    async def stream():
+        if not os.getenv("OPENAI_API_KEY", "").strip():
+            yield sse({"step": "error", "message": "OPENAI_API_KEY 미설정 — Render 환경변수에 추가해주세요."})
+            return
+        if not design and not copy:
+            yield sse({"step": "error", "message": "먼저 섬네일 디자인 또는 문구를 채워주세요."})
+            return
+        yield sse({"step": "generating", "message": "gpt-image로 섬네일 생성 중... (1~2분 소요)"})
+        loop = asyncio.get_event_loop()
+        fut = loop.run_in_executor(None, generate_thumbnail, design, copy)
+        while not fut.done():
+            yield sse({"step": "ping"})
+            await asyncio.sleep(4)
+        res = fut.result()
+        if res.get("b64"):
+            yield sse({"step": "done", "image": "data:image/png;base64," + res["b64"]})
+        else:
+            yield sse({"step": "error", "message": "생성 실패: " + (res.get("error") or "")})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/transcript-debug")
 async def transcript_debug(request: Request):
     """쿠키/스크립트 수집 진단. ?url=<영상url> 주면 그 영상으로 실제 수집 시도."""
