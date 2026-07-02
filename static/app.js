@@ -4070,11 +4070,58 @@ function renderWorksheet() {
         <input class="ws-card-name" value="${(d.name || '').toString().replace(/"/g, '&quot;')}" placeholder="영상 제목" onclick="event.stopPropagation()" oninput="wsOnText(${row.id},'name',this.value)" />
         <span class="ws-card-fill">${filled}/${txtCols.length}</span>
         ${stage ? `<span class="ws-card-stage" id="ws-stage-${row.id}">진행: ${stageLabel}</span>` : ''}
+        <button class="ws-card-pdf" onclick="event.stopPropagation();wsCardPdf(${row.id})" title="촬영용 대본 PDF">📄 PDF</button>
         <button class="ws-card-del" onclick="event.stopPropagation();deleteWsRow(${row.id})" title="삭제">🗑 삭제</button>
       </div>
       <div class="ws-steps">${blocks}</div>
     </div>`;
   }).join('');
+}
+
+// 카드 → 촬영용 대본 PDF (섬네일 이미지 포함, 깔끔 정리)
+function wsCardPdf(id) {
+  const row = wsRows.find(r => r.id === id); if (!row) return;
+  const d = row.data || {};
+  const title = d.name || '기획안';
+  const thumbImg = (Array.isArray(d.thumbImg) && d.thumbImg[0]) ? d.thumbImg[0] : '';
+  const sec = (label, val, big) => {
+    const v = (val || '').toString().trim();
+    if (!v) return '';
+    return `<div class="pdfsec"><div class="pdfh">${label}</div><div class="pdfv${big ? ' big' : ''}">${escHtml(v).replace(/\n/g, '<br>')}</div></div>`;
+  };
+  const html = `
+    <div id="ws-pdf-${id}" style="width:190mm;padding:6mm;font-family:'Pretendard',sans-serif;color:#1f2937;background:#fff;">
+      <div style="font-size:22px;font-weight:900;border-bottom:3px solid #D70010;padding-bottom:6px;margin-bottom:10px;">${escHtml(title)}</div>
+      <div style="font-size:11px;color:#888;margin-bottom:14px;">촬영용 기획·대본 · ${d.keyword ? escHtml(d.keyword) + ' · ' : ''}${new Date().toLocaleDateString('ko-KR')}</div>
+      ${thumbImg ? `<div class="pdfsec"><div class="pdfh">🖼 섬네일 시안</div><img src="${thumbImg}" style="width:120mm;border-radius:6px;border:1px solid #eee;"/></div>` : ''}
+      ${sec('④ 제목 후보', d.titleCopy)}
+      ${sec('④ 섬네일 문구', d.thumbCopy)}
+      ${sec('⑤ 섬네일 디자인(촬영 구도)', d.thumbDesign)}
+      ${sec('⑥ 도입부 원고', d.introScript, true)}
+      ${sec('⑦ 본문 원고', d.bodyScript, true)}
+      ${sec('공감 포인트', d.empathy)}
+      ${sec('② 도입부 분석', d.introA)}
+      ${sec('② 썸네일 분석', d.thumbA)}
+      ${sec('메모', d.memo)}
+    </div>`;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;left:-9999px;top:0;';
+  wrap.innerHTML = `<style>
+    .pdfsec{margin-bottom:12px;page-break-inside:avoid;}
+    .pdfh{font-size:13px;font-weight:800;color:#D70010;margin-bottom:4px;}
+    .pdfv{font-size:13px;line-height:1.65;white-space:pre-wrap;background:#f9fafb;border-left:3px solid #e5e7eb;padding:8px 11px;border-radius:4px;}
+    .pdfv.big{font-size:15px;line-height:1.9;background:#fffdf5;border-left-color:#D70010;}
+  </style>` + html;
+  document.body.appendChild(wrap);
+  const el = wrap.querySelector('#ws-pdf-' + id);
+  const fname = `${title.replace(/[\\/:*?"<>|]/g, '').slice(0, 40)}_대본.pdf`;
+  html2pdf().set({
+    margin: [8, 8, 8, 8], filename: fname,
+    image: { type: 'jpeg', quality: 0.95 },
+    html2canvas: { scale: 2, useCORS: true },
+    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+    pagebreak: { mode: ['css', 'legacy'] }
+  }).from(el).save().then(() => wrap.remove()).catch(() => wrap.remove());
 }
 
 function wsToggleCard(e, id) {

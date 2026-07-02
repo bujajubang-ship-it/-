@@ -2055,3 +2055,7 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ws-genthumb { background: #10a37f; color: #fff; border: none; border-radius: 7px; padding: 6px 11px; font-size: 12px; font-weight: 700; cursor: pointer; margin-left: 4px; }
 .ws-genthumb:disabled { opacity: .55; cursor: default; }
 .ws-gen-status { font-size: 11px; color: #6b7280; display: block; width: 100%; margin-top: 4px; }
+
+/* 카드 PDF 버튼 */
+.ws-card-pdf { border: 1px solid #d1d5db; background: #fff; color: #374151; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; border-radius: 7px; padding: 5px 10px; }
+.ws-card-pdf:hover { border-color: #D70010; color: #D70010; }

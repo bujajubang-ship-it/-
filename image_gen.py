@@ -37,17 +37,25 @@ def _to_youtube_16x9(b64_png: str) -> str:
 
 def _build_prompt(design: str, copy: str) -> str:
     parts = [
-        "Create a bold, high-contrast YouTube thumbnail for a Korean YouTube channel (landscape 16:9 style).",
-        "Eye-catching, one clear focal subject, punchy colors, professional quality.",
+        "Design a professional, high-CTR Korean YouTube thumbnail. Landscape 16:9.",
+        # 구도 규칙 (핵심)
+        "COMPOSITION: strong single focal point; if a person is present, show a large, "
+        "expressive face/upper body placed on one side (rule of thirds), with the big text on the "
+        "opposite side so they don't overlap. Clear figure-ground separation, subject sharply in "
+        "focus with a slightly blurred/darkened background for depth. Dramatic lighting, punchy but "
+        "not muddy colors, high contrast so it pops as a small thumbnail.",
     ]
     if design.strip():
-        parts.append(f"Design details: {design.strip()}")
+        parts.append("Follow this exact layout, subject, expression, colors, props and text "
+                     f"placement: {design.strip()}")
     if copy.strip():
         lines = [l.strip() for l in copy.strip().splitlines() if l.strip()]
         if lines:
-            parts.append("Overlay the following Korean text large and bold on the thumbnail, "
-                         "spelled EXACTLY and clearly legible: " + " / ".join(lines[:3]))
-    parts.append("All Korean text must be rendered accurately (correct spelling) and highly legible.")
+            parts.append("Main overlay text (thick heavy sans-serif with a bold contrasting "
+                         "outline/stroke, very large and legible, placed to not cover the face): "
+                         + " / ".join(lines[:3]))
+    parts.append("Every Korean character must be spelled EXACTLY correct and crisply legible. "
+                 "No watermarks, no gibberish text, no extra logos. Photorealistic where the design implies a real scene.")
     return " ".join(parts)
 
 
