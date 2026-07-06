@@ -4238,9 +4238,10 @@ async function kbAddSave() {
 // ===== 🔥 짜치는 기획 (사람의 마음을 얻는 영상) =====
 async function startJjachi() {
   const topic = (document.getElementById('jjachi-topic').value || '').trim();
+  const heart = (document.getElementById('jjachi-heart').value || '').trim();
   const moving = (document.getElementById('jjachi-moving').value || '').trim();
   const story = (document.getElementById('jjachi-story').value || '').trim();
-  if (!topic && !moving) { alert('주제 또는 감명 깊게 본 영상 스크립트를 입력해주세요.'); return; }
+  if (!topic) { alert('영상 주제를 입력해주세요.'); return; }
 
   document.getElementById('jjachi-input-section').classList.add('hidden');
   document.getElementById('jjachi-report-section').classList.add('hidden');
@@ -4253,7 +4254,7 @@ async function startJjachi() {
   try {
     const resp = await fetch('/api/jjachi', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, moving_script: moving, my_story: story }),
+      body: JSON.stringify({ topic, viewer_heart: heart, moving_script: moving, my_story: story }),
     });
     if (!resp.ok) throw new Error(`서버 오류: ${resp.status}`);
     const reader = resp.body.getReader();
@@ -4297,6 +4298,10 @@ function renderJjachi(r, topic) {
     html += card('🎯', '끝점 — 시청자가 영상 본 후 서로 나눌 예상 대화 (이걸 목표로 설계)', vt, '#D70010');
   }
   if (r.coreEmotion) html += card('❤️', '이 영상이 건드리는 진짜 감정', `<div class="jja-big">${txt(r.coreEmotion)}</div>`, '#ef4444');
+  if (Array.isArray(r.empathyScenes) && r.empathyScenes.length) {
+    const es = r.empathyScenes.map(s => `<div class="jja-quote"><b>[${escHtml(s.place || '')}]</b> ${escHtml(s.scene || '')}<div class="jja-src">→ ${escHtml(s.why || '')}</div></div>`).join('');
+    html += card('🎬', '마음을 움직이는 공감 장면 (촬영·연출)', es, '#10b981');
+  }
   if (r.movingAnalysis) html += card('🎬', '감명 영상이 왜 마음을 움직였나', txt(r.movingAnalysis));
   if (Array.isArray(r.empathyPoints) && r.empathyPoints.length) {
     const ep = r.empathyPoints.map(p => `<div class="jja-quote">"${escHtml(p.quote || '')}"<div class="jja-src">— ${escHtml(p.source || '')} · ${escHtml(p.insight || '')}</div></div>`).join('');

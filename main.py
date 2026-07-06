@@ -1239,6 +1239,7 @@ async def jjachi(request: Request):
     """짜치는 기획 — 감명 영상 스크립트 + 강의 지식 + 실제 공감으로 '마음을 얻는' 영상 기획."""
     body = await request.json()
     topic = (body.get("topic") or "").strip()
+    viewer_heart = (body.get("viewer_heart") or "").strip()
     moving_script = (body.get("moving_script") or "").strip()
     my_story = (body.get("my_story") or "").strip()
     youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
@@ -1249,8 +1250,8 @@ async def jjachi(request: Request):
         if not os.getenv("ANTHROPIC_API_KEY", "").strip():
             yield sse({"step": "error", "message": ".env에 ANTHROPIC_API_KEY를 설정해주세요."})
             return
-        if not topic and not moving_script:
-            yield sse({"step": "error", "message": "주제 또는 감명 영상 스크립트를 입력해주세요."})
+        if not topic:
+            yield sse({"step": "error", "message": "영상 주제를 입력해주세요."})
             return
         videos_with_comments = []
         naver_results = []
@@ -1270,7 +1271,7 @@ async def jjachi(request: Request):
             yield sse({"step": "writing", "message": "Opus 4.8가 '마음을 얻는 기획' 작성 중... (30~60초)"})
             analyzer = Analyzer()
             _task = asyncio.create_task(analyzer.plan_jjachi(
-                topic, moving_script, my_story,
+                topic, viewer_heart, moving_script, my_story,
                 videos_with_comments or None, naver_results or None, knowledge))
             while not _task.done():
                 yield sse({"step": "ping"})

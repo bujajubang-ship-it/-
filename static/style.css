@@ -2072,3 +2072,6 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .jja-script { background: #fffdf5; border-left: 3px solid #10b981; padding: 12px 14px; border-radius: 6px; font-size: 15px; line-height: 1.95; white-space: pre-wrap; }
 .jja-check { margin: 0; padding-left: 20px; }
 .jja-check li { margin-bottom: 5px; }
+.jja-more { margin: 4px 0; }
+.jja-more summary { cursor: pointer; font-size: 13px; color: #6b7280; padding: 6px 0; }
+.jja-more textarea { width: 100%; box-sizing: border-box; margin-top: 6px; }

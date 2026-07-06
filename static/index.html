@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260706a" />
+  <link rel="stylesheet" href="style.css?v=20260706d" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -346,11 +346,15 @@
       <section class="search-section" id="jjachi-input-section">
         <div class="search-card edit-card">
           <h1>🔥 짜치는 기획 — 사람의 마음을 얻는 영상</h1>
-          <p class="search-desc">기술적 구조를 넘어, <b>감명 깊게 본 영상 스크립트</b>가 왜 마음을 움직였는지 분해해서<br>강의 인사이트·실제 공감과 섞어 '응원하고 싶어지는' 영상을 기획합니다.</p>
+          <p class="search-desc">주제와 <b>원하는 시청자의 마음</b>만 넣으면, '원초적 바이럴' 인사이트(지식 탭)를 적용해<br>기술 설계 위에 <b>마음을 움직이는 공감 장면</b>을 얹어 '응원하고 싶어지는' 영상을 기획합니다.</p>
           <div class="edit-inputs">
-            <input type="text" id="jjachi-topic" placeholder="영상 주제/핵심 내용 (예: 식당 3번 망하고 다시 일어선 이야기)" autocomplete="off" />
-            <textarea id="jjachi-moving" rows="6" placeholder="★ 감명 깊게 본 영상 스크립트 붙여넣기 (핵심 재료 — 왜 마음이 움직였는지 분석합니다)"></textarea>
-            <textarea id="jjachi-story" rows="4" placeholder="사장님의 진짜 이야기·경험·솔직한 감정 (선택 — 진정성 재료)"></textarea>
+            <input type="text" id="jjachi-topic" placeholder="영상 주제/핵심 내용 * (예: 냉장고 상부선반 활용법)" autocomplete="off" />
+            <textarea id="jjachi-heart" rows="3" placeholder="시청자의 마음 — 이 영상 보고 시청자가 어떤 마음이 들었으면? (예: 소탈·진정성 있어서 도와주고 싶고, 지인에게 소개하고 싶은 마음)"></textarea>
+            <details class="jja-more">
+              <summary>+ 선택 입력 (감명 영상 스크립트 · 내 이야기)</summary>
+              <textarea id="jjachi-moving" rows="4" placeholder="감명 깊게 본 영상 스크립트 (선택 — 특정 영상을 참고하고 싶을 때)"></textarea>
+              <textarea id="jjachi-story" rows="3" placeholder="사장님의 진짜 이야기·경험·솔직한 감정 (선택 — 진정성 재료)"></textarea>
+            </details>
             <button id="jjachi-btn" onclick="startJjachi()">마음을 얻는 기획 시작</button>
           </div>
         </div>
@@ -1120,7 +1124,7 @@
 
   </main>
 
-  <script src="app.js?v=20260706c"></script>
+  <script src="app.js?v=20260706d"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');
