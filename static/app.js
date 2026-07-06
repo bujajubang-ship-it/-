@@ -4237,13 +4237,16 @@ async function kbAddSave() {
 
 // ===== 🔥 짜치는 기획 (사람의 마음을 얻는 영상) =====
 async function startJjachi() {
-  const topic = (document.getElementById('jjachi-topic').value || '').trim();
-  const cases = (document.getElementById('jjachi-cases').value || '').trim();
-  const facts = (document.getElementById('jjachi-facts').value || '').trim();
-  const heart = (document.getElementById('jjachi-heart').value || '').trim();
-  const env = (document.getElementById('jjachi-env').value || '').trim();
-  if (!topic) { alert('영상 주제를 입력해주세요.'); return; }
-  if (!cases && !facts) { if (!confirm('② 사장님 사례 / ③ 주방 현실을 안 넣으면 공감이 약하고 부정확할 수 있어요. 그래도 진행할까요?')) return; }
+  const v = id => (document.getElementById(id).value || '').trim();
+  const topic = v('jjachi-topic');
+  if (!topic) { alert('① 영상 주제를 입력해주세요.'); return; }
+  const answers = {
+    target: v('jjachi-target'), pain: v('jjachi-pain'), innerVoice: v('jjachi-inner'),
+    howto: v('jjachi-howto'), honest: v('jjachi-honest'), vs: v('jjachi-vs'),
+    mytake: v('jjachi-mytake'), endpoint: v('jjachi-endpoint'), filming: v('jjachi-filming'),
+  };
+  const filled = Object.values(answers).filter(Boolean).length;
+  if (filled < 2) { if (!confirm('질문에 답을 거의 안 채우셨어요. 많이 채울수록 공감가는 기획이 나와요. 그래도 진행할까요?')) return; }
 
   document.getElementById('jjachi-input-section').classList.add('hidden');
   document.getElementById('jjachi-report-section').classList.add('hidden');
@@ -4256,7 +4259,7 @@ async function startJjachi() {
   try {
     const resp = await fetch('/api/jjachi', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, viewer_heart: heart, owner_cases: cases, reality_facts: facts, filming_env: env }),
+      body: JSON.stringify({ topic, answers }),
     });
     if (!resp.ok) throw new Error(`서버 오류: ${resp.status}`);
     const reader = resp.body.getReader();
@@ -4295,48 +4298,19 @@ function renderJjachi(r, topic) {
     `<div class="jja-card"${accent ? ` style="border-left-color:${accent}"` : ''}><div class="jja-h">${icon} ${title}</div><div class="jja-b">${inner}</div></div>`;
 
   let html = '';
-  if (r.logline) html += card('🎬', '한 줄 컨셉', `<div class="jja-big">${txt(r.logline)}</div>`, '#111827');
-  if (r.caseSetup && (r.caseSetup.who || r.caseSetup.problem)) {
-    const c = r.caseSetup;
-    html += card('🧩', '케이스 (가설) — 이 A사장님의 문제를 푼다',
-      `${c.who ? `<div class="sc-row"><span class="sc-k">A사장님</span><span class="sc-v">${txt(c.who)}</span></div>` : ''}
-       ${c.problem ? `<div class="sc-row"><span class="sc-k">겪는 문제</span><span class="sc-v">${txt(c.problem)}</span></div>` : ''}
-       ${c.typical ? `<div class="sc-row"><span class="sc-k">왜 전형</span><span class="sc-v">${txt(c.typical)}</span></div>` : ''}`, '#0891b2');
-  }
-  const keyNo = r.keyScene && r.keyScene.sceneNo ? String(r.keyScene.sceneNo).replace(/[^0-9]/g, '') : '';
-  if (r.keyScene && (r.keyScene.scene || r.keyScene.why)) {
-    html += card('🔑', `키신 (KEY SCENE)${keyNo ? ' — #' + keyNo + ' 장면' : ''} · 이 한 장면이 썸네일이자 승부처`,
-      `<div class="jja-big">${txt(r.keyScene.scene)}</div>${r.keyScene.why ? `<div class="jja-src" style="margin-top:6px">→ ${txt(r.keyScene.why)}</div>` : ''}`, '#f59e0b');
-  }
-  if (r.viewerMirror) html += card('🪞', '거울 — 이 영상이 비출 시청자의 현실 (딱 내 얘기)', `<div class="jja-b">${txt(r.viewerMirror)}</div>`, '#2563eb');
-  if (Array.isArray(r.viewerTalk) && r.viewerTalk.length) {
-    const vt = r.viewerTalk.map(t => `<div class="jja-quote">💬 "${escHtml(t)}"</div>`).join('');
-    html += card('🎯', '끝점 — 마지막에 시청자가 이렇게 말하게 (목표)', vt, '#D70010');
-  }
-  if (r.coreEmotion) html += card('❤️', '핵심 감정', `<div class="jja-big">${txt(r.coreEmotion)}</div>`, '#ef4444');
-
-  // ★ 촬영 대본 (콘티) — 순서대로
-  if (Array.isArray(r.scenes) && r.scenes.length) {
-    const rows = r.scenes.map((s, i) => {
-      const cell = (label, v) => v ? `<div class="sc-row"><span class="sc-k">${label}</span><span class="sc-v">${txt(v)}</span></div>` : '';
-      const isKey = keyNo && String(s.no) === keyNo;
-      return `<div class="sc-card${isKey ? ' sc-key' : ''}">
-        <div class="sc-head"><span class="sc-no">#${s.no || i + 1}</span> <b>${escHtml(s.beat || '장면')}</b> ${isKey ? '<span class="sc-keybadge">🔑 키신</span>' : ''} <span class="sc-sec">${escHtml(s.seconds || '')}</span></div>
-        ${cell('📍 어디서', s.location)}
-        ${cell('👥 누가', s.cast)}
-        ${cell('🎥 화면', s.visual)}
-        ${s.dialogue ? `<div class="sc-row"><span class="sc-k">🎙️ 대사</span><span class="sc-v sc-dlg">${txt(s.dialogue)}</span></div>` : ''}
-        ${cell('🎨 느낌·연출', s.direction)}
-        ${cell('💬 자막', s.caption)}
-      </div>`;
-    }).join('');
-    html += card('🎬', '촬영 대본 (이대로 순서대로 찍으세요)', `<div class="sc-wrap">${rows}</div>`, '#10b981');
-  }
-
   if (Array.isArray(r.titles) && r.titles.length)
     html += card('✍️', '제목 후보', r.titles.map(t => `<div class="jja-title">${escHtml(t)}</div>`).join(''));
   if (r.thumbnail) html += card('🖼️', '섬네일 (문구·구도)', txt(r.thumbnail));
-  if (r.note) html += card('💡', '이 대본이 통하는 이유', txt(r.note), '#7c3aed');
+  if (r.intro) html += card('🎙️', '도입 (공감으로 시작)', `<div class="jja-script">${txt(r.intro)}</div>`, '#10b981');
+  if (Array.isArray(r.body) && r.body.length) {
+    const parts = r.body.map(p => `<div class="jja-part"><div class="jja-part-h">${escHtml(p.part || '')}</div><div class="jja-script">${txt(p.script)}</div></div>`).join('');
+    html += card('📝', '본문 (유용한 정보 + 인간미)', parts, '#3b82f6');
+  }
+  if (r.outro) html += card('🤝', '마무리', `<div class="jja-script">${txt(r.outro)}</div>`, '#10b981');
+  if (Array.isArray(r.viewerTalk) && r.viewerTalk.length) {
+    const vt = r.viewerTalk.map(t => `<div class="jja-quote">💬 "${escHtml(t)}"</div>`).join('');
+    html += card('🎯', '끝점 — 보고 나서 시청자가 할 말', vt, '#D70010');
+  }
 
   document.getElementById('jjachi-report-body').innerHTML = html || '<p>결과가 비어있어요. 다시 시도해주세요.</p>';
 }

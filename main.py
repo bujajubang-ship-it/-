@@ -1236,13 +1236,12 @@ async def worksheet_thumbnail(request: Request):
 
 @app.post("/api/jjachi")
 async def jjachi(request: Request):
-    """짜치는 기획 — 감명 영상 스크립트 + 강의 지식 + 실제 공감으로 '마음을 얻는' 영상 기획."""
+    """짜치는 기획 — 사장님이 워크시트에 답한 진짜 현실을 조합해 '짜치지만 공감가는' 기획안."""
     body = await request.json()
     topic = (body.get("topic") or "").strip()
-    viewer_heart = (body.get("viewer_heart") or "").strip()
-    owner_cases = (body.get("owner_cases") or "").strip()
-    reality_facts = (body.get("reality_facts") or "").strip()
-    filming_env = (body.get("filming_env") or "").strip()
+    answers = body.get("answers") or {}
+    if not isinstance(answers, dict):
+        answers = {}
     youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
     naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
     naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
@@ -1272,7 +1271,7 @@ async def jjachi(request: Request):
             yield sse({"step": "writing", "message": "Opus 4.8가 '마음을 얻는 기획' 작성 중... (30~60초)"})
             analyzer = Analyzer()
             _task = asyncio.create_task(analyzer.plan_jjachi(
-                topic, viewer_heart, owner_cases, reality_facts, filming_env,
+                topic, answers,
                 videos_with_comments or None, naver_results or None, knowledge))
             while not _task.done():
                 yield sse({"step": "ping"})

@@ -2088,3 +2088,10 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .sc-dlg { background: #fffdf5; border-left: 3px solid #10b981; padding: 8px 10px; border-radius: 5px; font-size: 15px; font-weight: 500; white-space: pre-wrap; }
 .sc-key { border: 2px solid #f59e0b; background: #fffbeb; }
 .sc-keybadge { background: #f59e0b; color: #fff; font-weight: 800; border-radius: 6px; padding: 1px 8px; font-size: 12px; }
+/* 짜치는 기획 워크시트 입력 */
+.jja-sheet { gap: 14px; }
+.jja-q { display: block; font-size: 13.5px; font-weight: 700; color: #374151; text-align: left; }
+.jja-q span { color: #D70010; }
+.jja-q input, .jja-q textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 5px; font-weight: 400; }
+.jja-part { margin-bottom: 12px; }
+.jja-part-h { font-weight: 800; font-size: 14px; color: #1e40af; margin-bottom: 5px; }

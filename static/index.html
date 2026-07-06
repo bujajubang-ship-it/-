@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260706h" />
+  <link rel="stylesheet" href="style.css?v=20260706j" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -345,17 +345,32 @@
     <div id="pane-jjachi" class="hidden">
       <section class="search-section" id="jjachi-input-section">
         <div class="search-card edit-card">
-          <h1>🔥 짜치는 기획 — 사람의 마음을 얻는 영상</h1>
-          <p class="search-desc"><b>내가 본 사장님 사례 + 주방 현실</b>을 넣으면, '원초적 바이럴' 인사이트로<br>요리 안 하는 주방용품점 사장(조력자) 목소리의 <b>멋 안 부린 공감 기획</b>을 만듭니다.</p>
-          <div class="edit-inputs">
-            <input type="text" id="jjachi-topic" placeholder="① 영상 주제 * (예: 냉장고 상부선반 활용법)" autocomplete="off" />
-            <textarea id="jjachi-cases" rows="4" placeholder="② 내가 본 사장님 사례·하소연 * — 배달·설치 다니며 본 진짜 장면, 사장님들이 실제 한 말 (공감의 원료)&#10;예: 배달 가보면 열에 아홉은 상부선반 방치. 손 안 닿아 먼지·유통기한 지난 소스가 굴러다님. '위칸은 포기했다'는 사장님 많음"></textarea>
-            <textarea id="jjachi-facts" rows="3" placeholder="③ 제품·주방 현실 팩트 * — 실제 뭘 쓰는지, 진짜 문제, 제품 특징 (헛소리 방지)&#10;예: 식당은 스텐선반 사용(목재 아님). 좁은 주방 동선이 핵심. OO선반은 높이조절 가능"></textarea>
-            <textarea id="jjachi-heart" rows="2" placeholder="④ 원하는 시청자 마음(끝점) (선택) — 보고 뭐라 말했으면? (예: 안 팔려고 하고 진짜 알려주네, 도와주고 싶다)"></textarea>
-            <input type="text" id="jjachi-env" placeholder="⑤ 촬영 가능 환경 (선택 — 예: 매장/창고, 고객 주방 방문 시)" autocomplete="off" />
-            <button id="jjachi-btn" onclick="startJjachi()">마음을 얻는 기획 시작</button>
+          <h1>🔥 짜치는 기획 — 질문에 답하면 기획안이 나옵니다</h1>
+          <p class="search-desc"><b>답은 사장님한테 있어요.</b> 아래 질문에 아는 대로 적어주시면,<br>그걸 조합해서 <b>멋 안 부리고 공감가는 기획안</b>으로 정리해드립니다. (아는 것만 채워도 OK)</p>
+          <div class="edit-inputs jja-sheet">
+            <label class="jja-q">① 영상 주제·제품 <span>*</span>
+              <input type="text" id="jjachi-topic" placeholder="예: 냉장고 상부선반 활용법" autocomplete="off" /></label>
+            <label class="jja-q">② 이 영상 볼 사장님은 누구? (어떤 식당·상황) <span>*</span>
+              <input type="text" id="jjachi-target" placeholder="예: 3평 좁은 분식집, 배달 위주, 혼자 하는 사장님" autocomplete="off" /></label>
+            <label class="jja-q">③ 그 사장님이 이것 때문에 겪는 진짜 불편·고민 <span>*</span>
+              <textarea id="jjachi-pain" rows="3" placeholder="내가 배달·상담 다니며 실제로 본/들은 것 (예: 상부선반 손 안 닿아 방치, 먼지·유통기한 지난 소스 굴러다님)"></textarea></label>
+            <label class="jja-q">④ 그 사장님이 속으로/뒤에서 하는 진짜 말
+              <textarea id="jjachi-inner" rows="2" placeholder="실제 말투로 (예: '아 몰라, 좁아서 어쩔 수 없지', '위칸은 포기했어')"></textarea></label>
+            <label class="jja-q">⑤ 이걸로 뭘 어떻게 해결·활용하나? (실제 방법·제품) <span>*</span>
+              <textarea id="jjachi-howto" rows="3" placeholder="진짜 방법 (예: 손잡이 트레이로 까치발 안 들고 쑥, 높이조절로 위칸 살림)"></textarea></label>
+            <label class="jja-q">⑥ 솔직히 아쉬운 점 + 근데 왜 괜찮은지 (단점이자 장점)
+              <textarea id="jjachi-honest" rows="2" placeholder="예: 좀 비싸요 — 스텐 두껍게 썼거든요, 두 번 살 바엔 / 무게는 5kg까지"></textarea></label>
+            <label class="jja-q">⑦ 싼 것·경쟁사랑 진짜 차이 (솔직하게)
+              <input type="text" id="jjachi-vs" placeholder="예: 싼 건 몇 달 쓰면 휨, 이건 안 휨" autocomplete="off" /></label>
+            <label class="jja-q">⑧ 팔면서/보면서 느낀 내 솔직한 생각·에피소드 (인간적인 한마디)
+              <textarea id="jjachi-mytake" rows="2" placeholder="예: 저도 처음엔 이거 별거 아니라 생각해서 안 팔았는데, 사장님들이 자꾸 찾으시더라고요"></textarea></label>
+            <label class="jja-q">⑨ 영상 보고 시청자가 뭐라고 말해줬으면? (끝점)
+              <input type="text" id="jjachi-endpoint" placeholder="예: 안 팔려고 하고 진짜 알려주네, 도와주고 싶다" autocomplete="off" /></label>
+            <label class="jja-q">⑩ 어디서 찍을 수 있어요?
+              <input type="text" id="jjachi-filming" placeholder="예: 매장/창고, 고객 주방 방문 시" autocomplete="off" /></label>
+            <button id="jjachi-btn" onclick="startJjachi()">답변 조합해서 기획안 만들기</button>
           </div>
-          <p class="jja-note">💡 화자는 <b>요리 안 하는 주방용품점 사장(수백 주방을 본 조력자)</b>으로 자동 설정 — 식당 1인칭 경험을 지어내지 않습니다.</p>
+          <p class="jja-note">💡 저는 지어내지 않아요. <b>사장님이 적은 진짜 현실만</b> 조합해서 정리합니다. (빈 칸은 그냥 비워두세요)</p>
         </div>
       </section>
       <section class="progress-section hidden" id="jjachi-progress-section">
@@ -1123,7 +1138,7 @@
 
   </main>
 
-  <script src="app.js?v=20260706i"></script>
+  <script src="app.js?v=20260706j"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');
