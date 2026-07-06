@@ -4295,31 +4295,35 @@ function renderJjachi(r, topic) {
     `<div class="jja-card"${accent ? ` style="border-left-color:${accent}"` : ''}><div class="jja-h">${icon} ${title}</div><div class="jja-b">${inner}</div></div>`;
 
   let html = '';
-  if (r.viewerMirror) html += card('🪞', '거울 — 이 영상이 정확히 비춰줄 시청자의 현실 (딱 내 얘기)', `<div class="jja-big">${txt(r.viewerMirror)}</div>`, '#2563eb');
+  if (r.logline) html += card('🎬', '한 줄 컨셉', `<div class="jja-big">${txt(r.logline)}</div>`, '#111827');
+  if (r.viewerMirror) html += card('🪞', '거울 — 이 영상이 비출 시청자의 현실 (딱 내 얘기)', `<div class="jja-b">${txt(r.viewerMirror)}</div>`, '#2563eb');
   if (Array.isArray(r.viewerTalk) && r.viewerTalk.length) {
     const vt = r.viewerTalk.map(t => `<div class="jja-quote">💬 "${escHtml(t)}"</div>`).join('');
-    html += card('🎯', '끝점 — 시청자가 영상 본 후 서로 나눌 예상 대화 (이걸 목표로 설계)', vt, '#D70010');
+    html += card('🎯', '끝점 — 마지막에 시청자가 이렇게 말하게 (목표)', vt, '#D70010');
   }
-  if (r.coreEmotion) html += card('❤️', '이 영상이 건드리는 진짜 감정', `<div class="jja-big">${txt(r.coreEmotion)}</div>`, '#ef4444');
-  if (Array.isArray(r.empathyScenes) && r.empathyScenes.length) {
-    const es = r.empathyScenes.map(s => `<div class="jja-quote"><b>[${escHtml(s.place || '')}]</b> ${escHtml(s.scene || '')}<div class="jja-src">→ ${escHtml(s.why || '')}</div></div>`).join('');
-    html += card('🎬', '마음을 움직이는 공감 장면 (촬영·연출)', es, '#10b981');
+  if (r.coreEmotion) html += card('❤️', '핵심 감정', `<div class="jja-big">${txt(r.coreEmotion)}</div>`, '#ef4444');
+
+  // ★ 촬영 대본 (콘티) — 순서대로
+  if (Array.isArray(r.scenes) && r.scenes.length) {
+    const rows = r.scenes.map((s, i) => {
+      const cell = (label, v) => v ? `<div class="sc-row"><span class="sc-k">${label}</span><span class="sc-v">${txt(v)}</span></div>` : '';
+      return `<div class="sc-card">
+        <div class="sc-head"><span class="sc-no">#${s.no || i + 1}</span> <b>${escHtml(s.beat || '장면')}</b> <span class="sc-sec">${escHtml(s.seconds || '')}</span></div>
+        ${cell('📍 어디서', s.location)}
+        ${cell('👥 누가', s.cast)}
+        ${cell('🎥 화면', s.visual)}
+        ${s.dialogue ? `<div class="sc-row"><span class="sc-k">🎙️ 대사</span><span class="sc-v sc-dlg">${txt(s.dialogue)}</span></div>` : ''}
+        ${cell('🎨 느낌·연출', s.direction)}
+        ${cell('💬 자막', s.caption)}
+      </div>`;
+    }).join('');
+    html += card('🎬', '촬영 대본 (이대로 순서대로 찍으세요)', `<div class="sc-wrap">${rows}</div>`, '#10b981');
   }
-  if (r.movingAnalysis) html += card('🎬', '감명 영상이 왜 마음을 움직였나', txt(r.movingAnalysis));
-  if (Array.isArray(r.empathyPoints) && r.empathyPoints.length) {
-    const ep = r.empathyPoints.map(p => `<div class="jja-quote">"${escHtml(p.quote || '')}"<div class="jja-src">— ${escHtml(p.source || '')} · ${escHtml(p.insight || '')}</div></div>`).join('');
-    html += card('💬', '공감 지점 (실제 시청자 속마음)', ep);
-  }
-  if (r.authenticity) html += card('🫶', '사장님 진정성 포인트', txt(r.authenticity), '#f59e0b');
-  if (r.emotionJourney) html += card('🌊', '감정 여정', txt(r.emotionJourney));
-  if (r.fanMoment) html += card('⭐', '팬으로 만드는 한 방', `<div class="jja-big">${txt(r.fanMoment)}</div>`, '#7c3aed');
+
   if (Array.isArray(r.titles) && r.titles.length)
-    html += card('✍️', '감정 기반 제목', r.titles.map(t => `<div class="jja-title">${escHtml(t)}</div>`).join(''));
-  if (r.introScript) html += card('🎙️', '마음을 여는 도입부 대본', `<div class="jja-script">${txt(r.introScript)}</div>`, '#10b981');
-  if (r.outroScript) html += card('🎬', '마음을 얻는 마무리 대본', `<div class="jja-script">${txt(r.outroScript)}</div>`, '#10b981');
-  if (r.cta) html += card('🤝', '관계형 마무리 (CTA)', txt(r.cta));
-  if (Array.isArray(r.checklist) && r.checklist.length)
-    html += card('✅', '자가점검', '<ul class="jja-check">' + r.checklist.map(c => `<li>${escHtml(c)}</li>`).join('') + '</ul>');
+    html += card('✍️', '제목 후보', r.titles.map(t => `<div class="jja-title">${escHtml(t)}</div>`).join(''));
+  if (r.thumbnail) html += card('🖼️', '섬네일 (문구·구도)', txt(r.thumbnail));
+  if (r.note) html += card('💡', '이 대본이 통하는 이유', txt(r.note), '#7c3aed');
 
   document.getElementById('jjachi-report-body').innerHTML = html || '<p>결과가 비어있어요. 다시 시도해주세요.</p>';
 }
