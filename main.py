@@ -512,9 +512,10 @@ async def shortform(req: ShortformRequest):
 
             yield sse({"step": "analyzing", "message": f"AI가 {req.duration}초 릴스 기획 중... (30~60초 소요)"})
             analyzer = Analyzer()
+            kb = [k for k in list_knowledge(active_only=True)] or None
             _task = asyncio.create_task(analyzer.analyze_shortform(
                 req.keyword, req.product_desc, req.duration,
-                videos_with_comments or None, naver_results or None
+                videos_with_comments or None, naver_results or None, kb
             ))
             while not _task.done():
                 yield sse({"step": "ping"})
@@ -1421,7 +1422,7 @@ async def worksheet_autofill(request: Request):
 
             # 4) AI 작성 (썸네일 비전 + 실제 스크립트 + 키컨텐츠 강의 지식)
             knowledge = [k for k in list_knowledge(active_only=True)
-                         if k.get("category") in ("키컨텐츠", "원고작성")]
+                         if k.get("category") in ("키컨텐츠", "원고작성", "바이럴")]
             yield sse({"step": "writing", "message": "Opus 4.8가 썸네일 분석 + 워크시트 작성 중... (30~60초)"})
             analyzer = Analyzer()
             _task = asyncio.create_task(analyzer.autofill_worksheet(

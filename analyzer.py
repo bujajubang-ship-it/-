@@ -755,12 +755,19 @@ hot_topics는 5개 작성하세요: 풀링+키 겸용 2개 이상, 풀링 2개, 
 
         return _safe_json(msg.content[0].text.strip(), msg)
 
-    async def analyze_shortform(self, keyword: str, product_desc: str, duration: str, videos: List[Dict] = None, naver: List[Dict] = None) -> Dict:
+    async def analyze_shortform(self, keyword: str, product_desc: str, duration: str, videos: List[Dict] = None, naver: List[Dict] = None, knowledge: List[Dict] = None) -> Dict:
         market_section = ""
         if videos:
             market_section += f"\n== 유튜브 시장 데이터 (시청자 욕구·관심사 분석용) ==\n{self._build_videos_text(videos)}\n"
         if naver:
             market_section += f"\n== 네이버 카페 반응 ==\n{self._build_naver_text(naver)}\n"
+        if knowledge:
+            blocks = [f"[{k.get('title','강의')}]\n{(k.get('summary') or (k.get('content') or '')[:1200]).strip()}"
+                      for k in knowledge if (k.get('summary') or k.get('content'))]
+            if blocks:
+                market_section += ("\n== ★ 사장님 원고·바이럴 강의 (훅·나레이션·자막 작성 시 이 원리 적용) ==\n"
+                                   + "\n".join(blocks)
+                                   + "\n[적용] 위 강의 원리(고객언어·짜치는=날것·전염·가십·못난이 정서 등) 중 이 숏폼에 가장 강력한 2~3개를 골라 훅·나레이션·자막에 진하게 녹이세요.\n")
 
         system_prompt = (
             "당신은 인스타그램 릴스 전문 콘텐츠 전략가입니다. "

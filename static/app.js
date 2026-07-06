@@ -4151,7 +4151,7 @@ if (!window._wsPasteBound) {
 
 // ===== 📚 지식 탭 (키 컨텐츠 작성법) =====
 let kbRows = [];
-const KB_CATS = ['키컨텐츠', '원고작성', '기타'];
+const KB_CATS = ['키컨텐츠', '원고작성', '바이럴', '기타'];
 
 async function loadKnowledge() {
   try {
