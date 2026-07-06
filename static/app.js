@@ -4296,6 +4296,13 @@ function renderJjachi(r, topic) {
 
   let html = '';
   if (r.logline) html += card('🎬', '한 줄 컨셉', `<div class="jja-big">${txt(r.logline)}</div>`, '#111827');
+  if (r.caseSetup && (r.caseSetup.who || r.caseSetup.problem)) {
+    const c = r.caseSetup;
+    html += card('🧩', '케이스 (가설) — 이 A사장님의 문제를 푼다',
+      `${c.who ? `<div class="sc-row"><span class="sc-k">A사장님</span><span class="sc-v">${txt(c.who)}</span></div>` : ''}
+       ${c.problem ? `<div class="sc-row"><span class="sc-k">겪는 문제</span><span class="sc-v">${txt(c.problem)}</span></div>` : ''}
+       ${c.typical ? `<div class="sc-row"><span class="sc-k">왜 전형</span><span class="sc-v">${txt(c.typical)}</span></div>` : ''}`, '#0891b2');
+  }
   const keyNo = r.keyScene && r.keyScene.sceneNo ? String(r.keyScene.sceneNo).replace(/[^0-9]/g, '') : '';
   if (r.keyScene && (r.keyScene.scene || r.keyScene.why)) {
     html += card('🔑', `키신 (KEY SCENE)${keyNo ? ' — #' + keyNo + ' 장면' : ''} · 이 한 장면이 썸네일이자 승부처`,
