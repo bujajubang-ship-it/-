@@ -4295,6 +4295,7 @@ function renderJjachi(r, topic) {
     `<div class="jja-card"${accent ? ` style="border-left-color:${accent}"` : ''}><div class="jja-h">${icon} ${title}</div><div class="jja-b">${inner}</div></div>`;
 
   let html = '';
+  if (r.viewerMirror) html += card('🪞', '거울 — 이 영상이 정확히 비춰줄 시청자의 현실 (딱 내 얘기)', `<div class="jja-big">${txt(r.viewerMirror)}</div>`, '#2563eb');
   if (Array.isArray(r.viewerTalk) && r.viewerTalk.length) {
     const vt = r.viewerTalk.map(t => `<div class="jja-quote">💬 "${escHtml(t)}"</div>`).join('');
     html += card('🎯', '끝점 — 시청자가 영상 본 후 서로 나눌 예상 대화 (이걸 목표로 설계)', vt, '#D70010');
