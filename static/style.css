@@ -2086,3 +2086,5 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .sc-k { flex: 0 0 88px; color: #6b7280; font-weight: 700; }
 .sc-v { flex: 1; color: #374151; }
 .sc-dlg { background: #fffdf5; border-left: 3px solid #10b981; padding: 8px 10px; border-radius: 5px; font-size: 15px; font-weight: 500; white-space: pre-wrap; }
+.sc-key { border: 2px solid #f59e0b; background: #fffbeb; }
+.sc-keybadge { background: #f59e0b; color: #fff; font-weight: 800; border-radius: 6px; padding: 1px 8px; font-size: 12px; }

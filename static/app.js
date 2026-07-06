@@ -4296,6 +4296,11 @@ function renderJjachi(r, topic) {
 
   let html = '';
   if (r.logline) html += card('🎬', '한 줄 컨셉', `<div class="jja-big">${txt(r.logline)}</div>`, '#111827');
+  const keyNo = r.keyScene && r.keyScene.sceneNo ? String(r.keyScene.sceneNo).replace(/[^0-9]/g, '') : '';
+  if (r.keyScene && (r.keyScene.scene || r.keyScene.why)) {
+    html += card('🔑', `키신 (KEY SCENE)${keyNo ? ' — #' + keyNo + ' 장면' : ''} · 이 한 장면이 썸네일이자 승부처`,
+      `<div class="jja-big">${txt(r.keyScene.scene)}</div>${r.keyScene.why ? `<div class="jja-src" style="margin-top:6px">→ ${txt(r.keyScene.why)}</div>` : ''}`, '#f59e0b');
+  }
   if (r.viewerMirror) html += card('🪞', '거울 — 이 영상이 비출 시청자의 현실 (딱 내 얘기)', `<div class="jja-b">${txt(r.viewerMirror)}</div>`, '#2563eb');
   if (Array.isArray(r.viewerTalk) && r.viewerTalk.length) {
     const vt = r.viewerTalk.map(t => `<div class="jja-quote">💬 "${escHtml(t)}"</div>`).join('');
@@ -4307,8 +4312,9 @@ function renderJjachi(r, topic) {
   if (Array.isArray(r.scenes) && r.scenes.length) {
     const rows = r.scenes.map((s, i) => {
       const cell = (label, v) => v ? `<div class="sc-row"><span class="sc-k">${label}</span><span class="sc-v">${txt(v)}</span></div>` : '';
-      return `<div class="sc-card">
-        <div class="sc-head"><span class="sc-no">#${s.no || i + 1}</span> <b>${escHtml(s.beat || '장면')}</b> <span class="sc-sec">${escHtml(s.seconds || '')}</span></div>
+      const isKey = keyNo && String(s.no) === keyNo;
+      return `<div class="sc-card${isKey ? ' sc-key' : ''}">
+        <div class="sc-head"><span class="sc-no">#${s.no || i + 1}</span> <b>${escHtml(s.beat || '장면')}</b> ${isKey ? '<span class="sc-keybadge">🔑 키신</span>' : ''} <span class="sc-sec">${escHtml(s.seconds || '')}</span></div>
         ${cell('📍 어디서', s.location)}
         ${cell('👥 누가', s.cast)}
         ${cell('🎥 화면', s.visual)}
