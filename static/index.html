@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260702b" />
+  <link rel="stylesheet" href="style.css?v=20260706a" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -21,7 +21,7 @@
         <button class="tab-btn active" id="tab-midform" onclick="switchTab('midform')">미드폼</button>
         <button class="tab-btn" id="tab-shortform" onclick="switchTab('shortform')">숏폼</button>
         <button class="tab-btn tab-btn-trend" id="tab-topic" onclick="switchTab('topic')">주제 추천</button>
-        <button class="tab-btn" id="tab-detail" onclick="switchTab('detail')">상세페이지</button>
+        <button class="tab-btn tab-btn-trend" id="tab-jjachi" onclick="switchTab('jjachi')">🔥 짜치는 기획</button>
         <button class="tab-btn" id="tab-edit" onclick="switchTab('edit')">편집 피드백</button>
         <button class="tab-btn" id="tab-channel" onclick="switchTab('channel')">채널 분석</button>
         <button class="tab-btn" id="tab-sns" onclick="switchTab('sns')">📣 SNS 변환</button>
@@ -341,38 +341,35 @@
       </section>
     </div>
 
-    <!-- ===== 🛒 상세페이지 기획 탭 ===== -->
-    <div id="pane-detail" class="hidden">
-      <section class="search-section" id="detail-input-section">
+    <!-- ===== 🔥 짜치는 기획 탭 ===== -->
+    <div id="pane-jjachi" class="hidden">
+      <section class="search-section" id="jjachi-input-section">
         <div class="search-card edit-card">
-          <h1>쇼핑몰 상세페이지 기획안을 만드세요</h1>
-          <p class="search-desc">유사 제품의 리뷰·댓글을 분석해 고객이 구매 버튼을 누르게 만드는 상세페이지 구조를 설계합니다.<br>영상 기획과 동일한 원리 — 후킹 → 공감 → 문제 → 솔루션 → 신뢰 → 구매유도</p>
+          <h1>🔥 짜치는 기획 — 사람의 마음을 얻는 영상</h1>
+          <p class="search-desc">기술적 구조를 넘어, <b>감명 깊게 본 영상 스크립트</b>가 왜 마음을 움직였는지 분해해서<br>강의 인사이트·실제 공감과 섞어 '응원하고 싶어지는' 영상을 기획합니다.</p>
           <div class="edit-inputs">
-            <input type="text" id="detail-keyword" placeholder="제품 키워드 * (예: 업소용 가스레인지, 스테인레스 작업대)" autocomplete="off" />
-            <textarea id="detail-product-desc" rows="3" placeholder="제품 설명 (예: 4구 가스레인지, 화력 강, 청소 쉬운 구조, 업소·가정용 겸용)"></textarea>
-            <div class="detail-row">
-              <input type="text" id="detail-price" placeholder="가격대 (예: 35만원)" />
-              <input type="text" id="detail-target" placeholder="타겟 고객 (예: 식당 사장님)" />
-            </div>
-            <button id="detail-btn" onclick="startDetailPage()">상세페이지 기획 시작</button>
+            <input type="text" id="jjachi-topic" placeholder="영상 주제/핵심 내용 (예: 식당 3번 망하고 다시 일어선 이야기)" autocomplete="off" />
+            <textarea id="jjachi-moving" rows="6" placeholder="★ 감명 깊게 본 영상 스크립트 붙여넣기 (핵심 재료 — 왜 마음이 움직였는지 분석합니다)"></textarea>
+            <textarea id="jjachi-story" rows="4" placeholder="사장님의 진짜 이야기·경험·솔직한 감정 (선택 — 진정성 재료)"></textarea>
+            <button id="jjachi-btn" onclick="startJjachi()">마음을 얻는 기획 시작</button>
           </div>
         </div>
       </section>
-      <section class="progress-section hidden" id="detail-progress-section">
-        <div class="progress-card"><div id="detail-progress-steps"></div></div>
+      <section class="progress-section hidden" id="jjachi-progress-section">
+        <div class="progress-card"><div class="progress-spinner"></div><div id="jjachi-progress-steps"></div></div>
       </section>
-      <section class="report-section hidden" id="detail-report-section">
+      <section class="report-section hidden" id="jjachi-report-section">
         <div class="report-header">
           <div>
-            <h2 id="detail-report-title">상세페이지 기획안</h2>
-            <p class="report-subtitle" id="detail-report-subtitle"></p>
+            <h2 id="jjachi-report-title">짜치는 기획안</h2>
+            <p class="report-subtitle">사람의 마음을 얻는 영상 기획</p>
           </div>
           <div class="report-actions">
-            <button class="pdf-btn" onclick="downloadPdf('detail-report-section','상세페이지기획')">⬇ PDF 저장</button>
-            <button class="reset-btn" onclick="resetDetailPage()">← 새 기획</button>
+            <button class="pdf-btn" onclick="downloadPdf('jjachi-report-section','짜치는기획')">⬇ PDF 저장</button>
+            <button class="reset-btn" onclick="resetJjachi()">← 새 기획</button>
           </div>
         </div>
-        <div id="detail-report-body"></div>
+        <div id="jjachi-report-body"></div>
       </section>
     </div>
 
@@ -1123,7 +1120,7 @@
 
   </main>
 
-  <script src="app.js?v=20260702b"></script>
+  <script src="app.js?v=20260706a"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

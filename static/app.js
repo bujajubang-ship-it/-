@@ -10,7 +10,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'topic', 'detail', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'chat', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'topic', 'jjachi', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'chat', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -4231,4 +4231,87 @@ async function kbAddSave() {
   await fetch('/api/knowledge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const m = document.getElementById('kb-add-modal'); if (m) m.remove();
   loadKnowledge();
+}
+
+// ===== 🔥 짜치는 기획 (사람의 마음을 얻는 영상) =====
+async function startJjachi() {
+  const topic = (document.getElementById('jjachi-topic').value || '').trim();
+  const moving = (document.getElementById('jjachi-moving').value || '').trim();
+  const story = (document.getElementById('jjachi-story').value || '').trim();
+  if (!topic && !moving) { alert('주제 또는 감명 깊게 본 영상 스크립트를 입력해주세요.'); return; }
+
+  document.getElementById('jjachi-input-section').classList.add('hidden');
+  document.getElementById('jjachi-report-section').classList.add('hidden');
+  const prog = document.getElementById('jjachi-progress-section');
+  const steps = document.getElementById('jjachi-progress-steps');
+  prog.classList.remove('hidden');
+  steps.innerHTML = '<div class="progress-step active">준비 중...</div>';
+
+  let buffer = '';
+  try {
+    const resp = await fetch('/api/jjachi', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic, moving_script: moving, my_story: story }),
+    });
+    if (!resp.ok) throw new Error(`서버 오류: ${resp.status}`);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) { steps.innerHTML = '<div class="progress-step">⚠️ 연결이 끊어졌어요. 다시 시도해주세요.</div>'; return; }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n'); buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.step === 'ping') continue;
+          if (data.step === 'error') { steps.innerHTML = `<div class="progress-step">❌ ${escHtml(data.message)}</div>`; return; }
+          if (data.step === 'done') {
+            prog.classList.add('hidden');
+            renderJjachi(data.report, topic);
+            document.getElementById('jjachi-report-section').classList.remove('hidden');
+            return;
+          }
+          if (data.message) steps.innerHTML = `<div class="progress-step active">${escHtml(data.message)}</div>`;
+        } catch (e) {}
+      }
+    }
+  } catch (err) {
+    steps.innerHTML = `<div class="progress-step">❌ ${escHtml(err.message)}</div>`;
+  }
+}
+
+function renderJjachi(r, topic) {
+  r = r || {};
+  document.getElementById('jjachi-report-title').textContent = topic || '짜치는 기획안';
+  const txt = v => escHtml((v || '').toString()).replace(/\n/g, '<br>');
+  const card = (icon, title, inner, accent) =>
+    `<div class="jja-card"${accent ? ` style="border-left-color:${accent}"` : ''}><div class="jja-h">${icon} ${title}</div><div class="jja-b">${inner}</div></div>`;
+
+  let html = '';
+  if (r.coreEmotion) html += card('❤️', '이 영상이 건드리는 진짜 감정', `<div class="jja-big">${txt(r.coreEmotion)}</div>`, '#ef4444');
+  if (r.movingAnalysis) html += card('🎬', '감명 영상이 왜 마음을 움직였나', txt(r.movingAnalysis));
+  if (Array.isArray(r.empathyPoints) && r.empathyPoints.length) {
+    const ep = r.empathyPoints.map(p => `<div class="jja-quote">"${escHtml(p.quote || '')}"<div class="jja-src">— ${escHtml(p.source || '')} · ${escHtml(p.insight || '')}</div></div>`).join('');
+    html += card('💬', '공감 지점 (실제 시청자 속마음)', ep);
+  }
+  if (r.authenticity) html += card('🫶', '사장님 진정성 포인트', txt(r.authenticity), '#f59e0b');
+  if (r.emotionJourney) html += card('🌊', '감정 여정', txt(r.emotionJourney));
+  if (r.fanMoment) html += card('⭐', '팬으로 만드는 한 방', `<div class="jja-big">${txt(r.fanMoment)}</div>`, '#7c3aed');
+  if (Array.isArray(r.titles) && r.titles.length)
+    html += card('✍️', '감정 기반 제목', r.titles.map(t => `<div class="jja-title">${escHtml(t)}</div>`).join(''));
+  if (r.introScript) html += card('🎙️', '마음을 여는 도입부 대본', `<div class="jja-script">${txt(r.introScript)}</div>`, '#10b981');
+  if (r.outroScript) html += card('🎬', '마음을 얻는 마무리 대본', `<div class="jja-script">${txt(r.outroScript)}</div>`, '#10b981');
+  if (r.cta) html += card('🤝', '관계형 마무리 (CTA)', txt(r.cta));
+  if (Array.isArray(r.checklist) && r.checklist.length)
+    html += card('✅', '자가점검', '<ul class="jja-check">' + r.checklist.map(c => `<li>${escHtml(c)}</li>`).join('') + '</ul>');
+
+  document.getElementById('jjachi-report-body').innerHTML = html || '<p>결과가 비어있어요. 다시 시도해주세요.</p>';
+}
+
+function resetJjachi() {
+  document.getElementById('jjachi-report-section').classList.add('hidden');
+  document.getElementById('jjachi-progress-section').classList.add('hidden');
+  document.getElementById('jjachi-input-section').classList.remove('hidden');
 }

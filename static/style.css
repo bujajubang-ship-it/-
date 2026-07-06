@@ -2059,3 +2059,16 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 /* 카드 PDF 버튼 */
 .ws-card-pdf { border: 1px solid #d1d5db; background: #fff; color: #374151; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; border-radius: 7px; padding: 5px 10px; }
 .ws-card-pdf:hover { border-color: #D70010; color: #D70010; }
+
+/* 🔥 짜치는 기획 리포트 */
+#jjachi-report-body { display: flex; flex-direction: column; gap: 14px; }
+.jja-card { background: #fff; border: 1px solid #eee; border-left: 5px solid #cbd5e1; border-radius: 12px; padding: 16px 18px; box-shadow: 0 1px 6px rgba(0,0,0,.04); }
+.jja-h { font-size: 15px; font-weight: 800; margin-bottom: 8px; color: #1f2937; }
+.jja-b { font-size: 14px; line-height: 1.75; color: #374151; white-space: normal; }
+.jja-big { font-size: 17px; font-weight: 700; line-height: 1.6; color: #111827; }
+.jja-quote { background: #f9fafb; border-left: 3px solid #e5e7eb; padding: 9px 12px; border-radius: 6px; margin-bottom: 8px; font-size: 14px; }
+.jja-src { font-size: 12px; color: #6b7280; margin-top: 4px; }
+.jja-title { background: #fffbeb; border: 1px solid #fde68a; border-radius: 7px; padding: 9px 12px; margin-bottom: 6px; font-weight: 700; }
+.jja-script { background: #fffdf5; border-left: 3px solid #10b981; padding: 12px 14px; border-radius: 6px; font-size: 15px; line-height: 1.95; white-space: pre-wrap; }
+.jja-check { margin: 0; padding-left: 20px; }
+.jja-check li { margin-bottom: 5px; }

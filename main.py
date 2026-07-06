@@ -1233,6 +1233,64 @@ async def worksheet_thumbnail(request: Request):
     )
 
 
+@app.post("/api/jjachi")
+async def jjachi(request: Request):
+    """짜치는 기획 — 감명 영상 스크립트 + 강의 지식 + 실제 공감으로 '마음을 얻는' 영상 기획."""
+    body = await request.json()
+    topic = (body.get("topic") or "").strip()
+    moving_script = (body.get("moving_script") or "").strip()
+    my_story = (body.get("my_story") or "").strip()
+    youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+    naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
+    naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+
+    async def stream():
+        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+            yield sse({"step": "error", "message": ".env에 ANTHROPIC_API_KEY를 설정해주세요."})
+            return
+        if not topic and not moving_script:
+            yield sse({"step": "error", "message": "주제 또는 감명 영상 스크립트를 입력해주세요."})
+            return
+        videos_with_comments = []
+        naver_results = []
+        yt = YouTubeService(youtube_key) if youtube_key else None
+        try:
+            if yt and topic:
+                yield sse({"step": "searching", "message": f'"{topic}" 시청자 진짜 반응 수집 중...'})
+                videos = await yt.search_videos(topic, max_results=10)
+                if videos:
+                    videos_with_comments = await yt.get_comments_for_videos(videos[:5])
+            if naver_id and naver_secret and topic:
+                yield sse({"step": "naver", "message": "네이버 카페 반응 수집 중..."})
+                naver = NaverService(naver_id, naver_secret)
+                naver_results = await naver.search_cafe(topic)
+                await naver.close()
+            knowledge = [k for k in list_knowledge(active_only=True)] or None
+            yield sse({"step": "writing", "message": "Opus 4.8가 '마음을 얻는 기획' 작성 중... (30~60초)"})
+            analyzer = Analyzer()
+            _task = asyncio.create_task(analyzer.plan_jjachi(
+                topic, moving_script, my_story,
+                videos_with_comments or None, naver_results or None, knowledge))
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            report = _task.result()
+            save_history("jjachi", topic or "감명영상 기획", report)
+            yield sse({"step": "done", "report": report, "topic": topic})
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
+        finally:
+            if yt:
+                await yt.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+
 @app.get("/api/transcript-debug")
 async def transcript_debug(request: Request):
     """쿠키/스크립트 수집 진단. ?url=<영상url> 주면 그 영상으로 실제 수집 시도."""
