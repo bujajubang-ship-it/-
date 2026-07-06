@@ -609,7 +609,7 @@ async def midform(req: MidformRequest):
                 if total_refs:
                     yield sse({"step": "viewtrap_done", "message": f"ViewTrap 레퍼런스 {total_refs}개 수집 완료!"})
 
-            yield sse({"step": "analyzing", "message": "AI가 전체 영상 기획 작성 중... (1~2분 소요)"})
+            yield sse({"step": "analyzing", "message": "AI가 전체 영상 기획 작성 중... (2~3분 소요 — 완성본이 길어서 조금 걸려요, 멈춘 거 아니에요!)"})
             analyzer = Analyzer()
             kb = [k for k in list_knowledge(active_only=True)] or None
             _task = asyncio.create_task(analyzer.analyze_midform(req.keyword, combined_desc, videos_with_comments, naver_results, viewtrap_refs, kb))
