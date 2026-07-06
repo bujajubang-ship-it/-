@@ -3758,6 +3758,7 @@ function planRow(v) {
 const WS_COLS = [
   { k: 'date',    label: '날짜',           type: 'date', hint: '시작일' },
   { k: 'keyword', label: '① 키워드 고르기', type: 'text', hint: '썸끝에 키워드 검색' },
+  { k: 'viewerTalk', label: '🎯 끝점(시청자 예상 대화)', type: 'area', hint: '보고 나서 서로/지인에게 뭐라 말할지 → 여기 맞춰 설계' },
   { k: 'refImg',  label: '① 본보기 영상',   type: 'img',  hint: '썸네일 잘된 영상 1개' },
   { k: 'thumbA',  label: '② 썸네일 분석',   type: 'area', hint: '왜 눌렀나? 주제·글씨·그림·고민해결' },
   { k: 'introA',  label: '② 도입부 분석',   type: 'area', hint: '앞 30초: 어떻게 궁금증·신뢰를 줬나' },
@@ -4093,6 +4094,7 @@ function wsCardPdf(id) {
     <div id="ws-pdf-${id}" style="width:190mm;padding:6mm;font-family:'Pretendard',sans-serif;color:#1f2937;background:#fff;">
       <div style="font-size:22px;font-weight:900;border-bottom:3px solid #D70010;padding-bottom:6px;margin-bottom:10px;">${escHtml(title)}</div>
       <div style="font-size:11px;color:#888;margin-bottom:14px;">촬영용 기획·대본 · ${d.keyword ? escHtml(d.keyword) + ' · ' : ''}${new Date().toLocaleDateString('ko-KR')}</div>
+      ${sec('🎯 끝점 — 시청자 예상 대화 (이 반응을 목표로)', d.viewerTalk, true)}
       ${thumbImg ? `<div class="pdfsec"><div class="pdfh">🖼 섬네일 시안</div><img src="${thumbImg}" style="width:120mm;border-radius:6px;border:1px solid #eee;"/></div>` : ''}
       ${sec('④ 제목 후보', d.titleCopy)}
       ${sec('④ 섬네일 문구', d.thumbCopy)}
@@ -4290,6 +4292,10 @@ function renderJjachi(r, topic) {
     `<div class="jja-card"${accent ? ` style="border-left-color:${accent}"` : ''}><div class="jja-h">${icon} ${title}</div><div class="jja-b">${inner}</div></div>`;
 
   let html = '';
+  if (Array.isArray(r.viewerTalk) && r.viewerTalk.length) {
+    const vt = r.viewerTalk.map(t => `<div class="jja-quote">💬 "${escHtml(t)}"</div>`).join('');
+    html += card('🎯', '끝점 — 시청자가 영상 본 후 서로 나눌 예상 대화 (이걸 목표로 설계)', vt, '#D70010');
+  }
   if (r.coreEmotion) html += card('❤️', '이 영상이 건드리는 진짜 감정', `<div class="jja-big">${txt(r.coreEmotion)}</div>`, '#ef4444');
   if (r.movingAnalysis) html += card('🎬', '감명 영상이 왜 마음을 움직였나', txt(r.movingAnalysis));
   if (Array.isArray(r.empathyPoints) && r.empathyPoints.length) {
