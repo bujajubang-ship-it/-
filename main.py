@@ -1240,8 +1240,9 @@ async def jjachi(request: Request):
     body = await request.json()
     topic = (body.get("topic") or "").strip()
     viewer_heart = (body.get("viewer_heart") or "").strip()
-    moving_script = (body.get("moving_script") or "").strip()
-    my_story = (body.get("my_story") or "").strip()
+    owner_cases = (body.get("owner_cases") or "").strip()
+    reality_facts = (body.get("reality_facts") or "").strip()
+    filming_env = (body.get("filming_env") or "").strip()
     youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
     naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
     naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
@@ -1271,7 +1272,7 @@ async def jjachi(request: Request):
             yield sse({"step": "writing", "message": "Opus 4.8가 '마음을 얻는 기획' 작성 중... (30~60초)"})
             analyzer = Analyzer()
             _task = asyncio.create_task(analyzer.plan_jjachi(
-                topic, viewer_heart, moving_script, my_story,
+                topic, viewer_heart, owner_cases, reality_facts, filming_env,
                 videos_with_comments or None, naver_results or None, knowledge))
             while not _task.done():
                 yield sse({"step": "ping"})

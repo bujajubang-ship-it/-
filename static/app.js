@@ -4238,10 +4238,12 @@ async function kbAddSave() {
 // ===== 🔥 짜치는 기획 (사람의 마음을 얻는 영상) =====
 async function startJjachi() {
   const topic = (document.getElementById('jjachi-topic').value || '').trim();
+  const cases = (document.getElementById('jjachi-cases').value || '').trim();
+  const facts = (document.getElementById('jjachi-facts').value || '').trim();
   const heart = (document.getElementById('jjachi-heart').value || '').trim();
-  const moving = (document.getElementById('jjachi-moving').value || '').trim();
-  const story = (document.getElementById('jjachi-story').value || '').trim();
+  const env = (document.getElementById('jjachi-env').value || '').trim();
   if (!topic) { alert('영상 주제를 입력해주세요.'); return; }
+  if (!cases && !facts) { if (!confirm('② 사장님 사례 / ③ 주방 현실을 안 넣으면 공감이 약하고 부정확할 수 있어요. 그래도 진행할까요?')) return; }
 
   document.getElementById('jjachi-input-section').classList.add('hidden');
   document.getElementById('jjachi-report-section').classList.add('hidden');
@@ -4254,7 +4256,7 @@ async function startJjachi() {
   try {
     const resp = await fetch('/api/jjachi', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, viewer_heart: heart, moving_script: moving, my_story: story }),
+      body: JSON.stringify({ topic, viewer_heart: heart, owner_cases: cases, reality_facts: facts, filming_env: env }),
     });
     if (!resp.ok) throw new Error(`서버 오류: ${resp.status}`);
     const reader = resp.body.getReader();

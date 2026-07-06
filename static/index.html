@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260706d" />
+  <link rel="stylesheet" href="style.css?v=20260706e" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -346,17 +346,16 @@
       <section class="search-section" id="jjachi-input-section">
         <div class="search-card edit-card">
           <h1>🔥 짜치는 기획 — 사람의 마음을 얻는 영상</h1>
-          <p class="search-desc">주제와 <b>원하는 시청자의 마음</b>만 넣으면, '원초적 바이럴' 인사이트(지식 탭)를 적용해<br>기술 설계 위에 <b>마음을 움직이는 공감 장면</b>을 얹어 '응원하고 싶어지는' 영상을 기획합니다.</p>
+          <p class="search-desc"><b>내가 본 사장님 사례 + 주방 현실</b>을 넣으면, '원초적 바이럴' 인사이트로<br>요리 안 하는 주방용품점 사장(조력자) 목소리의 <b>멋 안 부린 공감 기획</b>을 만듭니다.</p>
           <div class="edit-inputs">
-            <input type="text" id="jjachi-topic" placeholder="영상 주제/핵심 내용 * (예: 냉장고 상부선반 활용법)" autocomplete="off" />
-            <textarea id="jjachi-heart" rows="3" placeholder="시청자의 마음 — 이 영상 보고 시청자가 어떤 마음이 들었으면? (예: 소탈·진정성 있어서 도와주고 싶고, 지인에게 소개하고 싶은 마음)"></textarea>
-            <details class="jja-more">
-              <summary>+ 선택 입력 (감명 영상 스크립트 · 내 이야기)</summary>
-              <textarea id="jjachi-moving" rows="4" placeholder="감명 깊게 본 영상 스크립트 (선택 — 특정 영상을 참고하고 싶을 때)"></textarea>
-              <textarea id="jjachi-story" rows="3" placeholder="사장님의 진짜 이야기·경험·솔직한 감정 (선택 — 진정성 재료)"></textarea>
-            </details>
+            <input type="text" id="jjachi-topic" placeholder="① 영상 주제 * (예: 냉장고 상부선반 활용법)" autocomplete="off" />
+            <textarea id="jjachi-cases" rows="4" placeholder="② 내가 본 사장님 사례·하소연 * — 배달·설치 다니며 본 진짜 장면, 사장님들이 실제 한 말 (공감의 원료)&#10;예: 배달 가보면 열에 아홉은 상부선반 방치. 손 안 닿아 먼지·유통기한 지난 소스가 굴러다님. '위칸은 포기했다'는 사장님 많음"></textarea>
+            <textarea id="jjachi-facts" rows="3" placeholder="③ 제품·주방 현실 팩트 * — 실제 뭘 쓰는지, 진짜 문제, 제품 특징 (헛소리 방지)&#10;예: 식당은 스텐선반 사용(목재 아님). 좁은 주방 동선이 핵심. OO선반은 높이조절 가능"></textarea>
+            <textarea id="jjachi-heart" rows="2" placeholder="④ 원하는 시청자 마음(끝점) (선택) — 보고 뭐라 말했으면? (예: 안 팔려고 하고 진짜 알려주네, 도와주고 싶다)"></textarea>
+            <input type="text" id="jjachi-env" placeholder="⑤ 촬영 가능 환경 (선택 — 예: 매장/창고, 고객 주방 방문 시)" autocomplete="off" />
             <button id="jjachi-btn" onclick="startJjachi()">마음을 얻는 기획 시작</button>
           </div>
+          <p class="jja-note">💡 화자는 <b>요리 안 하는 주방용품점 사장(수백 주방을 본 조력자)</b>으로 자동 설정 — 식당 1인칭 경험을 지어내지 않습니다.</p>
         </div>
       </section>
       <section class="progress-section hidden" id="jjachi-progress-section">
@@ -1124,7 +1123,7 @@
 
   </main>
 
-  <script src="app.js?v=20260706d"></script>
+  <script src="app.js?v=20260706e"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');
