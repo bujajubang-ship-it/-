@@ -1319,8 +1319,19 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
         )
         return _safe_json(msg.content[0].text.strip(), msg)
 
-    async def chat_stream(self, message: str, history: List[Dict], attachments: List[Dict] = None):
+    async def chat_stream(self, message: str, history: List[Dict], attachments: List[Dict] = None, knowledge: List[Dict] = None):
         messages = [{"role": m["role"], "content": m["content"]} for m in history[-20:]]
+
+        # 지식탭에 저장된 모든 활성 지식을 시스템 프롬프트에 주입 (채팅이 지식을 다 알고 대화)
+        kb_txt = self._kb_text(knowledge, per=1500, budget=30000)
+        system_prompt = CHAT_SYSTEM
+        if kb_txt:
+            system_prompt = CHAT_SYSTEM + (
+                "\n\n# 📚 지식탭 저장 지식 (사용자가 추가한 키컨텐츠 강의·자료 전체)\n"
+                "아래는 사용자가 '지식탭'에 저장·추가한 모든 지식이다. 너는 이 내용을 이미 숙지한 상태로 대화한다. "
+                "관련된 질문에는 반드시 이 지식을 근거로 구체적으로 답하고, 여기서 배운 원칙·프레임워크를 적극 적용하라.\n\n"
+                + kb_txt
+            )
 
         # 첨부파일이 있으면 content를 리스트(멀티모달)로 구성
         if attachments:
@@ -1346,7 +1357,7 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
         async with self.client.messages.stream(
             model=WRITER_MODEL,
             max_tokens=4096,
-            system=CHAT_SYSTEM,
+            system=system_prompt,
             messages=messages,
         ) as stream:
             async for text in stream.text_stream:

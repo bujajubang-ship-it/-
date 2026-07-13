@@ -1052,7 +1052,8 @@ async def chat(req: ChatRequest):
             return
         try:
             analyzer = Analyzer()
-            async for token in analyzer.chat_stream(req.message, req.history, req.attachments):
+            kb = list_knowledge(active_only=True)  # 지식탭 활성 지식 전체를 채팅에 주입
+            async for token in analyzer.chat_stream(req.message, req.history, req.attachments, kb):
                 yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
