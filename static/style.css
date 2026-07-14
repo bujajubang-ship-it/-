@@ -565,6 +565,9 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   .chat-session-list { flex-direction: row; flex-wrap: wrap; overflow-x: auto; }
   .chat-session-item { flex: 0 0 auto; max-width: 200px; }
 }
+.chat-msg-actions { margin-top: 6px; }
+.chat-pdf-btn { font-size: 12px; padding: 4px 11px; border: 1px solid var(--border); background: #fff; border-radius: 7px; cursor: pointer; color: var(--text-sub); font-weight: 600; transition: all .12s; }
+.chat-pdf-btn:hover { border-color: var(--red); color: var(--red); }
 .chat-page { max-width: 760px; width: 100%; margin: 0 auto; padding: 20px 20px 0; display: flex; flex-direction: column; height: 100%; }
 .chat-header-bar { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-shrink: 0; }
 .chat-ai-info { display: flex; align-items: center; gap: 12px; }

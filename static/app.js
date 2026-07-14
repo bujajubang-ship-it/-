@@ -2056,12 +2056,89 @@ async function openChatSession(id) {
 function renderChatMessages() {
   const el = document.getElementById('chat-messages');
   if (!chatHistory.length) { el.innerHTML = CHAT_WELCOME; return; }
-  el.innerHTML = chatHistory.map(m =>
+  el.innerHTML = chatHistory.map((m, i) =>
     m.role === 'user'
       ? `<div class="chat-bubble user"><div class="chat-bubble-inner">${_escapeHtml(m.content || '')}</div></div>`
-      : `<div class="chat-bubble assistant"><div class="chat-bubble-inner">${_formatChat(m.content || '')}</div></div>`
+      : `<div class="chat-bubble assistant"><div class="chat-bubble-inner">${_formatChat(m.content || '')}</div>
+         <div class="chat-msg-actions"><button class="chat-pdf-btn" onclick="exportPlanPdfByIdx(${i})">📄 PDF · 출력</button></div></div>`
   ).join('');
   el.scrollTop = el.scrollHeight;
+}
+
+// 마크다운 → 인쇄용 HTML (제목·굵게·목록·인용·표·구분선)
+function _mdToPrintHtml(text) {
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  const lines = (text || '').split('\n');
+  let html = '', list = null, tbl = [];
+  const closeList = () => { if (list) { html += '</' + list + '>'; list = null; } };
+  const flushTable = () => {
+    if (!tbl.length) return;
+    const rows = tbl.filter(r => !/^[\s|:\-]+$/.test(r.join('')));
+    html += '<table>' + rows.map((cells, ri) => {
+      const tag = ri === 0 ? 'th' : 'td';
+      return '<tr>' + cells.map(c => `<${tag}>${inline(c.trim())}</${tag}>`).join('') + '</tr>';
+    }).join('') + '</table>';
+    tbl = [];
+  };
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, '');
+    if (/^\s*\|.*\|\s*$/.test(line)) { closeList(); tbl.push(line.trim().replace(/^\||\|$/g, '').split('|')); continue; }
+    if (tbl.length) flushTable();
+    let m;
+    if (m = line.match(/^(#{1,4})\s+(.*)$/)) { closeList(); const lv = Math.min(m[1].length + 1, 4); html += `<h${lv}>${inline(m[2])}</h${lv}>`; }
+    else if (m = line.match(/^\s*[-*]\s+(.*)$/)) { if (list !== 'ul') { closeList(); html += '<ul>'; list = 'ul'; } html += `<li>${inline(m[1])}</li>`; }
+    else if (m = line.match(/^\s*\d+\.\s+(.*)$/)) { if (list !== 'ol') { closeList(); html += '<ol>'; list = 'ol'; } html += `<li>${inline(m[1])}</li>`; }
+    else if (m = line.match(/^\s*>\s?(.*)$/)) { closeList(); html += `<blockquote>${inline(m[1])}</blockquote>`; }
+    else if (/^[-*]{3,}$/.test(line.trim())) { closeList(); html += '<hr>'; }
+    else if (line.trim() === '') { closeList(); }
+    else { closeList(); html += `<p>${inline(line)}</p>`; }
+  }
+  flushTable(); closeList();
+  return html;
+}
+
+// AI 기획을 PDF 저장/출력 (브라우저 인쇄창 → PDF로 저장 또는 프린터)
+function exportPlanPdfByIdx(i) {
+  const m = chatHistory[i];
+  if (!m || !m.content || !m.content.trim()) { alert('내보낼 내용이 없어요.'); return; }
+  const bodyHtml = _mdToPrintHtml(m.content);
+  const d = new Date();
+  const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const w = window.open('', '_blank', 'width=900,height=1000');
+  if (!w) { alert('팝업이 차단됐어요. 브라우저에서 팝업을 허용한 뒤 다시 눌러주세요.'); return; }
+  w.document.write(`<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<title>부자주방 콘텐츠 기획 ${dateStr}</title>
+<style>
+*{box-sizing:border-box;}
+body{font-family:-apple-system,'Apple SD Gothic Neo','Malgun Gothic',sans-serif;color:#1a1a1a;line-height:1.65;margin:0;padding:34px 42px;}
+.brand{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #e53935;padding-bottom:10px;margin-bottom:22px;}
+.brand .b{font-size:17px;font-weight:800;color:#e53935;}
+.brand .d{font-size:12px;color:#888;}
+h2{font-size:19px;margin:22px 0 8px;color:#c62828;}
+h3{font-size:16px;margin:16px 0 6px;}
+h4{font-size:14px;margin:12px 0 4px;}
+p{margin:6px 0;}
+ul,ol{margin:6px 0 6px 2px;padding-left:22px;}
+li{margin:3px 0;}
+strong{color:#111;}
+blockquote{margin:8px 0;padding:8px 14px;background:#f6f7f9;border-left:3px solid #e53935;border-radius:0 6px 6px 0;}
+hr{border:none;border-top:1px solid #e5e7eb;margin:16px 0;}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px;}
+th,td{border:1px solid #d5d8dc;padding:6px 9px;text-align:left;vertical-align:top;}
+th{background:#fbe9e7;font-weight:700;}
+.foot{margin-top:28px;padding-top:10px;border-top:1px solid #eee;font-size:11px;color:#aaa;text-align:center;}
+h2,h3,h4,table,blockquote,li{break-inside:avoid;}
+@page{margin:16mm;}
+@media print{body{padding:0;}}
+</style></head>
+<body>
+<div class="brand"><span class="b">▶ 부자주방 콘텐츠 기획</span><span class="d">${dateStr} · 콘텐츠 리서처 AI</span></div>
+${bodyHtml}
+<div class="foot">부자주방 콘텐츠 리서처 — AI 상담 기획서</div>
+<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},250);};</script>
+</body></html>`);
+  w.document.close();
 }
 async function deleteChatSession(id) {
   if (!confirm('이 대화를 삭제할까요?')) return;
@@ -2278,6 +2355,7 @@ async function sendChat() {
             chatHistory.push({ role: 'user', content: message });
             chatHistory.push({ role: 'assistant', content: fullText });
             saveCurrentChat();
+            renderChatMessages();  // 완료된 답변에 PDF·출력 버튼 붙여 다시 렌더
           }
           if (data.error) {
             inner.innerHTML = `<span style="color:var(--red)">오류: ${_escapeHtml(data.error)}</span>`;
