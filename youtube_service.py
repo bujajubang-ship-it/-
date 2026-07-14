@@ -27,6 +27,12 @@ class YouTubeService:
         resp.raise_for_status()
         items = resp.json().get("items", [])
         if not items:
+            # 길고 구체적인 키워드는 조회수순(viewCount)으로 0건이 나올 수 있음 → 관련성순으로 폴백
+            params_rel = dict(params); params_rel["order"] = "relevance"
+            resp = await self.client.get(f"{BASE}/search", params=params_rel)
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+        if not items:
             return []
 
         video_ids = [item["id"]["videoId"] for item in items]
