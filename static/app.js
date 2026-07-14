@@ -23,6 +23,7 @@ function switchTab(tab) {
   if (tab === 'pipeline') { loadPipeline(); applyOptimizeVisibility(); }
   if (tab === 'worksheet') loadWorksheetTab();
   if (tab === 'knowledge') loadKnowledge();
+  if (tab === 'chat') loadChatSessions();
 }
 
 // 워크시트 탭: 진행 동기화를 위해 plVideos도 함께 로드
@@ -2016,6 +2017,84 @@ function renderChannelReport(r) {
 let chatHistory = [];
 let chatSending = false;
 let chatAttachments = [];
+let chatSessionId = null;   // 현재 대화 세션 id (null이면 아직 저장 안 된 새 대화)
+
+// ── 대화 세션 (클로드처럼 지난 대화 목록·이어가기) ──
+async function loadChatSessions() {
+  try {
+    const list = await fetch('/api/chat-sessions').then(r => r.json());
+    renderChatSessions(list);
+  } catch (e) {}
+}
+function renderChatSessions(list) {
+  const el = document.getElementById('chat-session-list');
+  if (!el) return;
+  if (!list || !list.length) {
+    el.innerHTML = '<div class="chat-session-empty">저장된 대화가 없어요.<br>대화를 시작하면 자동으로 저장돼요.</div>';
+    return;
+  }
+  el.innerHTML = list.map(s => `
+    <div class="chat-session-item ${s.id === chatSessionId ? 'active' : ''}" onclick="openChatSession(${s.id})" title="${_escapeHtml(s.title || '새 대화')}">
+      <span class="chat-session-title">${_escapeHtml(s.title || '새 대화')}</span>
+      <span class="chat-session-del" onclick="event.stopPropagation();deleteChatSession(${s.id})">✕</span>
+    </div>`).join('');
+}
+async function openChatSession(id) {
+  try {
+    const s = await fetch('/api/chat-sessions/' + id).then(r => r.json());
+    let msgs = s.messages;
+    if (typeof msgs === 'string') { try { msgs = JSON.parse(msgs || '[]'); } catch (e) { msgs = []; } }
+    chatHistory = Array.isArray(msgs) ? msgs : [];
+    chatSessionId = id;
+    chatAttachments = [];
+    const prev = document.getElementById('chat-attach-preview');
+    prev.innerHTML = ''; prev.classList.add('hidden');
+    renderChatMessages();
+    loadChatSessions();
+  } catch (e) {}
+}
+function renderChatMessages() {
+  const el = document.getElementById('chat-messages');
+  if (!chatHistory.length) { el.innerHTML = CHAT_WELCOME; return; }
+  el.innerHTML = chatHistory.map(m =>
+    m.role === 'user'
+      ? `<div class="chat-bubble user"><div class="chat-bubble-inner">${_escapeHtml(m.content || '')}</div></div>`
+      : `<div class="chat-bubble assistant"><div class="chat-bubble-inner">${_formatChat(m.content || '')}</div></div>`
+  ).join('');
+  el.scrollTop = el.scrollHeight;
+}
+async function deleteChatSession(id) {
+  if (!confirm('이 대화를 삭제할까요?')) return;
+  try {
+    await fetch('/api/chat-sessions/' + id, { method: 'DELETE' });
+    if (id === chatSessionId) { newChat(); }
+    else { loadChatSessions(); }
+  } catch (e) {}
+}
+function newChat() {
+  chatSessionId = null;
+  clearChat();
+  loadChatSessions();
+}
+async function saveCurrentChat() {
+  const firstUser = chatHistory.find(m => m.role === 'user');
+  const title = ((firstUser && firstUser.content) || '새 대화').slice(0, 40);
+  try {
+    if (chatSessionId == null) {
+      const r = await fetch('/api/chat-sessions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, messages: chatHistory }),
+      }).then(r => r.json());
+      chatSessionId = r.id;
+    } else {
+      await fetch('/api/chat-sessions/' + chatSessionId, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, messages: chatHistory }),
+      });
+    }
+    loadChatSessions();
+  } catch (e) {}
+}
 
 const CHAT_WELCOME = `<div class="chat-bubble assistant">
   <div class="chat-bubble-inner">
@@ -2198,6 +2277,7 @@ async function sendChat() {
           if (data.done) {
             chatHistory.push({ role: 'user', content: message });
             chatHistory.push({ role: 'assistant', content: fullText });
+            saveCurrentChat();
           }
           if (data.error) {
             inner.innerHTML = `<span style="color:var(--red)">오류: ${_escapeHtml(data.error)}</span>`;

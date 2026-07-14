@@ -1174,6 +1174,45 @@ async def worksheet_delete(id: int):
     return {"ok": True}
 
 
+# ── AI 상담 대화 세션 (저장·목록·이어가기) ──────────────────────────
+from database import (list_chat_sessions, get_chat_session, create_chat_session,
+                      update_chat_session, delete_chat_session)
+
+@app.get("/api/chat-sessions")
+async def chat_sessions_list():
+    return list_chat_sessions()
+
+@app.get("/api/chat-sessions/{id}")
+async def chat_session_get(id: int):
+    s = get_chat_session(id)
+    if not s:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="없음")
+    return s
+
+@app.post("/api/chat-sessions")
+async def chat_session_create(request: Request):
+    d = await request.json()
+    id_ = create_chat_session((d.get("title", "") or "새 대화")[:80],
+                              json.dumps(d.get("messages", []), ensure_ascii=False))
+    return {"id": id_}
+
+@app.put("/api/chat-sessions/{id}")
+async def chat_session_update(id: int, request: Request):
+    d = await request.json()
+    title = d.get("title")
+    msgs = d.get("messages")
+    update_chat_session(id,
+                        title=(title[:80] if isinstance(title, str) else None),
+                        messages=(json.dumps(msgs, ensure_ascii=False) if msgs is not None else None))
+    return {"ok": True}
+
+@app.delete("/api/chat-sessions/{id}")
+async def chat_session_delete(id: int):
+    delete_chat_session(id)
+    return {"ok": True}
+
+
 # ── 키 컨텐츠 지식 저장소 ─────────────────────────────────────────
 from database import (list_knowledge, create_knowledge, update_knowledge, delete_knowledge)
 

@@ -239,6 +239,50 @@ def delete_worksheet_row(id_: int):
     conn.commit(); conn.close()
 
 
+# ── AI 상담 대화 세션 (클로드처럼 지난 대화 저장·이어가기) ─────────────
+def _ensure_chat(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chat_session (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT DEFAULT '',
+            messages TEXT DEFAULT '[]',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+
+def list_chat_sessions():
+    conn = get_db(); _ensure_chat(conn)
+    rows = conn.execute("SELECT id, title, updated_at FROM chat_session ORDER BY updated_at DESC, id DESC").fetchall()
+    conn.close(); return [dict(r) for r in rows]
+
+def get_chat_session(id_: int):
+    conn = get_db(); _ensure_chat(conn)
+    r = conn.execute("SELECT * FROM chat_session WHERE id=?", (id_,)).fetchone()
+    conn.close(); return dict(r) if r else None
+
+def create_chat_session(title: str, messages: str) -> int:
+    conn = get_db(); _ensure_chat(conn)
+    cur = conn.execute("INSERT INTO chat_session (title, messages) VALUES (?,?)", (title, messages))
+    conn.commit(); id_ = cur.lastrowid; conn.close(); return id_
+
+def update_chat_session(id_: int, title=None, messages=None):
+    conn = get_db(); _ensure_chat(conn)
+    if title is not None and messages is not None:
+        conn.execute("UPDATE chat_session SET title=?, messages=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (title, messages, id_))
+    elif messages is not None:
+        conn.execute("UPDATE chat_session SET messages=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (messages, id_))
+    elif title is not None:
+        conn.execute("UPDATE chat_session SET title=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (title, id_))
+    conn.commit(); conn.close()
+
+def delete_chat_session(id_: int):
+    conn = get_db(); _ensure_chat(conn)
+    conn.execute("DELETE FROM chat_session WHERE id=?", (id_,))
+    conn.commit(); conn.close()
+
+
 # ── 키 컨텐츠 지식 저장소 (강의 받아쓰기·요약) ───────────────────────
 def _ensure_knowledge(conn):
     conn.execute("""

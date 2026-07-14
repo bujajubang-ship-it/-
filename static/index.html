@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260706j" />
+  <link rel="stylesheet" href="style.css?v=20260714a" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -810,6 +810,11 @@
 
     <!-- ===== 💬 AI 상담 탭 ===== -->
     <div id="pane-chat" class="hidden">
+     <div class="chat-layout">
+      <aside class="chat-sidebar">
+        <button class="chat-new-btn" onclick="newChat()">＋ 새 대화</button>
+        <div class="chat-session-list" id="chat-session-list"></div>
+      </aside>
       <div class="chat-page">
         <div class="chat-header-bar">
           <div class="chat-ai-info">
@@ -819,7 +824,7 @@
               <div class="chat-ai-desc">미드폼·숏폼·제목·썸네일·업로드 전략 전담 AI 파트너</div>
             </div>
           </div>
-          <button class="chat-clear-btn" onclick="clearChat()">대화 초기화</button>
+          <button class="chat-clear-btn" onclick="newChat()">＋ 새 대화</button>
         </div>
         <div class="chat-messages" id="chat-messages">
           <div class="chat-bubble assistant">
@@ -846,6 +851,7 @@
           <button id="chat-send-btn" onclick="sendChat()">전송</button>
         </div>
       </div>
+     </div>
     </div>
 
     <!-- ===== 📚 히스토리 탭 ===== -->
@@ -1138,7 +1144,7 @@
 
   </main>
 
-  <script src="app.js?v=20260706j"></script>
+  <script src="app.js?v=20260714a"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');
