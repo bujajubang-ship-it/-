@@ -1033,9 +1033,14 @@ async def video_feedback(file: UploadFile = File(...)):
             analyzer = Analyzer()
             kb = list_knowledge(active_only=True)
             _task = asyncio.create_task(analyzer.analyze_video_feedback(timed, kb))
+            waited = 0
             while not _task.done():
                 yield sse({"step": "ping"})
-                await asyncio.sleep(8)
+                await asyncio.sleep(6)
+                waited += 6
+                if waited > 240:
+                    _task.cancel()
+                    raise RuntimeError("AI 편집 분석이 오래 걸려 중단했어요. 잠시 후 다시 시도해 주세요.")
             feedback = _task.result()
 
             save_history("video_feedback", filename, {"transcript": transcript, "feedback": feedback})

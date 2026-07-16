@@ -1786,7 +1786,7 @@ tags는 정확히 30개 작성하세요."""
         return _safe_json(msg.content[0].text.strip(), msg)
 
     async def analyze_video_feedback(self, transcript: str, knowledge: List[Dict] = None) -> dict:
-        kb_txt = self._kb_text(knowledge, per=1500, budget=22000)
+        kb_txt = self._kb_text(knowledge, per=900, budget=8000)   # 편집피드백은 핵심만 — 프롬프트 비대 방지(속도)
         kb_section = ""
         if kb_txt:
             kb_section = f"""
@@ -1847,7 +1847,7 @@ tags는 정확히 30개 작성하세요."""
 
         msg = await self.client.messages.create(
             model=WRITER_MODEL,
-            max_tokens=5000,
+            max_tokens=4000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
