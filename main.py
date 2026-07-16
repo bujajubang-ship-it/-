@@ -1001,19 +1001,16 @@ async def video_feedback(file: UploadFile = File(...)):
             sz = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
             if sz > 24 * 1024 * 1024:
                 raise RuntimeError(f"오디오가 너무 큽니다 ({sz//1024//1024}MB). 약 60분 이내로 나눠서 올려주세요.")
-            okey = os.getenv("OPENAI_API_KEY", "").strip()
-            if not okey:
-                raise RuntimeError("OPENAI_API_KEY가 설정되지 않았습니다 (Render 환경변수에 추가 필요).")
-
+            # cnmaker(Lightsail)의 OpenAI 키로 받아쓰기 — 키를 Render로 옮기지 않고 Lightsail이 대신 호출
             async def _transcribe():
+                with open(audio_path, "rb") as af:
+                    data = af.read()
                 async with httpx.AsyncClient(timeout=600) as c:
-                    with open(audio_path, "rb") as af:
-                        return await c.post(
-                            "https://api.openai.com/v1/audio/transcriptions",
-                            headers={"Authorization": f"Bearer {okey}"},
-                            data={"model": "whisper-1", "language": "ko", "response_format": "verbose_json"},
-                            files={"file": (os.path.basename(audio_path), af, "audio/mpeg")},
-                        )
+                    return await c.post(
+                        "http://43.200.232.189/transcribe",
+                        headers={"x-secret": "bj-cnmaker-2026", "Content-Type": "application/octet-stream"},
+                        content=data,
+                    )
             _tt = asyncio.create_task(_transcribe())
             while not _tt.done():
                 yield sse({"step": "ping"})
