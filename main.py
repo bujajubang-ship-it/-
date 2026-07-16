@@ -979,8 +979,9 @@ async def video_feedback(file: UploadFile = File(...)):
             yield sse({"step": "extracting", "message": "오디오 추출 중..."})
 
             def _run_ffmpeg():
+                # 16kHz 모노 48kbps — 받아쓰기엔 충분하고 파일이 작아 OpenAI 25MB 한도 여유(약 60분)
                 return subprocess.run(
-                    ["ffmpeg", "-i", video_path, "-vn", "-acodec", "mp3", "-q:a", "2", audio_path, "-y"],
+                    ["ffmpeg", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", audio_path, "-y"],
                     capture_output=True, text=True, timeout=300
                 )
 
@@ -995,27 +996,46 @@ async def video_feedback(file: UploadFile = File(...)):
             if result.returncode != 0:
                 raise RuntimeError(f"ffmpeg 오류: {result.stderr[-500:]}")
 
-            # 3. Whisper로 자막 추출
-            yield sse({"step": "transcribing", "message": "자막 추출 중... (영상 길이에 따라 2~5분 소요)"})
+            # 3. OpenAI 받아쓰기 API (로컬 Whisper 대신 — 메모리 OOM 없이 안정적, 타임스탬프 확보)
+            yield sse({"step": "transcribing", "message": "자막 추출 중... (OpenAI 받아쓰기)"})
+            sz = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
+            if sz > 24 * 1024 * 1024:
+                raise RuntimeError(f"오디오가 너무 큽니다 ({sz//1024//1024}MB). 약 60분 이내로 나눠서 올려주세요.")
+            okey = os.getenv("OPENAI_API_KEY", "").strip()
+            if not okey:
+                raise RuntimeError("OPENAI_API_KEY가 설정되지 않았습니다 (Render 환경변수에 추가 필요).")
 
-            def run_whisper():
-                import whisper
-                model = whisper.load_model("small")
-                result_w = model.transcribe(audio_path, language="ko")
-                return result_w["text"]
+            async def _transcribe():
+                async with httpx.AsyncClient(timeout=600) as c:
+                    with open(audio_path, "rb") as af:
+                        return await c.post(
+                            "https://api.openai.com/v1/audio/transcriptions",
+                            headers={"Authorization": f"Bearer {okey}"},
+                            data={"model": "whisper-1", "language": "ko", "response_format": "verbose_json"},
+                            files={"file": (os.path.basename(audio_path), af, "audio/mpeg")},
+                        )
+            _tt = asyncio.create_task(_transcribe())
+            while not _tt.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(5)
+            r_tr = _tt.result()
+            if r_tr.status_code != 200:
+                raise RuntimeError(f"받아쓰기 오류: {r_tr.text[:200]}")
+            tj = r_tr.json()
+            transcript = (tj.get("text") or "").strip()
+            if not transcript:
+                raise RuntimeError("자막을 추출하지 못했어요. 음성이 없는 영상일 수 있습니다.")
+            # 타임스탬프 자막(편집 가이드용): [분:초] 대사
+            def _mmss(s):
+                s = int(s or 0); return f"{s//60}:{s%60:02d}"
+            segs = tj.get("segments") or []
+            timed = "\n".join(f"[{_mmss(sg.get('start'))}] {(sg.get('text') or '').strip()}" for sg in segs) if segs else transcript
 
-            try:
-                transcript = await asyncio.wait_for(
-                    loop.run_in_executor(None, run_whisper),
-                    timeout=600  # 10분
-                )
-            except asyncio.TimeoutError:
-                raise RuntimeError("자막 추출 시간이 초과되었습니다 (10분). 영상이 너무 길거나 손상되었을 수 있습니다.")
-
-            # 4. Claude AI 분석
-            yield sse({"step": "analyzing", "message": "AI 피드백 분석 중..."})
+            # 4. Claude AI 분석 (지식탭 강의 적용 + 타임스탬프 기반 편집 가이드)
+            yield sse({"step": "analyzing", "message": "AI 편집 피드백 분석 중... (지식탭 적용)"})
             analyzer = Analyzer()
-            _task = asyncio.create_task(analyzer.analyze_video_feedback(transcript))
+            kb = list_knowledge(active_only=True)
+            _task = asyncio.create_task(analyzer.analyze_video_feedback(timed, kb))
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)

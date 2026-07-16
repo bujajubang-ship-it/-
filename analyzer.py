@@ -1785,34 +1785,51 @@ tags는 정확히 30개 작성하세요."""
         )
         return _safe_json(msg.content[0].text.strip(), msg)
 
-    async def analyze_video_feedback(self, transcript: str) -> dict:
+    async def analyze_video_feedback(self, transcript: str, knowledge: List[Dict] = None) -> dict:
+        kb_txt = self._kb_text(knowledge, per=1500, budget=22000)
+        kb_section = ""
+        if kb_txt:
+            kb_section = f"""
+== ★★ 지식탭 강의 (편집·구성 평가의 '기준'으로 반드시 사용) ★★ ==
+{kb_txt}
+
+[적용] 위 강의의 도입부 공식·원고 원리·훅 기법을 이 영상에 실제로 대입해 "강의대로면 여기서 이렇게 했어야 한다" 식으로 구체적으로 지적하라. 지식을 근거로 대야 피드백이 날카로워진다.
+"""
         system_prompt = (
-            "당신은 유튜브 영상 퍼포먼스 전문 분석가입니다. "
-            "부자주방 채널(업소용 주방용품 전문 유튜버)의 영상을 분석합니다. "
+            "당신은 유튜브 영상 편집·구성 전문 코치입니다. "
+            "부자주방 채널(업소용 주방용품 전문 유튜버)의 편집본을 분석해 '어디를 어떻게 자르고 강조할지' 편집 가이드를 줍니다. "
             "채널 목표: CTR 10% 이상, 초반 30초 이탈률 40% 미만. "
+            "자막에 [분:초] 타임스탬프가 있으면 반드시 그 시각을 근거로 구체적으로 지적하라(예: '1:45 늘어짐 → 컷'). "
+            "두루뭉술한 칭찬 금지 — 실제 대사·타임스탬프·지식탭 강의를 근거로 냉정하고 실행가능하게. "
             "반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만."
         )
 
-        user_text = f"""아래는 유튜브 영상의 자막입니다. 부자주방 채널 (주방용품 전문 유튜버)의 영상입니다.
+        user_text = f"""아래는 편집 완료된 부자주방 영상의 자막(타임스탬프 포함)입니다.
 목표: CTR 10% 이상, 초반 30초 이탈률 40% 미만
-
-[자막]
+{kb_section}
+[자막 (타임스탬프)]
 {transcript}
 
-다음 항목을 JSON으로 분석해주세요:
+다음 항목을 JSON으로 분석해주세요. 편집 가이드(cuts/emphasis)는 반드시 실제 타임스탬프를 찍어 구체적으로:
 {{
   "overall_score": 85,
   "hook_analysis": {{
     "score": 90,
-    "first_30s": "초반 30초 내용 요약",
+    "first_30s": "초반 30초에 실제로 무슨 말/장면이 나오는지",
     "hook_strength": "강함/보통/약함",
-    "improvement": "개선 제안"
+    "improvement": "지식탭 도입부 공식 기준으로 어떻게 다시 열지 (구체적 첫 문장 예시 포함)"
   }},
   "content_flow": {{
     "score": 80,
-    "summary": "전체 내용 흐름 요약 (3줄)",
+    "summary": "전체 흐름 요약 (3줄)",
     "key_message": "핵심 메시지",
     "pacing": "빠름/적절/느림"
+  }},
+  "edit_guide": {{
+    "cuts": [{{"time": "1:23", "why": "늘어지거나 중복되는 구간 — 왜 잘라야 하는지"}}],
+    "emphasis": [{{"time": "0:12", "how": "자막/줌/효과음/컷 등 어떻게 강조할지"}}],
+    "pacing_fix": "전반 속도 처방 (어디가 늘어지고 어디를 빠르게)",
+    "knowledge_applied": "적용한 지식탭 강의 규칙 — 이 영상 어디에 어떻게 대입했는지"
   }},
   "ctr_prediction": {{
     "score": 75,
@@ -1821,16 +1838,16 @@ tags는 정확히 30개 작성하세요."""
   }},
   "retention_risk": {{
     "score": 70,
-    "weak_points": ["이탈 위험 구간 1", "이탈 위험 구간 2"],
+    "weak_points": ["이탈 위험 구간 (타임스탬프 포함)", "..."],
     "suggestion": "시청 유지율 개선 방안"
   }},
   "strengths": ["잘된 점 1", "잘된 점 2"],
-  "improvements": ["개선할 점 1", "개선할 점 2", "개선할 점 3"]
+  "improvements": ["개선할 점 1 (구체적)", "개선할 점 2", "개선할 점 3"]
 }}"""
 
         msg = await self.client.messages.create(
             model=WRITER_MODEL,
-            max_tokens=4000,
+            max_tokens=5000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )

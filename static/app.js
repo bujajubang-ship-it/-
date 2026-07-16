@@ -3402,6 +3402,25 @@ function renderVideoFeedback(data, targetEl) {
     </div>
   `;
 
+  // ✂️ 편집 가이드 (타임스탬프 컷/강조 + 지식탭 적용)
+  const eg = fb.edit_guide || {};
+  const _ts = t => `<b style="color:#7c3aed;font-family:ui-monospace,monospace">${t || ''}</b>`;
+  const cuts = (eg.cuts || []).map(c => `<li>${_ts(c.time)} ${c.why || ''}</li>`).join('');
+  const emph = (eg.emphasis || []).map(c => `<li>${_ts(c.time)} ${c.how || ''}</li>`).join('');
+  if (cuts || emph || eg.pacing_fix || eg.knowledge_applied) {
+    html += `
+    <div class="vf-card">
+      <div class="vf-card-header"><span>✂️ 편집 가이드 (타임스탬프)</span></div>
+      <div class="vf-card-body">
+        ${cuts ? `<div class="vf-field"><span class="vf-field-label">잘라낼 구간</span><ul class="vf-list">${cuts}</ul></div>` : ''}
+        ${emph ? `<div class="vf-field"><span class="vf-field-label">강조할 순간</span><ul class="vf-list">${emph}</ul></div>` : ''}
+        ${eg.pacing_fix ? `<div class="vf-field"><span class="vf-field-label">속도 처방</span><span>${(eg.pacing_fix || '').replace(/\n/g, '<br>')}</span></div>` : ''}
+        ${eg.knowledge_applied ? `<div class="vf-field"><span class="vf-field-label">📚 지식탭 적용</span><span>${eg.knowledge_applied}</span></div>` : ''}
+      </div>
+    </div>
+  `;
+  }
+
   // CTR 예측
   const ctr = fb.ctr_prediction || {};
   const titles = (ctr.title_suggestion || []).map(t => `<div class="vf-title-item">▶ ${t}</div>`).join('');
