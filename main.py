@@ -1035,7 +1035,8 @@ async def video_feedback(file: UploadFile = File(...)):
             _task = asyncio.create_task(analyzer.analyze_video_feedback(timed, kb))
             waited = 0
             while not _task.done():
-                yield sse({"step": "ping"})
+                # 경과 초를 계속 갱신해 '멈춘 것처럼' 보이지 않게
+                yield sse({"step": "analyzing", "message": f"AI 편집 피드백 분석 중... ({waited}초 · 보통 1분 내외, 지식탭 적용)"})
                 await asyncio.sleep(6)
                 waited += 6
                 if waited > 240:
