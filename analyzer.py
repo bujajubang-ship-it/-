@@ -1344,7 +1344,7 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
         messages = [{"role": m["role"], "content": m["content"]} for m in history[-20:]]
 
         # 지식탭에 저장된 모든 활성 지식을 시스템 프롬프트에 주입 (채팅이 지식을 다 알고 대화)
-        kb_txt = self._kb_text(knowledge, per=1500, budget=30000)
+        kb_txt = self._kb_text(knowledge, per=1800, budget=60000)   # 지식탭 전체를 넉넉히 학습(강의 늘어도 안 잘리게)
         system_prompt = CHAT_SYSTEM
         if kb_txt:
             system_prompt = CHAT_SYSTEM + (
