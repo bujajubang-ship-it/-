@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260716a" />
+  <link rel="stylesheet" href="style.css?v=20260721a" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -845,7 +845,7 @@
         <div class="chat-input-area">
           <label class="chat-attach-btn" title="이미지·PDF 첨부">
             📎
-            <input type="file" id="chat-file-input" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" multiple style="display:none" onchange="handleChatFiles(this)" />
+            <input type="file" id="chat-file-input" accept="image/*,application/pdf" multiple style="display:none" onchange="handleChatFiles(this)" />
           </label>
           <textarea id="chat-input" placeholder="질문을 입력하세요... (Shift+Enter: 줄바꿈, 📎로 이미지·PDF 첨부)" rows="1" onkeydown="chatKeydown(event)" oninput="chatInputResize(this)"></textarea>
           <button id="chat-send-btn" onclick="sendChat()">전송</button>
@@ -1144,7 +1144,7 @@
 
   </main>
 
-  <script src="app.js?v=20260716a"></script>
+  <script src="app.js?v=20260721a"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

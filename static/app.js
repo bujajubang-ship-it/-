@@ -2195,24 +2195,50 @@ function clearChat() {
   document.getElementById('chat-attach-preview').classList.add('hidden');
 }
 
+// 이미지는 캔버스로 1536px·JPEG로 리사이즈·변환 → 아이폰 HEIC·대용량 사진도 안전(Anthropic 한도 준수)
+function _chatReadImage(file) {
+  return new Promise(resolve => {
+    const r = new FileReader();
+    r.onload = ev => {
+      const img = new Image();
+      img.onload = () => {
+        const max = 1536; let w = img.width, h = img.height;
+        if (w > h && w > max) { h = Math.round(h * max / w); w = max; }
+        else if (h >= w && h > max) { w = Math.round(w * max / h); h = max; }
+        try {
+          const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+          cv.getContext('2d').drawImage(img, 0, 0, w, h);
+          const durl = cv.toDataURL('image/jpeg', 0.85);
+          resolve({ name: (file.name || 'image').replace(/\.[^.]+$/, '') + '.jpg', media_type: 'image/jpeg', data: durl.split(',')[1] });
+        } catch (e) { resolve(null); }
+      };
+      img.onerror = () => resolve(null);
+      img.src = ev.target.result;
+    };
+    r.onerror = () => resolve(null);
+    r.readAsDataURL(file);
+  });
+}
+function _chatReadPdf(file) {
+  return new Promise(resolve => {
+    const r = new FileReader();
+    r.onload = e => resolve({ name: file.name, media_type: 'application/pdf', data: e.target.result.split(',')[1] });
+    r.onerror = () => resolve(null);
+    r.readAsDataURL(file);
+  });
+}
 function handleChatFiles(input) {
   const preview = document.getElementById('chat-attach-preview');
   const files = Array.from(input.files);
   if (!files.length) return;
 
-  const toRead = files.map(file => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      const dataUrl = e.target.result;
-      const [header, data] = dataUrl.split(',');
-      const media_type = header.match(/:(.*?);/)[1];
-      resolve({ name: file.name, media_type, data });
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  }));
+  const toRead = files.map(file =>
+    file.type === 'application/pdf' ? _chatReadPdf(file) : _chatReadImage(file)
+  );
 
-  Promise.all(toRead).then(results => {
+  Promise.all(toRead).then(all => {
+    const results = all.filter(Boolean);
+    if (!results.length) { alert('이미지를 읽지 못했어요. 다른 사진으로 다시 시도해 주세요.'); input.value = ''; return; }
     chatAttachments.push(...results);
     preview.classList.remove('hidden');
     preview.innerHTML = chatAttachments.map((a, i) => {
