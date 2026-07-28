@@ -103,6 +103,24 @@ CONTENT_CREATION_RULES = """
 
 CHAT_SYSTEM = """당신은 부자주방 채널 전담 콘텐츠 전략 파트너입니다.
 
+【당신은 직접 조사할 수 있습니다 — 추측하지 마세요】
+아래 도구를 실제로 써서 지금 유튜브에 뭐가 있는지 확인한 뒤 답하세요.
+  · youtube_search      키워드로 유튜브를 직접 검색 (기간·영상길이 조건 가능)
+  · youtube_trending    지금 인기 급상승 (26=노하우/스타일이 주방·살림)
+  · youtube_comments    특정 영상의 인기 댓글 읽기 (시청자 진짜 속마음)
+  · naver_cafe_search   네이버 카페 (사장님들의 아직 안 만들어진 고민)
+  · my_channel          부자주방 채널 최근 성과
+
+반드시 지킬 것:
+1. 주제·제목·경쟁상황·트렌드에 대한 질문에는 **먼저 검색하고 나서 답한다.**
+   "제가 직접 찾아볼 수는 없지만" 같은 말은 하지 마세요. 찾아볼 수 있습니다.
+2. 조사한 근거(영상 제목·조회수·배수·실제 댓글)를 답변에 숫자로 인용한다.
+3. **구독자대비 배수**가 크면 채널 힘이 아니라 주제·제목이 이긴 것 → 우리가 따라 만들 수 있다.
+   **하루평균 조회수**가 높으면 지금 살아있는 주제, 총조회수만 높으면 옛날에 쌓인 것.
+4. 공감 포인트·시청자 반응은 지어내지 말고 youtube_comments·naver_cafe_search 로
+   찾은 **실제 문장을 인용**한다. 근거 없이 지어내면 조작이다.
+5. 한 번 검색해서 부족하면 조건을 바꿔 두세 번 더 찾아본다. 필요하면 댓글까지 읽는다.
+
 【채널 정보】
 채널명: 부자주방
 시청자: 외식업 운영자 (식당·분식집·한식당 사장님), 외식업 창업 준비자
@@ -168,6 +186,80 @@ CHAT_SYSTEM = """당신은 부자주방 채널 전담 콘텐츠 전략 파트너
 - 친근하고 실용적인 톤 유지
 - 모르는 것은 모른다고 명확히 말할 것
 - 마크다운 굵은 글씨(**텍스트**)와 줄바꿈을 활용해 가독성 있게 작성"""
+
+
+# ---------------------------------------------------------------- 채팅이 쓰는 도구
+# AI 상담이 "제가 직접 찾아볼 수는 없고요" 라고 답하지 않도록, 대화 도중에 실제로
+# 유튜브·네이버를 뒤져보고 답하게 하는 도구들. 언제 부를지를 설명에 못 박아 둔다.
+
+CHAT_TOOLS = [
+    {
+        "name": "youtube_search",
+        "description": (
+            "유튜브를 실제로 검색해 지금 어떤 영상이 잘 되고 있는지 본다. "
+            "사용자가 어떤 주제·키워드가 될지 물어보거나, 경쟁 영상·제목·조회수가 궁금하다고 하거나, "
+            "'요즘 뭐가 잘 돼?' 같은 질문을 하면 추측하지 말고 반드시 이 도구를 먼저 불러라. "
+            "결과에는 구독자 대비 조회수 배수가 들어있는데, 이 값이 크면 채널 힘이 아니라 "
+            "주제와 제목이 이긴 것이므로 우리가 따라 만들 수 있다는 신호다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "검색어. 한국어로."},
+                "days": {"type": "integer", "description": "최근 며칠 안의 영상만. 0이면 전체. 보통 90~180."},
+                "duration": {"type": "string", "enum": ["any", "short", "medium", "long"],
+                              "description": "any=전체, short=4분미만(쇼츠), medium=4~20분, long=20분초과"},
+            },
+            "required": ["keyword"],
+        },
+    },
+    {
+        "name": "youtube_trending",
+        "description": (
+            "지금 유튜브에서 인기 급상승 중인 영상을 본다. 사용자가 '요즘 트렌드', "
+            "'지금 뭐가 떠?', '급상승' 을 물으면 부른다. category 는 26이 노하우/스타일(주방·살림·리뷰)이라 "
+            "부자주방과 가장 가깝고, 비워두면 전체다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"category": {"type": "string", "description": "26=노하우/스타일, 22=인물/블로그, 24=엔터, 23=코미디, 빈값=전체"}},
+        },
+    },
+    {
+        "name": "youtube_comments",
+        "description": (
+            "특정 유튜브 영상의 인기 댓글을 좋아요 순으로 읽는다. 시청자가 뭘 궁금해하고 뭘 불평하는지 "
+            "직접 확인할 때 쓴다. 검색으로 잘 된 영상을 찾은 다음, 왜 잘 됐는지 알아보려면 이 도구로 "
+            "댓글을 읽어라. 공감 포인트는 지어내지 말고 여기서 찾은 실제 댓글을 인용한다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"video_url": {"type": "string", "description": "유튜브 영상 주소 또는 영상 ID"}},
+            "required": ["video_url"],
+        },
+    },
+    {
+        "name": "naver_cafe_search",
+        "description": (
+            "네이버 카페 글을 검색한다. 식당 사장님들이 실제로 어떤 고민을 하는지, 어떤 말로 "
+            "그 고민을 표현하는지 확인할 때 쓴다. 유튜브는 '이미 만들어진 콘텐츠'지만 카페는 "
+            "'아직 아무도 안 만든 진짜 고민'이 있는 곳이라, 주제를 찾을 때 같이 보면 좋다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"keyword": {"type": "string", "description": "검색어. 사장님들이 쓸 법한 말로."}},
+            "required": ["keyword"],
+        },
+    },
+    {
+        "name": "my_channel",
+        "description": (
+            "부자주방 채널의 최근 영상 성과(조회수·좋아요·댓글·올린 날짜)를 가져온다. "
+            "'우리 채널 어때?', '내 영상 중에 뭐가 잘됐어?', 우리 성과와 비교해 달라는 요청이면 부른다."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+]
 
 
 class Analyzer:
@@ -1407,6 +1499,91 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
         )
         return _safe_json(_msg_text(msg), msg)
 
+
+    # ------------------------------------------------------------ 도구 실행
+    async def _run_tool(self, name: str, args: Dict) -> str:
+        """채팅이 부른 도구를 실제로 실행하고, 모델이 읽기 좋은 글자로 돌려준다.
+
+        결과가 길면 프롬프트가 비대해져 느려지므로 필요한 것만 추려서 넘긴다.
+        """
+        import os as _os
+        try:
+            if name in ("youtube_search", "youtube_trending", "youtube_comments", "my_channel"):
+                key = _os.getenv("YOUTUBE_API_KEY", "").strip()
+                if not key:
+                    return "유튜브 API 키가 설정되어 있지 않아 검색할 수 없다."
+                from youtube_service import YouTubeService
+                yt = YouTubeService(key)
+                try:
+                    if name == "youtube_search":
+                        vids = await yt.search_advanced(
+                            args.get("keyword", ""),
+                            days=int(args.get("days") or 180),
+                            duration=args.get("duration") or "any",
+                            max_results=20,
+                        )
+                        return self._fmt_videos(f"'{args.get('keyword','')}' 검색 결과", vids)
+                    if name == "youtube_trending":
+                        vids = await yt.get_trending(category=args.get("category") or "", max_results=20)
+                        return self._fmt_videos("인기 급상승", vids)
+                    if name == "youtube_comments":
+                        vid = (args.get("video_url") or "").strip()
+                        m = re.search(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{11})", vid)
+                        vid = m.group(1) if m else vid[-11:]
+                        cms = await yt.get_comments(vid, max_comments=30)
+                        if not cms:
+                            return "댓글을 가져오지 못했다(댓글 사용 중지이거나 주소가 잘못됨)."
+                        return "인기 댓글(좋아요순):\n" + "\n".join(
+                            f"- ({c.get('like_count',0)}) {(c.get('text') or '')[:180]}" for c in cms[:25])
+                    if name == "my_channel":
+                        ch_id = _os.getenv("MY_CHANNEL_ID", "").strip() or "UCS7hX9QMfq2xUdc5--RFzxg"
+                        info, vids = await yt.get_channel_videos(ch_id, max_videos=30)
+                        head = f"부자주방 채널: 구독 {info.get('subscriber_count', 0):,} / 총영상 {info.get('video_count', 0)}\n"
+                        rows = [f"- {v.get('published_at','')} 조회 {v.get('view_count',0):,} "
+                                f"좋아요 {v.get('like_count',0):,} 댓글 {v.get('comment_count',0):,} | {v.get('title','')[:60]}"
+                                for v in vids[:25]]
+                        return head + "\n".join(rows)
+                finally:
+                    await yt.close()
+
+            if name == "naver_cafe_search":
+                nid = _os.getenv("NAVER_CLIENT_ID", "").strip()
+                nsec = _os.getenv("NAVER_CLIENT_SECRET", "").strip()
+                if not (nid and nsec):
+                    return "네이버 API 키가 없어 카페 검색을 할 수 없다."
+                from naver_service import NaverService
+                nv = NaverService(nid, nsec)
+                try:
+                    posts = await nv.search_cafe(args.get("keyword", ""))
+                finally:
+                    await nv.close()
+                if not posts:
+                    return "카페 글을 찾지 못했다."
+                return "네이버 카페 글:\n" + "\n".join(
+                    f"- {(p.get('title') or '')[:80]} | {(p.get('description') or '')[:120]}" for p in posts[:20])
+
+            return f"'{name}' 이라는 도구는 없다."
+        except Exception as e:
+            return f"도구 실행 중 오류가 났다: {str(e)[:200]}"
+
+    @staticmethod
+    def _fmt_videos(head: str, vids: List[Dict]) -> str:
+        if not vids:
+            return f"{head}: 결과 없음. 조건을 넓혀서 다시 시도해볼 것."
+        rows = []
+        for i, v in enumerate(vids[:20], 1):
+            rows.append(
+                f"{i}. {v.get('title','')}\n"
+                f"   {v.get('channel','')} (구독 {v.get('subscriber_count',0):,}) | "
+                f"조회 {v.get('view_count',0):,} / 하루평균 {v.get('views_per_day',0):,} / "
+                f"올린지 {v.get('age_days',0)}일 / 구독자대비 {v.get('view_per_sub',0)}배 / "
+                f"참여율 {v.get('engage_rate',0)}% / {v.get('duration_sec',0)//60}분\n"
+                f"   {v.get('url','')}"
+            )
+        return (f"{head} ({len(vids)}개)\n"
+                "※ 구독자대비 배수가 크면 채널 힘이 아니라 주제·제목이 이긴 것 = 따라 만들 수 있다.\n"
+                + "\n".join(rows))
+
     async def chat_stream(self, message: str, history: List[Dict], attachments: List[Dict] = None, knowledge: List[Dict] = None):
         messages = [{"role": m["role"], "content": m["content"]} for m in history[-20:]]
 
@@ -1442,15 +1619,60 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
         else:
             messages.append({"role": "user", "content": message})
 
-        async with self.client.messages.stream(
-            model=WRITER_MODEL,
-            max_tokens=MIN_MAX_TOKENS,  # Opus 5는 생각도 이 안에서 쓴다 — 원고가 잘리지 않게 넉넉히
-            output_config={"effort": WRITER_EFFORT},
-            system=self._with_kb(system_prompt),
-            messages=messages,
-        ) as stream:
-            async for text in stream.text_stream:
-                yield text
+        # 도구를 쥐어준다. 모델이 필요하다고 판단하면 대화 도중에 유튜브·네이버를 직접 뒤진다.
+        # 도구를 부르면 → 우리가 실행 → 결과를 다시 넣고 이어서 답하게 하는 것을 반복한다.
+        # 시스템 프롬프트(지식탭 전체 포함)는 도구를 부를 때마다 똑같이 다시 보내진다.
+        # 캐싱을 걸어두면 두 번째부터는 그 부분이 1/10 값으로 청구된다.
+        sys_full = [{"type": "text", "text": self._with_kb(system_prompt),
+                     "cache_control": {"type": "ephemeral"}}]
+        used_in = used_out = tool_calls = 0   # 이번 대화 한 번에 든 비용 계측용
+        cache_read = 0
+        for _turn in range(6):   # 무한루프 방지
+            async with self.client.messages.stream(
+                model=WRITER_MODEL,
+                max_tokens=MIN_MAX_TOKENS,  # Opus 5는 생각도 이 안에서 쓴다 — 답이 잘리지 않게 넉넉히
+                output_config={"effort": WRITER_EFFORT},
+                system=sys_full,
+                messages=messages,
+                tools=CHAT_TOOLS,
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield text
+                msg = await stream.get_final_message()
+            used_in += msg.usage.input_tokens
+            used_out += msg.usage.output_tokens
+            cache_read += getattr(msg.usage, "cache_read_input_tokens", 0) or 0
+
+            if msg.stop_reason != "tool_use":
+                # 조사를 많이 할수록 비용이 는다. 서버 로그에 남겨 나중에 확인할 수 있게 한다.
+                # 캐시에서 읽은 부분은 1/10 값이라 따로 계산한다
+                won = (used_in / 1e6 * 5 + cache_read / 1e6 * 0.5 + used_out / 1e6 * 25) * 1400
+                print(f"[chat] 조사 {tool_calls}회 | 입력 {used_in:,}(캐시 {cache_read:,}) "
+                      f"출력 {used_out:,} 토큰 | 약 {won:.0f}원", flush=True)
+                return
+
+            calls = [b for b in msg.content if getattr(b, "type", "") == "tool_use"]
+            messages.append({"role": "assistant", "content": msg.content})
+
+            tool_calls += len(calls)
+            results = []
+            for c in calls:
+                # 사장님이 "왜 멈췄지?" 하지 않도록 뭘 하고 있는지 화면에 알린다
+                label = {
+                    "youtube_search": f"유튜브 검색: {c.input.get('keyword','')}",
+                    "youtube_trending": "유튜브 인기 급상승 확인",
+                    "youtube_comments": "영상 댓글 읽는 중",
+                    "naver_cafe_search": f"네이버 카페 검색: {c.input.get('keyword','')}",
+                    "my_channel": "부자주방 채널 성과 확인",
+                }.get(c.name, c.name)
+                yield f"\n\n> 🔎 {label}...\n\n"
+                out = await self._run_tool(c.name, dict(c.input or {}))
+                results.append({"type": "tool_result", "tool_use_id": c.id, "content": out})
+            # 조사 결과는 다음 턴에도 그대로 다시 보내진다. 마지막 결과에 캐싱을 걸어두면
+            # 여기까지의 대화 전체가 다음 턴부터 1/10 값으로 청구된다.
+            if results:
+                results[-1]["cache_control"] = {"type": "ephemeral"}
+            messages.append({"role": "user", "content": results})
 
     async def analyze_video_decision(self, videos_info: List[Dict], current_date: str) -> Dict:
         videos_text = "\n\n".join(
