@@ -1,7 +1,7 @@
 import asyncio
 import re
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Tuple
 
 BASE = "https://www.googleapis.com/youtube/v3"
@@ -73,6 +73,141 @@ class YouTubeService:
 
         videos.sort(key=lambda x: x["view_count"], reverse=True)
         return videos
+
+    # ---------------------------------------------------------------- 검색·트렌드
+
+    # 유튜브가 쓰는 카테고리 번호. 부자주방과 관련 있는 것만 골라 뒀다.
+    CATEGORIES = {
+        "26": "노하우/스타일(주방·살림·리뷰)",
+        "22": "인물/블로그",
+        "24": "엔터테인먼트",
+        "23": "코미디",
+        "28": "과학기술",
+        "20": "게임",
+        "27": "교육",
+        "17": "스포츠",
+        "10": "음악",
+    }
+
+    async def search_advanced(self, keyword: str, *, days: int = 0, order: str = "viewCount",
+                              duration: str = "any", max_results: int = 25,
+                              region: str = "KR") -> List[Dict]:
+        """조건을 걸어 유튜브를 검색한다.
+
+        days     : 최근 며칠 안의 영상만 (0 = 제한 없음). 트렌드를 볼 땐 30~90일이 유용.
+        order    : viewCount(조회수) / date(최신) / relevance(관련도) / rating(평점)
+        duration : any / short(4분 미만) / medium(4~20분) / long(20분 초과)
+
+        조회수만으로는 '오래돼서 쌓인 영상'과 '지금 터진 영상'이 구분되지 않으므로,
+        하루평균 조회수와 채널 구독자 대비 배수(떡상 지표)를 같이 계산해 돌려준다.
+        """
+        params = {
+            "key": self.api_key, "q": keyword, "part": "snippet", "type": "video",
+            "order": order, "maxResults": min(max_results, 50),
+            "relevanceLanguage": "ko", "regionCode": region,
+        }
+        if duration in ("short", "medium", "long"):
+            params["videoDuration"] = duration
+        if days and days > 0:
+            after = datetime.now(timezone.utc) - timedelta(days=days)
+            params["publishedAfter"] = after.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        resp = await self.client.get(f"{BASE}/search", params=params)
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        if not items and order == "viewCount":
+            # 조건이 좁으면 조회수순은 0건이 나올 수 있다 → 관련도순으로 한 번 더
+            params["order"] = "relevance"
+            resp = await self.client.get(f"{BASE}/search", params=params)
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+        ids = [i["id"]["videoId"] for i in items if i.get("id", {}).get("videoId")]
+        return await self._videos_with_channel(ids)
+
+    async def get_trending(self, *, category: str = "", region: str = "KR",
+                           max_results: int = 25) -> List[Dict]:
+        """지금 인기 급상승 영상. 카테고리를 주면 그 분야만."""
+        params = {
+            "key": self.api_key, "part": "snippet,statistics,contentDetails",
+            "chart": "mostPopular", "regionCode": region,
+            "maxResults": min(max_results, 50),
+        }
+        if category:
+            params["videoCategoryId"] = category
+        resp = await self.client.get(f"{BASE}/videos", params=params)
+        resp.raise_for_status()
+        vids = [self._video_row(it) for it in resp.json().get("items", [])]
+        return await self._attach_channel_stats(vids)
+
+    async def _videos_with_channel(self, ids: List[str]) -> List[Dict]:
+        if not ids:
+            return []
+        resp = await self.client.get(f"{BASE}/videos", params={
+            "key": self.api_key, "id": ",".join(ids),
+            "part": "snippet,statistics,contentDetails",
+        })
+        resp.raise_for_status()
+        vids = [self._video_row(it) for it in resp.json().get("items", [])]
+        return await self._attach_channel_stats(vids)
+
+    async def _attach_channel_stats(self, vids: List[Dict]) -> List[Dict]:
+        """채널 구독자수를 붙이고 '떡상 지표'를 계산한다.
+
+        구독자 대비 조회수 배수(view_per_sub)가 크면 구독자 밖으로 퍼진 영상이다.
+        작은 채널이 크게 터진 주제 = 우리가 따라 만들 만한 주제.
+        """
+        ch_ids = list({v["channel_id"] for v in vids if v.get("channel_id")})
+        subs = {}
+        for i in range(0, len(ch_ids), 50):
+            resp = await self.client.get(f"{BASE}/channels", params={
+                "key": self.api_key, "id": ",".join(ch_ids[i:i + 50]), "part": "statistics",
+            })
+            if resp.status_code != 200:
+                continue
+            for c in resp.json().get("items", []):
+                subs[c["id"]] = int(c.get("statistics", {}).get("subscriberCount", 0) or 0)
+
+        now = datetime.now(timezone.utc)
+        for v in vids:
+            v["subscriber_count"] = subs.get(v.get("channel_id"), 0)
+            try:
+                pub = datetime.fromisoformat(v["published_full"].replace("Z", "+00:00"))
+                age_days = max((now - pub).days, 1)
+            except Exception:
+                age_days = 1
+            v["age_days"] = age_days
+            v["views_per_day"] = round(v["view_count"] / age_days)
+            v["view_per_sub"] = round(v["view_count"] / v["subscriber_count"], 1) if v["subscriber_count"] else 0
+            v["engage_rate"] = round((v["like_count"] + v["comment_count"]) / v["view_count"] * 100, 2) if v["view_count"] else 0
+        vids.sort(key=lambda x: x["views_per_day"], reverse=True)
+        return vids
+
+    @staticmethod
+    def _video_row(item: Dict) -> Dict:
+        s = item.get("statistics", {})
+        sn = item.get("snippet", {})
+        cd = item.get("contentDetails", {})
+        th = sn.get("thumbnails", {})
+        thumb = (th.get("maxres") or th.get("high") or th.get("medium") or {}).get("url", "")
+        dur = cd.get("duration", "PT0S")
+        h = re.search(r"(\d+)H", dur)
+        m_ = re.search(r"(\d+)M", dur)
+        s2 = re.search(r"(\d+)S", dur)
+        return {
+            "id": item["id"],
+            "title": sn.get("title", ""),
+            "description": (sn.get("description") or "")[:400],
+            "channel": sn.get("channelTitle", ""),
+            "channel_id": sn.get("channelId", ""),
+            "published_at": (sn.get("publishedAt") or "")[:10],
+            "published_full": sn.get("publishedAt") or "",
+            "thumbnail_url": thumb,
+            "view_count": int(s.get("viewCount", 0) or 0),
+            "like_count": int(s.get("likeCount", 0) or 0),
+            "comment_count": int(s.get("commentCount", 0) or 0),
+            "duration_sec": (int(h.group(1)) * 3600 if h else 0) + (int(m_.group(1)) * 60 if m_ else 0) + (int(s2.group(1)) if s2 else 0),
+            "url": f"https://www.youtube.com/watch?v={item['id']}",
+        }
 
     async def get_videos_by_ids(self, video_ids: List[str]) -> List[Dict]:
         """영상 ID 목록 → 제목·썸네일·통계 (search_videos와 같은 dict 형태)."""

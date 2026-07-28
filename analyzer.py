@@ -5,8 +5,29 @@ import httpx
 import anthropic
 from typing import List, Dict, Optional
 
-# 원고·분석 글쓰기 품질을 위해 Opus 4.8 사용 (가격 $5/$25 per 1M, Sonnet 대비 고급)
-WRITER_MODEL = "claude-opus-4-8"
+# 원고·분석 글쓰기 품질을 위해 Opus 5 사용 (가격 $5/$25 per 1M — Opus 4.8과 같은 값)
+WRITER_MODEL = "claude-opus-5"
+
+# Opus 5는 '생각(thinking)'이 기본으로 켜져 있고, 그 생각도 max_tokens 안에서 쓴다.
+# 그래서 예전 4.8 기준(16000)으로 두면 긴 원고가 중간에 잘린다. 바닥값을 올려 여유를 준다.
+MIN_MAX_TOKENS = 32000
+
+# 사고 깊이(effort). Opus 5는 답하기 전에 '생각'을 하는데 그 생각도 출력 토큰으로 계산된다.
+# 실측(영상 20개 분석 1회): low 35.9초·72원 / medium 38.8초·78원 / high 48.5초·100원.
+# 그래서 결과물이 곧 영상이 되는 원고·기획만 깊게 쓰고, 자주 돌리는 분석은 얕게 쓴다.
+EFFORT_DEEP = "high"     # 원고·기획 — 여기서 30초 더 쓰는 건 남는 장사
+EFFORT_MID = "medium"    # 분석·피드백 — 자주 쓰지만 판단이 필요한 것
+EFFORT_FAST = "low"      # 변환·단순판단 — 예전(4.8)과 속도·비용이 같다
+WRITER_EFFORT = EFFORT_DEEP
+
+
+def _msg_text(msg) -> str:
+    """응답에서 글자만 뽑는다.
+
+    Opus 5는 '생각(thinking)' 블록을 먼저 내보내므로 content[0] 이 글자가 아닐 수 있다.
+    예전처럼 content[0].text 를 그냥 읽으면 터진다.
+    """
+    return "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
 
 
 def _safe_json(raw: str, msg=None) -> dict:
@@ -150,8 +171,62 @@ CHAT_SYSTEM = """당신은 부자주방 채널 전담 콘텐츠 전략 파트너
 
 
 class Analyzer:
-    def __init__(self):
+    # 지식탭 내용을 프롬프트에 넣을 때 붙이는 표시. 이미 넣은 프롬프트에 두 번 넣지 않으려고 쓴다.
+    KB_MARK = "[지식탭 학습내용]"
+
+    def __init__(self, knowledge: Optional[List[Dict]] = None):
         self.client = anthropic.AsyncAnthropic()
+        # 지식탭을 자동으로 불러온다. 예전에는 미드폼·숏폼·워크시트·상담만 지식을 알았는데,
+        # 여기서 한 번 걸어두면 주제추천·짜치는기획·블로그·SNS·편집피드백 등 전부가 알게 된다.
+        if knowledge is None:
+            try:
+                from database import list_knowledge
+                knowledge = list_knowledge(active_only=True)
+            except Exception:
+                knowledge = None
+        self._kb: Optional[List[Dict]] = knowledge or None
+
+    def set_knowledge(self, knowledge: Optional[List[Dict]]):
+        """이번 요청에서 쓸 지식탭 내용을 걸어둔다.
+
+        예전에는 미드폼·숏폼·워크시트·상담만 지식을 알고 있었다. 여기에 걸어두면
+        _create() 가 모든 AI 기능의 시스템 프롬프트에 자동으로 붙여서, 어느 탭에서
+        뭘 만들든 사장님이 지식탭에 넣어둔 강의·공식을 다 알고 쓴다.
+        """
+        self._kb = knowledge or None
+
+    def _with_kb(self, system: str) -> str:
+        """시스템 프롬프트에 지식탭 내용을 붙인다. 이미 들어 있으면 두 번 넣지 않는다."""
+        if not self._kb or self.KB_MARK in system:
+            return system
+        kb = self._kb_text(self._kb, per=500, budget=6000)
+        if not kb:
+            return system
+        # 미드폼·워크시트처럼 이미 자기 방식으로 지식을 넣은 프롬프트는 건너뛴다(중복 방지).
+        if kb[:60] and kb[:60] in system:
+            return system
+        return (f"{system}\n\n{self.KB_MARK}\n"
+                "아래는 사장님이 지식탭에 모아둔 강의·작성 공식이다. 이번 작업에 해당하는 것을 "
+                "골라 실제로 적용하고, 어떤 것을 적용했는지 결과물에 한 줄로 밝혀라.\n"
+                f"{kb}")
+
+    async def _create(self, *, max_tokens: int, system: str, messages: list,
+                      effort: str = EFFORT_DEEP, **kw):
+        """모든 AI 호출이 지나가는 한 곳.
+
+        여기 한 군데만 고치면 모델·사고깊이·지식주입이 전부 바뀐다.
+        """
+        # max_tokens 가 크면 SDK가 비스트리밍 호출을 거부한다(10분 타임아웃 보호).
+        # 스트리밍으로 받아 완성된 메시지를 돌려주면 호출부는 예전과 똑같이 쓰면 된다.
+        async with self.client.messages.stream(
+            model=WRITER_MODEL,
+            max_tokens=max(max_tokens, MIN_MAX_TOKENS),
+            output_config={"effort": effort},
+            system=self._with_kb(system),
+            messages=messages,
+            **kw,
+        ) as stream:
+            return await stream.get_final_message()
 
     async def _fetch_thumbnail_b64(self, url: str) -> Optional[str]:
         try:
@@ -291,14 +366,13 @@ class Analyzer:
             content.extend(thumb_blocks)
         content.append({"type": "text", "text": user_text})
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": content}],
         )
 
-        raw = msg.content[0].text.strip()
+        raw = _msg_text(msg)
         return _safe_json(raw)
 
     async def analyze_planning(self, keyword: str, product_desc: str, market_insights: str) -> Dict:
@@ -349,14 +423,13 @@ class Analyzer:
 
 recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
 
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def write_intro(self, keyword: str, product_desc: str, problem_definition: str, viewer_desire: str) -> Dict:
         system_prompt = (
@@ -417,14 +490,13 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
   ]
 }}"""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
 
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def write_script(self, keyword: str, product_desc: str, reference_script: str, context: str) -> Dict:
         system_prompt = (
@@ -476,14 +548,13 @@ recommended_titles는 5개, thumbnail_concepts는 3개 작성하세요."""
   }}
 }}"""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
 
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     def _kb_text(self, knowledge: Optional[List[Dict]], per: int = 500, budget: int = 4500) -> str:
         """활성 지식을 프롬프트에 넣을 텍스트로 — 프롬프트 비대/속도저하 방지 위해 항목당·전체 길이 캡."""
@@ -710,14 +781,13 @@ youtube_description과 instagram_caption은 키워드({keyword})를 본문에 �
             content.extend(thumb_blocks)
         content.append({"type": "text", "text": user_text})
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": content}],
         )
 
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def analyze_topic_trends(self, youtube_data: List[Dict], naver_data: List[Dict]) -> Dict:
         videos_text = self._build_videos_simple(youtube_data)
@@ -781,14 +851,14 @@ youtube_description과 instagram_caption은 키워드({keyword})를 본문에 �
 
 hot_topics는 5개 작성하세요: 풀링+키 겸용 2개 이상, 풀링 2개, 키 1개. urgency high를 앞에 배치. 각 필드는 간결하게 1-2문장 이내로."""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
+            effort=EFFORT_MID,
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
 
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def analyze_shortform(self, keyword: str, product_desc: str, duration: str, videos: List[Dict] = None, naver: List[Dict] = None, knowledge: List[Dict] = None) -> Dict:
         market_section = ""
@@ -890,14 +960,13 @@ empathy_points에 실제 댓글/카페 문장을 인용하고, 그것을 훅·�
 hooks는 3개, script는 {duration}초에 맞게 장면을 나눠 작성하세요.
 empathy_points는 2-3개를 실제 댓글/카페 데이터에서 인용해 작성하세요. share_triggers의 공감 포인트도 이 실제 데이터와 연결하세요."""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
 
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def autofill_worksheet(self, keyword: str, ref_videos: List[Dict] = None,
                                  naver: List[Dict] = None, viewtrap_refs: Optional[Dict] = None,
@@ -1024,13 +1093,12 @@ empathy_points는 2-3개를 실제 댓글/카페 데이터에서 인용해 작�
             content.extend(thumb_blocks)
         content.append({"type": "text", "text": user_text})
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": content}],
         )
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def plan_jjachi(self, topic: str, answers: Dict = None,
                           videos: List[Dict] = None, naver: List[Dict] = None,
@@ -1102,13 +1170,12 @@ empathy_points는 2-3개를 실제 댓글/카페 데이터에서 인용해 작�
   "viewerTalk": ["끝점 — 이 영상 보고 시청자가 할 만한 말 2~3개 (신뢰·인간미 느껴지는 대화체)"]
 }}"""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def analyze_edit_feedback(self, keyword: str, script: str, videos: List[Dict], naver: List[Dict], viewtrap_refs: Optional[Dict] = None) -> Dict:
         videos_text = self._build_videos_text(videos, max_videos=10, max_comments=30)
@@ -1209,8 +1276,8 @@ empathy_points는 2-3개를 실제 댓글/카페 데이터에서 인용해 작�
   }}
 }}"""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
+            effort=EFFORT_MID,
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
@@ -1219,7 +1286,7 @@ empathy_points는 2-3개를 실제 댓글/카페 데이터에서 인용해 작�
         if msg.stop_reason == "max_tokens":
             raise ValueError("AI 응답이 너무 길어 잘렸습니다. 대본을 조금 줄이고 다시 시도해주세요.")
 
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def analyze_channel(self, channel_info: Dict, videos: List[Dict]) -> Dict:
         from collections import defaultdict
@@ -1332,13 +1399,13 @@ empathy_points는 2-3개를 실제 댓글/카페 데이터에서 인용해 작�
 
 top_performing_topics 5개, underperforming_topics 3개, successful_title_patterns 4개 작성."""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
+            effort=EFFORT_MID,
             max_tokens=16000,
             system=f"당신은 유튜브 채널 성장 전략 전문가입니다. 데이터 기반으로 구체적인 인사이트를 제공합니다. {CHANNEL_GOALS} 반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만.",
             messages=[{"role": "user", "content": prompt}],
         )
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def chat_stream(self, message: str, history: List[Dict], attachments: List[Dict] = None, knowledge: List[Dict] = None):
         messages = [{"role": m["role"], "content": m["content"]} for m in history[-20:]]
@@ -1377,8 +1444,9 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
 
         async with self.client.messages.stream(
             model=WRITER_MODEL,
-            max_tokens=8000,  # 워크시트 전체 기획(도입부+본문 원고 포함)이 잘리지 않도록
-            system=system_prompt,
+            max_tokens=MIN_MAX_TOKENS,  # Opus 5는 생각도 이 안에서 쓴다 — 원고가 잘리지 않게 넉넉히
+            output_config={"effort": WRITER_EFFORT},
+            system=self._with_kb(system_prompt),
             messages=messages,
         ) as stream:
             async for text in stream.text_stream:
@@ -1428,13 +1496,13 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
 
 ranking 배열에 입력받은 영상 전체를 순위 매겨 포함하세요."""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
+            effort=EFFORT_FAST,
             max_tokens=16000,
             system=f"당신은 유튜브 크리에이터 전략 컨설턴트입니다. 데이터와 트렌드 기반으로 구체적인 업로드 전략을 제시합니다. {CHANNEL_GOALS} 반드시 유효한 JSON만 출력하세요. 마크다운 코드블록 없이 순수 JSON만.",
             messages=[{"role": "user", "content": prompt}],
         )
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def analyze_sns_convert(self, keyword: str, script: str) -> Dict:
         system_prompt = (
@@ -1512,13 +1580,13 @@ ranking 배열에 입력받은 영상 전체를 순위 매겨 포함하세요.""
 
 threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개 작성하세요."""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
+            effort=EFFORT_FAST,
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def analyze_detail_page(self, keyword: str, product_desc: str, price: str,
                                    target_customer: str, videos: List[Dict], naver: List[Dict]) -> Dict:
@@ -1594,13 +1662,12 @@ threads.posts 배열에 5-7개 포스트를 작성하세요. body_points는 3개
   ]
 }}"""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def analyze_blog(self, keyword: str, memo: str, photos: list = None, region: str = "", link: str = "") -> Dict:
         photos = photos or []
@@ -1777,13 +1844,12 @@ tags는 정확히 30개 작성하세요."""
         else:
             messages = [{"role": "user", "content": user_text}]
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
             max_tokens=16000,
             system=system_prompt,
             messages=messages,
         )
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
 
     async def analyze_video_feedback(self, transcript: str, knowledge: List[Dict] = None) -> dict:
         kb_txt = self._kb_text(knowledge, per=900, budget=8000)   # 편집피드백은 핵심만 — 프롬프트 비대 방지(속도)
@@ -1845,10 +1911,83 @@ tags는 정확히 30개 작성하세요."""
   "improvements": ["개선할 점 1 (구체적)", "개선할 점 2", "개선할 점 3"]
 }}"""
 
-        msg = await self.client.messages.create(
-            model=WRITER_MODEL,
+        msg = await self._create(
+            effort=EFFORT_MID,
             max_tokens=4000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
-        return _safe_json(msg.content[0].text.strip(), msg)
+        return _safe_json(_msg_text(msg), msg)
+
+    async def analyze_search(self, mode: str, query: str, videos: List[Dict]) -> Dict:
+        """유튜브 검색·인기급상승 결과를 부자주방 관점으로 읽어준다.
+
+        조회수만 보면 '오래돼서 쌓인 영상'과 '지금 터진 영상'이 구분되지 않는다.
+        그래서 하루평균 조회수와 구독자 대비 배수를 같이 넘겨, 작은 채널이 크게 터진
+        주제(= 우리가 따라 만들 만한 자리)를 찾게 한다.
+        """
+        rows = []
+        for i, v in enumerate(videos[:30], 1):
+            rows.append(
+                f"{i}. {v.get('title','')}\n"
+                f"   채널: {v.get('channel','')} (구독 {v.get('subscriber_count',0):,})\n"
+                f"   조회 {v.get('view_count',0):,} / 하루평균 {v.get('views_per_day',0):,} / "
+                f"올린지 {v.get('age_days',0)}일 / 구독자대비 {v.get('view_per_sub',0)}배 / "
+                f"참여율 {v.get('engage_rate',0)}% / 길이 {v.get('duration_sec',0)//60}분"
+            )
+        listing = "\n".join(rows) or "(결과 없음)"
+        what = "인기 급상승" if mode == "trending" else f"'{query}' 검색"
+
+        system_prompt = """너는 유튜브 채널 '부자주방'의 콘텐츠 전략가다.
+
+부자주방 운영자는 요리사도 식당 사장도 아니다. **주방용품점 사장**이다.
+그래서 콘텐츠 화법은 둘 중 하나여야 한다.
+  ① 전달자 — "장비 배달·설치 다니며 본 사장님들은…"
+  ② 솔직한 나 — "저 요리는 못 하는데, 주방은 수백 개 봤어요"
+요리 실패담을 1인칭으로 지어내면 조작이다. 절대 만들지 마라.
+
+콘텐츠 전략 비율은 풀링(유입) : 키(판매) = 5 : 2 다. 둘을 겸하는 주제가 최우선.
+목표는 CTR 10% 이상, 초반 30초 이탈률 40% 미만.
+
+숫자를 읽는 법:
+- 구독자대비 배수가 크면 구독자 밖으로 퍼진 영상이다. 작은 채널이 크게 터졌다면
+  채널 힘이 아니라 **주제와 제목이 이긴 것**이므로 우리가 따라 만들 수 있다.
+- 하루평균 조회수가 높으면 지금 살아있는 주제다. 총 조회수만 높고 하루평균이 낮으면
+  옛날에 쌓인 영상이라 지금 만들면 늦었다.
+- 참여율(좋아요+댓글)이 높으면 할 말이 많은 주제 = 댓글로 다음 영상 소재가 나온다.
+
+반드시 아래 JSON만 출력한다. 설명·마크다운 금지."""
+
+        user_text = f"""{what} 결과 {len(videos)}개다. 부자주방이 뭘 만들면 좋을지 읽어줘.
+
+{listing}
+
+{{
+  "summary": "지금 이 판이 어떤 상황인지 3~4문장. 숫자 근거를 들어서.",
+  "breakout": [
+    {{"title": "구독자 대비 크게 터진 영상 제목", "channel": "채널명",
+      "why": "채널 힘이 아니라 무엇이 이 영상을 터뜨렸는지 (주제/제목/썸네일 중 무엇인지 짚어라)",
+      "steal": "부자주방이 여기서 가져올 수 있는 것 한 가지"}}
+  ],
+  "gaps": ["이 결과에 아무도 안 하고 있는데 사람들이 궁금해할 것 3~5개"],
+  "topics": [
+    {{"topic": "부자주방이 만들 주제",
+      "type": "풀링 | 키 | 풀링+키",
+      "voice": "전달자 | 솔직한 나",
+      "why": "왜 이게 되는지 — 위 데이터의 어떤 신호를 근거로 하는지",
+      "titles": ["CTR 노린 제목 후보 3개"],
+      "thumb": "썸네일 문구 한 줄(8자 이내)",
+      "hook": "초반 30초 이탈 막을 첫 문장"}}
+  ],
+  "avoid": ["이 판에서 하면 안 되는 것 2~3개와 그 이유"]
+}}
+
+breakout 3개, topics 4개(풀링+키 겸용을 앞에), gaps 4개 작성."""
+
+        msg = await self._create(
+            effort=EFFORT_MID,
+            max_tokens=16000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_text}],
+        )
+        return _safe_json(_msg_text(msg), msg)

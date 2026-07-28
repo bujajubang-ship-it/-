@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260721a" />
+  <link rel="stylesheet" href="style.css?v=20260728a" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -20,6 +20,7 @@
       <div class="tab-nav">
         <button class="tab-btn active" id="tab-midform" onclick="switchTab('midform')">미드폼</button>
         <button class="tab-btn" id="tab-shortform" onclick="switchTab('shortform')">숏폼</button>
+        <button class="tab-btn tab-btn-trend" id="tab-ytsearch" onclick="switchTab('ytsearch')">🔎 유튜브 검색</button>
         <button class="tab-btn tab-btn-trend" id="tab-topic" onclick="switchTab('topic')">주제 추천</button>
         <button class="tab-btn tab-btn-trend" id="tab-jjachi" onclick="switchTab('jjachi')">🔥 짜치는 기획</button>
         <button class="tab-btn" id="tab-edit" onclick="switchTab('edit')">편집 피드백</button>
@@ -281,6 +282,74 @@
     </div>
 
     <!-- ===== 🔍 주제 추천 탭 ===== -->
+    <div id="pane-ytsearch" class="hidden">
+      <div class="card">
+        <h2>🔎 유튜브 검색 · 트렌드</h2>
+        <p class="hint">지금 유튜브에서 뭐가 되고 있는지 직접 찾아본다.
+          조회수만 보면 옛날에 쌓인 영상과 지금 터진 영상이 구분되지 않으니,
+          <b>하루평균 조회수</b>와 <b>구독자 대비 배수</b>를 같이 본다.
+          작은 채널이 크게 터졌다면 채널 힘이 아니라 주제와 제목이 이긴 것이라 따라 만들 수 있다.</p>
+
+        <div class="ys-modes">
+          <button class="ys-mode active" id="ys-mode-search" onclick="ysSetMode('search')">키워드 검색</button>
+          <button class="ys-mode" id="ys-mode-trending" onclick="ysSetMode('trending')">인기 급상승</button>
+        </div>
+
+        <div id="ys-search-fields">
+          <input type="text" id="ys-query" placeholder="예: 스텐 후라이팬, 업소용 주방, 식당 창업 장비"
+                 onkeydown="if(event.key==='Enter')ysRun()">
+          <div class="ys-opts">
+            <label>기간
+              <select id="ys-days">
+                <option value="30">최근 30일</option>
+                <option value="90" selected>최근 90일</option>
+                <option value="180">최근 6개월</option>
+                <option value="365">최근 1년</option>
+                <option value="0">전체 기간</option>
+              </select>
+            </label>
+            <label>정렬
+              <select id="ys-order">
+                <option value="viewCount" selected>조회수순</option>
+                <option value="date">최신순</option>
+                <option value="relevance">관련도순</option>
+              </select>
+            </label>
+            <label>길이
+              <select id="ys-duration">
+                <option value="any" selected>전체</option>
+                <option value="short">쇼츠·4분 미만</option>
+                <option value="medium">4~20분</option>
+                <option value="long">20분 초과</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div id="ys-trending-fields" class="hidden">
+          <div class="ys-opts">
+            <label>분야
+              <select id="ys-category"><option value="">전체</option></select>
+            </label>
+          </div>
+        </div>
+
+        <label class="ys-check"><input type="checkbox" id="ys-ai" checked> AI가 "뭘 만들지"까지 읽어주기 (30~60초 더 걸림)</label>
+        <button class="analyze-btn" id="ys-btn" onclick="ysRun()">검색하기</button>
+        <div id="ys-progress" class="progress hidden"></div>
+        <div id="ys-error" class="error-box hidden"></div>
+      </div>
+
+      <div id="ys-result" class="hidden">
+        <div id="ys-report"></div>
+        <div class="card">
+          <h3>수집한 영상 <span id="ys-count" class="badge"></span></h3>
+          <p class="hint">하루평균 조회수 높은 순. <b>배수</b>는 구독자 대비 조회수 — 클수록 구독자 밖으로 퍼진 영상이다.</p>
+          <div id="ys-videos" class="ys-grid"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="pane-topic" class="hidden">
       <section class="search-section" id="topic-input-section">
         <div class="search-card">
@@ -1144,7 +1213,7 @@
 
   </main>
 
-  <script src="app.js?v=20260721a"></script>
+  <script src="app.js?v=20260728a"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

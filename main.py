@@ -771,6 +771,87 @@ async def topic_suggest():
     )
 
 
+@app.post("/api/yt-search")
+async def yt_search(request: Request):
+    """유튜브 검색 / 인기 급상승 → 부자주방 관점 AI 분석.
+
+    mode=search  : 키워드로 검색 (기간·정렬·길이 조건)
+    mode=trending: 지금 인기 급상승 (카테고리별)
+    """
+    d = await request.json()
+    mode = (d.get("mode") or "search").strip()
+    query = (d.get("query") or "").strip()
+    days = int(d.get("days") or 0)
+    order = (d.get("order") or "viewCount").strip()
+    duration = (d.get("duration") or "any").strip()
+    category = (d.get("category") or "").strip()
+    want_ai = bool(d.get("ai", True))
+    youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+
+    async def stream():
+        if not youtube_key:
+            yield sse({"step": "error", "message": ".env 파일에 YOUTUBE_API_KEY를 설정해주세요."})
+            return
+        if mode == "search" and not query:
+            yield sse({"step": "error", "message": "검색어를 입력해주세요."})
+            return
+
+        yt = YouTubeService(youtube_key)
+        try:
+            if mode == "trending":
+                label = YouTubeService.CATEGORIES.get(category, "전체")
+                yield sse({"step": "youtube", "message": f"인기 급상승({label}) 불러오는 중..."})
+                videos = await yt.get_trending(category=category, max_results=30)
+            else:
+                span = f"최근 {days}일" if days else "전체 기간"
+                yield sse({"step": "youtube", "message": f"'{query}' 검색 중 ({span})..."})
+                videos = await yt.search_advanced(query, days=days, order=order,
+                                                  duration=duration, max_results=30)
+
+            if not videos:
+                yield sse({"step": "error", "message": "결과가 없습니다. 조건을 넓혀보세요."})
+                return
+            yield sse({"step": "videos", "videos": videos,
+                       "message": f"영상 {len(videos)}개 수집 완료"})
+
+            if not want_ai:
+                yield sse({"step": "done", "report": None, "videos": videos})
+                return
+            if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+                yield sse({"step": "done", "report": None, "videos": videos})
+                return
+
+            yield sse({"step": "analyzing", "message": "AI가 뭘 만들지 읽는 중... (30~60초)"})
+            analyzer = Analyzer()
+            _task = asyncio.create_task(analyzer.analyze_search(mode, query or "인기 급상승", videos))
+            while not _task.done():
+                yield sse({"step": "ping"})
+                await asyncio.sleep(8)
+            report = _task.result()
+            title = f"검색: {query}" if mode == "search" else f"인기급상승: {YouTubeService.CATEGORIES.get(category, '전체')}"
+            save_history("yt-search", title, {"videos": videos, "report": report})
+            yield sse({"step": "done", "report": report, "videos": videos})
+
+        except Exception as e:
+            yield sse({"step": "error", "message": str(e)})
+        finally:
+            await yt.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/yt-categories")
+async def yt_categories():
+    """인기 급상승 카테고리 목록 (프론트 드롭다운용)."""
+    return [{"id": "", "name": "전체"}] + [
+        {"id": k, "name": v} for k, v in YouTubeService.CATEGORIES.items()
+    ]
+
+
 @app.post("/api/channel-analyze")
 async def channel_analyze(req: ChannelAnalyzeRequest):
     youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()

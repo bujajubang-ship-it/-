@@ -10,7 +10,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'topic', 'jjachi', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'chat', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'ytsearch', 'topic', 'jjachi', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'chat', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -24,6 +24,7 @@ function switchTab(tab) {
   if (tab === 'worksheet') loadWorksheetTab();
   if (tab === 'knowledge') loadKnowledge();
   if (tab === 'chat') loadChatSessions();
+  if (tab === 'ytsearch') ysInit();
 }
 
 // 워크시트 탭: 진행 동기화를 위해 plVideos도 함께 로드
@@ -4522,4 +4523,162 @@ function resetJjachi() {
   document.getElementById('jjachi-report-section').classList.add('hidden');
   document.getElementById('jjachi-progress-section').classList.add('hidden');
   document.getElementById('jjachi-input-section').classList.remove('hidden');
+}
+
+
+// ===== 🔎 유튜브 검색 · 트렌드 =====
+// 조회수만 보면 '옛날에 쌓인 영상'과 '지금 터진 영상'이 구분되지 않는다.
+// 그래서 하루평균 조회수와 구독자 대비 배수를 같이 보여준다.
+
+let ysMode = 'search';
+let ysRunning = false;
+let ysCatsLoaded = false;
+
+async function ysInit() {
+  if (ysCatsLoaded) return;
+  try {
+    const cats = await (await fetch('/api/yt-categories')).json();
+    const sel = document.getElementById('ys-category');
+    if (sel) {
+      sel.innerHTML = cats.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      sel.value = '26';   // 노하우/스타일 — 주방·살림·리뷰가 여기 모인다
+    }
+    ysCatsLoaded = true;
+  } catch (e) {}
+}
+
+function ysSetMode(mode) {
+  ysMode = mode;
+  document.getElementById('ys-mode-search').classList.toggle('active', mode === 'search');
+  document.getElementById('ys-mode-trending').classList.toggle('active', mode === 'trending');
+  document.getElementById('ys-search-fields').classList.toggle('hidden', mode !== 'search');
+  document.getElementById('ys-trending-fields').classList.toggle('hidden', mode !== 'trending');
+  document.getElementById('ys-btn').textContent = mode === 'search' ? '검색하기' : '인기 급상승 보기';
+}
+
+function ysNum(n) { return (n || 0).toLocaleString('ko-KR'); }
+
+async function ysRun() {
+  if (ysRunning) return;
+  const err = document.getElementById('ys-error');
+  const prog = document.getElementById('ys-progress');
+  const btn = document.getElementById('ys-btn');
+  err.classList.add('hidden');
+
+  const body = { mode: ysMode, ai: document.getElementById('ys-ai').checked };
+  if (ysMode === 'search') {
+    body.query = document.getElementById('ys-query').value.trim();
+    if (!body.query) { err.textContent = '검색어를 입력해주세요.'; err.classList.remove('hidden'); return; }
+    body.days = parseInt(document.getElementById('ys-days').value, 10);
+    body.order = document.getElementById('ys-order').value;
+    body.duration = document.getElementById('ys-duration').value;
+  } else {
+    body.category = document.getElementById('ys-category').value;
+  }
+
+  ysRunning = true;
+  btn.disabled = true;
+  prog.classList.remove('hidden');
+  prog.innerHTML = '';
+  document.getElementById('ys-result').classList.add('hidden');
+
+  const addStep = (msg) => { prog.innerHTML = `<div class="step active">${msg}</div>`; };
+  const finish = () => { ysRunning = false; btn.disabled = false; prog.classList.add('hidden'); };
+
+  let buffer = '';
+  try {
+    const resp = await fetch('/api/yt-search', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error(`서버 오류: ${resp.status}`);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) { finish(); err.textContent = '연결이 끊어졌습니다. 다시 시도해주세요.'; err.classList.remove('hidden'); return; }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let d; try { d = JSON.parse(line.slice(6)); } catch (e) { continue; }
+        if (d.step === 'ping') continue;
+        if (d.step === 'error') { finish(); err.textContent = d.message; err.classList.remove('hidden'); return; }
+        if (d.step === 'videos') { ysRenderVideos(d.videos); if (d.message) addStep(d.message); continue; }
+        if (d.step === 'done') { finish(); if (d.videos) ysRenderVideos(d.videos); ysRenderReport(d.report); return; }
+        if (d.message) addStep(d.message);
+      }
+    }
+  } catch (e) {
+    finish(); err.textContent = e.message; err.classList.remove('hidden');
+  }
+}
+
+function ysRenderVideos(videos) {
+  const wrap = document.getElementById('ys-videos');
+  document.getElementById('ys-result').classList.remove('hidden');
+  document.getElementById('ys-count').textContent = `${videos.length}개`;
+  wrap.innerHTML = videos.map(v => {
+    // 구독자 대비 3배 넘게 퍼졌으면 눈에 띄게 — 채널 힘이 아니라 주제가 이긴 영상
+    const hot = v.view_per_sub >= 3;
+    const mins = Math.floor((v.duration_sec || 0) / 60);
+    const secs = (v.duration_sec || 0) % 60;
+    return `
+      <a class="ys-card${hot ? ' ys-hot' : ''}" href="${v.url}" target="_blank" rel="noopener">
+        <div class="ys-thumb"><img src="${v.thumbnail_url}" alt="" loading="lazy">
+          <span class="ys-dur">${mins}:${String(secs).padStart(2, '0')}</span>
+          ${hot ? `<span class="ys-badge">${v.view_per_sub}배 퍼짐</span>` : ''}
+        </div>
+        <div class="ys-body">
+          <div class="ys-title">${v.title}</div>
+          <div class="ys-ch">${v.channel} · 구독 ${ysNum(v.subscriber_count)}</div>
+          <div class="ys-stats">
+            <span title="하루평균 조회수">📈 ${ysNum(v.views_per_day)}/일</span>
+            <span title="총 조회수">👁 ${ysNum(v.view_count)}</span>
+            <span title="올린 지">🗓 ${v.age_days}일</span>
+            <span title="좋아요+댓글 비율">💬 ${v.engage_rate}%</span>
+          </div>
+        </div>
+      </a>`;
+  }).join('');
+}
+
+function ysRenderReport(r) {
+  const box = document.getElementById('ys-report');
+  if (!r) { box.innerHTML = ''; return; }
+  const li = (arr) => (arr || []).map(x => `<li>${x}</li>`).join('');
+  box.innerHTML = `
+    <div class="card">
+      <h3>지금 이 판</h3>
+      <p class="ys-summary">${r.summary || ''}</p>
+    </div>
+    <div class="card">
+      <h3>채널 힘이 아니라 주제가 이긴 영상</h3>
+      ${(r.breakout || []).map(b => `
+        <div class="ys-block">
+          <div class="ys-block-t">${b.title} <span class="ys-ch">— ${b.channel}</span></div>
+          <div><b>왜 터졌나</b> ${b.why || ''}</div>
+          <div class="ys-steal"><b>가져올 것</b> ${b.steal || ''}</div>
+        </div>`).join('')}
+    </div>
+    <div class="card">
+      <h3>아무도 안 하고 있는 것</h3>
+      <ul class="ys-list">${li(r.gaps)}</ul>
+    </div>
+    <div class="card">
+      <h3>부자주방이 만들 주제</h3>
+      ${(r.topics || []).map(t => `
+        <div class="ys-topic">
+          <div class="ys-tags"><span class="ys-tag ys-tag-${(t.type || '').includes('키') ? 'key' : 'pull'}">${t.type || ''}</span><span class="ys-tag">${t.voice || ''}</span></div>
+          <div class="ys-block-t">${t.topic || ''}</div>
+          <div class="ys-why">${t.why || ''}</div>
+          <div class="ys-titles"><b>제목 후보</b><ul>${li(t.titles)}</ul></div>
+          <div class="ys-kv"><b>썸네일 문구</b> ${t.thumb || ''}</div>
+          <div class="ys-kv"><b>첫 문장(30초 이탈 방지)</b> ${t.hook || ''}</div>
+        </div>`).join('')}
+    </div>
+    <div class="card">
+      <h3>이 판에서 하면 안 되는 것</h3>
+      <ul class="ys-list">${li(r.avoid)}</ul>
+    </div>`;
 }
