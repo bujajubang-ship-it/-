@@ -274,6 +274,56 @@ class YouTubeService:
             video["comments"] = comments if not isinstance(comments, Exception) else []
         return videos
 
+    async def resolve_channel(self, query: str) -> str:
+        """채널 주소·@핸들·이름 아무거나 받아서 채널 ID(UC...)로 바꾼다.
+
+        사장님이 채팅에 채널 링크를 그냥 붙여넣을 수 있어야 하므로,
+        받을 수 있는 형태를 최대한 넓게 잡는다.
+        """
+        q = (query or "").strip()
+        m = re.search(r"(UC[A-Za-z0-9_-]{22})", q)          # 주소 안의 채널 ID
+        if m:
+            return m.group(1)
+
+        handle = None
+        m = re.search(r"youtube\.com/@([A-Za-z0-9_.-]+)", q)   # .../@핸들
+        if m:
+            handle = m.group(1)
+        elif q.startswith("@"):
+            handle = q[1:]
+        if handle:
+            r = await self.client.get(f"{BASE}/channels", params={
+                "key": self.api_key, "forHandle": "@" + handle, "part": "id"})
+            items = r.json().get("items", []) if r.status_code == 200 else []
+            if items:
+                return items[0]["id"]
+
+        m = re.search(r"youtube\.com/(?:c|user)/([A-Za-z0-9_.-]+)", q)   # 옛날 주소
+        if m:
+            r = await self.client.get(f"{BASE}/channels", params={
+                "key": self.api_key, "forUsername": m.group(1), "part": "id"})
+            items = r.json().get("items", []) if r.status_code == 200 else []
+            if items:
+                return items[0]["id"]
+
+        # 영상 주소를 줬으면 그 영상의 채널을 찾는다
+        m = re.search(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{11})", q)
+        if m:
+            r = await self.client.get(f"{BASE}/videos", params={
+                "key": self.api_key, "id": m.group(1), "part": "snippet"})
+            items = r.json().get("items", []) if r.status_code == 200 else []
+            if items:
+                return items[0]["snippet"]["channelId"]
+
+        # 마지막 수단: 이름으로 검색
+        name = re.sub(r"https?://\S+", "", q).strip() or q
+        r = await self.client.get(f"{BASE}/search", params={
+            "key": self.api_key, "q": name, "type": "channel", "part": "snippet", "maxResults": 1})
+        items = r.json().get("items", []) if r.status_code == 200 else []
+        if items:
+            return items[0]["snippet"]["channelId"]
+        raise ValueError(f"채널을 찾지 못했습니다: {query}")
+
     async def get_channel_info(self, channel_id: str) -> Dict:
         resp = await self.client.get(f"{BASE}/channels", params={
             "key": self.api_key,

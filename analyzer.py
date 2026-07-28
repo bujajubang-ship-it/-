@@ -109,6 +109,7 @@ CHAT_SYSTEM = """당신은 부자주방 채널 전담 콘텐츠 전략 파트너
   · youtube_trending    지금 인기 급상승 (26=노하우/스타일이 주방·살림)
   · youtube_comments    특정 영상의 인기 댓글 읽기 (시청자 진짜 속마음)
   · naver_cafe_search   네이버 카페 (사장님들의 아직 안 만들어진 고민)
+  · channel_lookup      아무 채널이나 통째로 분석 (주소·@핸들·이름 아무거나)
   · my_channel          부자주방 채널 최근 성과
 
 반드시 지킬 것:
@@ -120,6 +121,14 @@ CHAT_SYSTEM = """당신은 부자주방 채널 전담 콘텐츠 전략 파트너
 4. 공감 포인트·시청자 반응은 지어내지 말고 youtube_comments·naver_cafe_search 로
    찾은 **실제 문장을 인용**한다. 근거 없이 지어내면 조작이다.
 5. 한 번 검색해서 부족하면 조건을 바꿔 두세 번 더 찾아본다. 필요하면 댓글까지 읽는다.
+6. **다른 분야 채널을 따라할 때는 주제가 아니라 '기제'를 이식한다.**
+   사용자가 "이 채널처럼 만들고 싶다"고 하면 channel_lookup 으로 들여다본 뒤,
+   ① 제목이 어떤 문장 구조로 클릭을 만드는가(격차·후회·금지·숫자·의문)
+   ② 영상 길이와 올리는 주기
+   ③ 같은 채널 안에서 **유독 터진 영상만의 공통점**(구독대비 배수로 판단)
+   ④ 그 기제를 주방·식당 소재로 바꿔 끼우면 무엇이 되는가
+   를 순서대로 답하라. 그 채널 소재를 그대로 베끼라고 하지 마라 — 베끼면 부자주방이
+   아니게 된다. 기제만 가져오고 소재는 "수백 개 주방을 본 사람"만 할 수 있는 것으로 채운다.
 
 【채널 정보】
 채널명: 부자주방
@@ -249,6 +258,25 @@ CHAT_TOOLS = [
             "type": "object",
             "properties": {"keyword": {"type": "string", "description": "검색어. 사장님들이 쓸 법한 말로."}},
             "required": ["keyword"],
+        },
+    },
+    {
+        "name": "channel_lookup",
+        "description": (
+            "특정 유튜브 채널을 통째로 들여다본다. 사용자가 채널 주소·@핸들·채널 이름을 주면서 "
+            "'이 채널 분석해줘', '이 채널처럼 만들고 싶어', '벤치마킹하고 싶어' 라고 하면 이 도구를 부른다. "
+            "구독자수와 최근 영상들의 제목·조회수·구독자대비 배수·길이·올린 날짜를 돌려준다. "
+            "주제가 우리와 달라도 상관없다 — **왜 클릭하게 만드는가(기제)**를 보려는 것이므로, "
+            "제목의 문장 구조, 영상 길이, 올리는 주기, 어떤 영상만 유독 터졌는지를 보고 판단하라."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "채널 주소(https://youtube.com/@xxx), @핸들, 채널 이름, 그 채널 영상 주소 아무거나"},
+                "sort": {"type": "string", "enum": ["recent", "top"],
+                          "description": "recent=최근 올린 순(주기·현재 방향 파악), top=조회수 높은 순(뭐가 터졌나 파악). 기본 top"},
+            },
+            "required": ["channel"],
         },
     },
     {
@@ -1535,6 +1563,30 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
                             return "댓글을 가져오지 못했다(댓글 사용 중지이거나 주소가 잘못됨)."
                         return "인기 댓글(좋아요순):\n" + "\n".join(
                             f"- ({c.get('like_count',0)}) {(c.get('text') or '')[:180]}" for c in cms[:25])
+                    if name == "channel_lookup":
+                        cid = await yt.resolve_channel(args.get("channel", ""))
+                        info, vids = await yt.get_channel_videos(cid, max_videos=50)
+                        subs = info.get("subscriber_count", 0) or 0
+                        for v in vids:
+                            v["subscriber_count"] = subs
+                            v["view_per_sub"] = round(v.get("view_count", 0) / subs, 1) if subs else 0
+                        if (args.get("sort") or "top") == "recent":
+                            vids = sorted(vids, key=lambda x: x.get("published_at", ""), reverse=True)
+                        else:
+                            vids = sorted(vids, key=lambda x: x.get("view_count", 0), reverse=True)
+                        head = (f"채널: {info.get('title','')} | 구독 {subs:,} | "
+                                f"총영상 {info.get('video_count',0):,} | 총조회 {info.get('view_count',0):,}\n"
+                                "※ 주제가 우리와 달라도 된다. 제목 문장구조·영상길이·올리는주기·"
+                                "유독 터진 영상을 보고 '왜 클릭하게 만드는가'를 읽어라.\n")
+                        rows = [
+                            f"- {v.get('published_at','')} | 조회 {v.get('view_count',0):,} "
+                            f"(구독대비 {v.get('view_per_sub',0)}배) | {v.get('duration_sec',0)//60}분 "
+                            f"| 좋아요 {v.get('like_count',0):,} 댓글 {v.get('comment_count',0):,}\n"
+                            f"  {v.get('title','')}\n  {v.get('url','')}"
+                            for v in vids[:30]
+                        ]
+                        return head + "\n".join(rows)
+
                     if name == "my_channel":
                         ch_id = _os.getenv("MY_CHANNEL_ID", "").strip() or "UCS7hX9QMfq2xUdc5--RFzxg"
                         info, vids = await yt.get_channel_videos(ch_id, max_videos=30)
@@ -1627,6 +1679,7 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
                      "cache_control": {"type": "ephemeral"}}]
         used_in = used_out = tool_calls = 0   # 이번 대화 한 번에 든 비용 계측용
         cache_read = 0
+        cache_marks: list = []   # 캐시 지점은 요청당 4개까지만 허용된다(시스템 1 + 여기 최대 2)
         for _turn in range(6):   # 무한루프 방지
             async with self.client.messages.stream(
                 model=WRITER_MODEL,
@@ -1663,6 +1716,7 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
                     "youtube_trending": "유튜브 인기 급상승 확인",
                     "youtube_comments": "영상 댓글 읽는 중",
                     "naver_cafe_search": f"네이버 카페 검색: {c.input.get('keyword','')}",
+                    "channel_lookup": f"채널 분석: {c.input.get('channel','')}",
                     "my_channel": "부자주방 채널 성과 확인",
                 }.get(c.name, c.name)
                 yield f"\n\n> 🔎 {label}...\n\n"
@@ -1670,8 +1724,13 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
                 results.append({"type": "tool_result", "tool_use_id": c.id, "content": out})
             # 조사 결과는 다음 턴에도 그대로 다시 보내진다. 마지막 결과에 캐싱을 걸어두면
             # 여기까지의 대화 전체가 다음 턴부터 1/10 값으로 청구된다.
+            # 다만 캐시 지점은 요청당 4개까지만 되므로, 오래된 표시는 떼어낸다.
+            # (직전 것 하나는 남겨둔다 — 캐시를 되짚는 범위가 20블록이라 여유를 준다)
             if results:
                 results[-1]["cache_control"] = {"type": "ephemeral"}
+                cache_marks.append(results[-1])
+                while len(cache_marks) > 2:
+                    cache_marks.pop(0).pop("cache_control", None)
             messages.append({"role": "user", "content": results})
 
     async def analyze_video_decision(self, videos_info: List[Dict], current_date: str) -> Dict:
