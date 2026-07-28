@@ -1536,7 +1536,8 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
         """
         import os as _os
         try:
-            if name in ("youtube_search", "youtube_trending", "youtube_comments", "my_channel"):
+            if name in ("youtube_search", "youtube_trending", "youtube_comments",
+                        "channel_lookup", "my_channel"):
                 key = _os.getenv("YOUTUBE_API_KEY", "").strip()
                 if not key:
                     return "유튜브 API 키가 설정되어 있지 않아 검색할 수 없다."
@@ -1614,7 +1615,8 @@ top_performing_topics 5개, underperforming_topics 3개, successful_title_patter
                 return "네이버 카페 글:\n" + "\n".join(
                     f"- {(p.get('title') or '')[:80]} | {(p.get('description') or '')[:120]}" for p in posts[:20])
 
-            return f"'{name}' 이라는 도구는 없다."
+            print(f"[tool] 정의되지 않은 도구 호출: {name}", flush=True)
+            return f"'{name}' 이라는 도구는 실행부에 연결되어 있지 않다. 개발자에게 알릴 것."
         except Exception as e:
             return f"도구 실행 중 오류가 났다: {str(e)[:200]}"
 
