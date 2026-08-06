@@ -7,7 +7,7 @@ import subprocess
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, UploadFile, File
+from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +27,65 @@ from database import (init_db, save_history, list_history, get_history, delete_h
 
 init_db()
 init_pipeline()
+
+# ===== 영상 피드백 기록 영구 보관 =====
+# 이 사이트는 Render 무료플랜이라 재배포·재시작 때 history.db 가 통째로 지워진다.
+# 나중에 다시 보려고 남기는 기록이 사라지면 의미가 없어서, 항상 켜져 있는
+# Lightsail(cnmaker) 의 KV 에 복사해 두고 DB 가 비어 있으면 되살린다.
+_KV_BASE = os.environ.get("CNMAKER_BASE", "http://43.200.232.189")
+_KV_SECRET = os.environ.get("CNMAKER_SECRET", "bj-cnmaker-2026")
+_VF_KEY = "yt_video_feedback"
+
+
+def _vf_rows():
+    """저장된 영상 피드백 기록 전부 (백업용)."""
+    out = []
+    for row in list_history("video_feedback", limit=500):
+        full = get_history(row["id"])
+        if full:
+            out.append({"keyword": full.get("keyword", ""), "report": full.get("report"),
+                        "created_at": str(full.get("created_at", ""))})
+    return out
+
+
+def _vf_backup():
+    try:
+        httpx.post(f"{_KV_BASE}/kv/{_VF_KEY}", json={"rows": _vf_rows()},
+                   headers={"x-secret": _KV_SECRET}, timeout=8)
+    except Exception:
+        pass
+
+
+def _vf_restore_if_empty():
+    """재배포 직후처럼 기록이 비어 있으면 백업본에서 되살린다."""
+    try:
+        if list_history("video_feedback", limit=1):
+            return
+        r = httpx.get(f"{_KV_BASE}/kv/{_VF_KEY}", headers={"x-secret": _KV_SECRET}, timeout=8)
+        if r.status_code != 200:
+            return
+        rows = ((r.json() or {}).get("data") or {}).get("rows") or []
+        if not rows:
+            return
+        # 원래 날짜를 그대로 살려야 '언제 받은 피드백인지'가 맞다 → 직접 넣는다
+        from database import get_db
+        conn = get_db()
+        for x in rows:
+            rep = x.get("report")
+            if not isinstance(rep, str):
+                rep = json.dumps(rep or {}, ensure_ascii=False)
+            conn.execute(
+                "INSERT INTO history (type, keyword, report, created_at) VALUES (?,?,?,?)",
+                ("video_feedback", x.get("keyword") or "기록", rep,
+                 x.get("created_at") or None))
+        conn.commit()
+        conn.close()
+        print(f"[영상피드백] 백업본에서 기록 {len(rows)}건 복원")
+    except Exception as e:
+        print("[영상피드백] 복원 건너뜀:", e)
+
+
+_vf_restore_if_empty()
 
 app = FastAPI(title="YouTube Content Researcher")
 
@@ -1015,7 +1074,7 @@ async def blog(req: BlogRequest):
 
 
 @app.post("/api/video-feedback")
-async def video_feedback(file: UploadFile = File(...)):
+async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
     # 파일을 청크 단위로 임시 파일에 저장 (대용량 파일 메모리 문제 방지)
     uid = uuid.uuid4().hex
     video_path = f"/tmp/vf_{uid}.mp4"
@@ -1125,7 +1184,11 @@ async def video_feedback(file: UploadFile = File(...)):
                     raise RuntimeError("AI 편집 분석이 오래 걸려 중단했어요. 잠시 후 다시 시도해 주세요.")
             feedback = _task.result()
 
-            save_history("video_feedback", filename, {"transcript": transcript, "feedback": feedback})
+            _topic = (topic or "").strip()[:60]
+            save_history("video_feedback", _topic or filename,
+                         {"transcript": transcript, "feedback": feedback,
+                          "주제": _topic, "파일명": filename})
+            _vf_backup()   # Render 무료플랜은 재배포 때 DB가 지워진다 → 항상 켜진 서버에 복사해 둔다
             yield sse({"step": "done", "transcript": transcript, "feedback": feedback})
 
         except Exception as e:

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260728a" />
+  <link rel="stylesheet" href="style.css?v=20260802c" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -28,6 +28,7 @@
         <button class="tab-btn" id="tab-sns" onclick="switchTab('sns')">📣 SNS 변환</button>
         <button class="tab-btn" id="tab-blog" onclick="switchTab('blog')">📝 블로그 기획</button>
         <button class="tab-btn" id="tab-video-feedback" onclick="switchTab('video-feedback')">🎬 영상 피드백</button>
+        <button class="tab-btn" id="tab-autocut" onclick="switchTab('autocut')">✂️ 자동 컷편집</button>
         <button class="tab-btn tab-btn-chat" id="tab-chat" onclick="switchTab('chat')">💬 AI 상담</button>
         <button class="tab-btn" id="tab-history" onclick="switchTab('history')">히스토리</button>
         <button class="tab-btn tab-btn-pipeline" id="tab-pipeline" onclick="switchTab('pipeline')">📋 파이프라인</button>
@@ -1007,6 +1008,16 @@
           <p class="upload-hint" id="vf-file-name">파일을 선택하세요</p>
         </div>
 
+        <!-- 주제를 적어두면 나중에 주제별로 모아 볼 수 있다 -->
+        <div style="margin:14px 0">
+          <label style="display:block;font-size:13px;font-weight:600;color:#475569;margin-bottom:6px">
+            주제 <span style="font-weight:400;color:#94a3b8">— 나중에 이 주제로 모아 봅니다 (예: 주방동선, 가스렌지)</span>
+          </label>
+          <input id="vf-topic" list="vf-topic-list" placeholder="예: 주방동선"
+                 style="width:100%;padding:11px 13px;border:2px solid #e2e8f0;border-radius:10px;font-size:14px;font-family:inherit">
+          <datalist id="vf-topic-list"></datalist>
+        </div>
+
         <button class="analyze-btn" id="vf-analyze-btn" onclick="analyzeVideo()" disabled>
           AI 피드백 받기
         </button>
@@ -1018,6 +1029,100 @@
       </div>
 
       <div id="vf-result" class="hidden"></div>
+
+      <!-- 지난 피드백 (주제별) -->
+      <div class="section-card" style="margin-top:18px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <h2 class="section-title" style="margin:0">📚 지난 피드백 <span style="font-size:13px;font-weight:400;color:#94a3b8">— 주제별로 모아 둡니다</span></h2>
+          <button onclick="loadVfHistory()" style="border:none;background:#f1f5f9;color:#475569;border-radius:8px;padding:7px 13px;font-size:13px;cursor:pointer">🔄 새로고침</button>
+        </div>
+        <div id="vf-history" style="margin-top:12px;color:#94a3b8;font-size:14px">불러오는 중…</div>
+      </div>
+    </div>
+
+    <!-- ===== ✂️ 자동 컷편집 탭 ===== -->
+    <!-- 편집 전 원본을 음성 분석해 흐름에 맞게 잘라준다.
+         원본은 보통 수 GB 라 업로드하지 않고 파일 경로만 넘긴다 →
+         실제 처리는 맥에서 도는 컷편집 앱(video-cutter, 포트 8100)이 맡는다. -->
+    <div id="pane-autocut" class="pane hidden">
+      <div class="section-card">
+        <h2 class="section-title">✂️ 자동 컷편집</h2>
+        <p class="section-desc">
+          편집 전 영상 원본을 음성 분석해 흐름에 맞게 컷편집합니다.
+          영상 성격에 따라 자를 것과 남길 것이 달라서, 편집 방식을 먼저 고릅니다.
+        </p>
+
+        <div id="ac-offline" class="hidden" style="padding:20px;border:1.5px solid var(--border,#e5e5e5);border-radius:12px;background:#fff8f0;line-height:1.7">
+          <b>이 기능은 맥에서 실행해야 합니다.</b>
+          <p style="margin:8px 0 0">
+            영상 원본은 보통 수 GB라 인터넷으로 올리지 않고, 맥에 있는 파일을 그대로 읽어서 처리합니다.
+            음성 인식(Whisper)도 맥에서 돌아갑니다.
+          </p>
+          <p style="margin:10px 0 0">터미널에서 컷편집 앱을 켜주세요:</p>
+          <pre style="margin:8px 0 0;padding:12px;background:#f5f5f5;border-radius:8px;overflow-x:auto"><code>cd ~/video-cutter &amp;&amp; ./run.sh</code></pre>
+          <p style="margin:10px 0 0;font-size:13px;color:#888">앱이 켜지면 이 화면에서 바로 쓸 수 있습니다.</p>
+        </div>
+
+        <div id="ac-online" class="hidden">
+          <div class="ac-mode-row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:20px">
+            <label class="ac-mode selected" data-mode="talk">
+              <input type="radio" name="ac-mode" value="talk" checked style="display:none">
+              <div class="ac-mode-name">🎙️ 주방기기 말하기</div>
+              <div class="ac-mode-desc">문장을 다듬는 편집<br>필러·중복 과감히 삭제</div>
+            </label>
+            <label class="ac-mode" data-mode="vlog">
+              <input type="radio" name="ac-mode" value="vlog" style="display:none">
+              <div class="ac-mode-name">✈️ 여행 브이로그</div>
+              <div class="ac-mode-desc">늘어지는 곳만 걷어냄<br>첫 감탄·사고·감정은 보존</div>
+            </label>
+            <label class="ac-mode" data-mode="field">
+              <input type="radio" name="ac-mode" value="field" style="display:none">
+              <div class="ac-mode-name">📦 현장 배송·실측</div>
+              <div class="ac-mode-desc">군더더기 제거<br>치수·설비조건은 절대 보존</div>
+            </label>
+          </div>
+
+          <div style="display:flex;gap:8px;margin-bottom:6px">
+            <input type="text" id="ac-path" placeholder="영상 파일 경로 (붙여넣기 가능)"
+              oninput="acPathTyped(this.value)"
+              style="flex:1;padding:12px 14px;border:1.5px solid var(--border,#e5e5e5);border-radius:10px;font-size:14px;font-family:inherit">
+            <button class="upload-btn" onclick="acBrowse()" style="white-space:nowrap">📁 영상 선택</button>
+          </div>
+          <p class="upload-hint" style="margin:0 0 14px">
+            용량 제한 없습니다 — 파일을 올리지 않고 맥에 있는 원본을 그대로 읽습니다.
+            Finder에서 파일 우클릭 후 <b>⌥(option)</b>을 누르면 뜨는 <b>"경로 복사"</b>로 붙여넣어도 됩니다.
+          </p>
+
+          <input type="text" id="ac-direction" placeholder="기획 방향 한 줄 (선택) — 예: 강릉 2박3일, 맛집보다 바다 중심"
+            style="width:100%;padding:12px 14px;border:1.5px solid var(--border,#e5e5e5);border-radius:10px;font-size:14px;font-family:inherit;margin-bottom:12px">
+
+          <button class="analyze-btn" id="ac-start" onclick="acStart()" disabled>분석 시작</button>
+          <p class="upload-hint" style="margin-top:8px">
+            영상 길이의 약 1/5 시간이 걸립니다(1시간 영상 ≈ 12분). 분석이 끝나면 컷편집 앱에서 구간을 확인·수정하고 편집본을 뽑습니다.
+          </p>
+
+          <!-- 진행률 -->
+          <div id="ac-progress" class="hidden" style="margin-top:18px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:14px;font-weight:600;margin-bottom:8px">
+              <span id="ac-phase">준비 중</span><span id="ac-percent">0%</span>
+            </div>
+            <div style="height:10px;border-radius:999px;background:#ececec;overflow:hidden">
+              <div id="ac-fill" style="height:100%;width:0%;border-radius:999px;background:#D70010;transition:width .4s ease"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:7px;font-size:12.5px;color:#888">
+              <span id="ac-elapsed">경과 0초</span><span id="ac-eta"></span>
+            </div>
+            <div id="ac-steps" class="ac-steps">
+              <span data-phase="audio">소리 추출</span>
+              <span data-phase="stt">말소리 인식</span>
+              <span data-phase="ai">편집 분석</span>
+            </div>
+            <div id="ac-alive" style="margin-top:12px;font-size:12px;color:#2E7D45">● 작업 중</div>
+          </div>
+        </div>
+
+        <div id="ac-log" class="hidden" style="margin-top:16px;padding:14px;background:#fafafa;border-radius:10px;font-size:13px;line-height:1.8"></div>
+      </div>
     </div>
 
     <!-- ===== 📋 파이프라인 탭 ===== -->
@@ -1213,7 +1318,7 @@
 
   </main>
 
-  <script src="app.js?v=20260728a"></script>
+  <script src="app.js?v=20260802c"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

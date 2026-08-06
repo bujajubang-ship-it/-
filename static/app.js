@@ -10,7 +10,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'ytsearch', 'topic', 'jjachi', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'chat', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'ytsearch', 'topic', 'jjachi', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'autocut', 'chat', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -25,7 +25,240 @@ function switchTab(tab) {
   if (tab === 'knowledge') loadKnowledge();
   if (tab === 'chat') loadChatSessions();
   if (tab === 'ytsearch') ysInit();
+  if (tab === 'autocut') acInit();
+  if (tab === 'video-feedback') loadVfHistory();
 }
+
+// ===== 영상 피드백 기록 (주제별) =====
+// 주제를 적어 저장해두면 나중에 "그때 뭐라고 했더라"를 바로 찾아본다.
+let VF_HIST = [];
+
+async function loadVfHistory() {
+  const box = document.getElementById('vf-history');
+  if (!box) return;
+  try {
+    const rows = await (await fetch('/api/history?type=video_feedback')).json();
+    VF_HIST = Array.isArray(rows) ? rows : [];
+  } catch (e) {
+    box.innerHTML = '<span style="color:#ef4444">기록을 불러오지 못했어요.</span>';
+    return;
+  }
+  // 주제 입력칸 자동완성 채우기 (전에 쓴 주제를 다시 고르게)
+  const dl = document.getElementById('vf-topic-list');
+  if (dl) dl.innerHTML = [...new Set(VF_HIST.map(r => r.keyword).filter(Boolean))]
+    .map(k => `<option value="${escHtml(k)}">`).join('');
+  renderVfHistory();
+}
+
+function renderVfHistory() {
+  const box = document.getElementById('vf-history');
+  if (!VF_HIST.length) {
+    box.innerHTML = '아직 기록이 없어요. 위에서 주제를 적고 피드백을 받아보세요.';
+    return;
+  }
+  // 주제로 묶는다
+  const groups = {};
+  VF_HIST.forEach(r => { (groups[r.keyword || '주제 없음'] ||= []).push(r); });
+  const names = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length);
+  box.innerHTML = names.map(name => `
+    <div style="border:1px solid #e2e8f0;border-radius:12px;margin-bottom:10px;overflow:hidden">
+      <div onclick="this.nextElementSibling.classList.toggle('hidden')"
+           style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;background:#f8fafc;cursor:pointer">
+        <b style="font-size:14.5px;color:#0f172a">🏷️ ${escHtml(name)}</b>
+        <span style="font-size:12.5px;color:#64748b">${groups[name].length}건 ▾</span>
+      </div>
+      <div class="hidden">
+        ${groups[name].map(r => `
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid #f1f5f9">
+            <span style="font-size:13px;color:#475569">${escHtml((r.created_at || '').slice(0, 16))}</span>
+            <span style="flex:1"></span>
+            <button onclick="openVfRecord(${r.id})"
+                    style="border:none;background:#0ea5e9;color:#fff;border-radius:7px;padding:6px 12px;font-size:12.5px;cursor:pointer">열어보기</button>
+            <button onclick="delVfRecord(${r.id})"
+                    style="border:none;background:#fef2f2;color:#dc2626;border-radius:7px;padding:6px 10px;font-size:12.5px;cursor:pointer">삭제</button>
+          </div>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+async function openVfRecord(id) {
+  const el = document.getElementById('vf-result');
+  el.classList.remove('hidden');
+  el.innerHTML = '<div style="padding:14px;color:#64748b">불러오는 중…</div>';
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  try {
+    const d = await (await fetch('/api/history/' + id)).json();
+    const rep = d.report || {};
+    renderVideoFeedback(rep.feedback ? rep : { feedback: rep }, el);
+  } catch (e) {
+    el.innerHTML = '<div style="padding:14px;color:#ef4444">기록을 열지 못했어요.</div>';
+  }
+}
+
+async function delVfRecord(id) {
+  if (!confirm('이 기록을 지울까요?')) return;
+  await fetch('/api/history/' + id, { method: 'DELETE' });
+  loadVfHistory();
+}
+
+// ===== ✂️ 자동 컷편집 =====
+// 영상 원본은 수 GB라 업로드하지 않는다. 맥에서 도는 컷편집 앱(포트 8100)에
+// 파일 경로만 넘기고, 음성 인식·분석은 그쪽이 맡는다.
+const AC_CUTTER = 'http://localhost:8100';
+let acPath = '';
+
+async function acInit() {
+  const offline = document.getElementById('ac-offline');
+  const online = document.getElementById('ac-online');
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 2000);
+    const r = await fetch(`${AC_CUTTER}/api/browse-check`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!r.ok) throw new Error('no');
+    offline.classList.add('hidden');
+    online.classList.remove('hidden');
+  } catch (e) {
+    online.classList.add('hidden');
+    offline.classList.remove('hidden');
+  }
+}
+
+async function acBrowse() {
+  try {
+    const data = await (await fetch(`${AC_CUTTER}/api/browse`)).json();
+    if (!data.path) return;
+    acPath = data.path;
+    document.getElementById('ac-path').value = data.path;
+    document.getElementById('ac-start').disabled = false;
+  } catch (e) {
+    alert('컷편집 앱과 연결하지 못했습니다. 터미널에서 실행해주세요:\n\ncd ~/video-cutter && ./run.sh');
+  }
+}
+
+async function acStart() {
+  if (!acPath) return;
+  const mode = (document.querySelector('input[name="ac-mode"]:checked') || {}).value || 'talk';
+  const direction = document.getElementById('ac-direction').value.trim();
+  const log = document.getElementById('ac-log');
+  const btn = document.getElementById('ac-start');
+
+  log.classList.remove('hidden');
+  log.innerHTML = '';
+  btn.disabled = true;
+  btn.textContent = '분석 중...';
+
+  const addLog = (msg, isError = false) => {
+    const div = document.createElement('div');
+    div.textContent = (isError ? '❌ ' : '• ') + msg;
+    if (isError) div.style.color = '#d70010';
+    log.appendChild(div);
+  };
+
+  // 진행률 — 오래 걸리는 작업이라 멈춘 건지 도는 건지 보여야 한다
+  document.getElementById('ac-progress').classList.remove('hidden');
+  const t0 = Date.now();
+  let lastBeat = Date.now(), pct = 0;
+  const tick = setInterval(() => {
+    const el = (Date.now() - t0) / 1000;
+    acSet('ac-elapsed', `경과 ${acDur(el)}`);
+    acSet('ac-eta', pct >= 5 && pct < 100 ? `이 단계 남은 시간 약 ${acDur(el / pct * (100 - pct))}` : '');
+    const quiet = (Date.now() - lastBeat) / 1000;
+    const alive = document.getElementById('ac-alive');
+    if (alive) {
+      alive.textContent = quiet > 90 ? `● 계속 작업 중입니다 (${Math.round(quiet)}초째 같은 단계)` : '● 작업 중';
+      alive.style.color = quiet > 90 ? '#B26A00' : '#2E7D45';
+    }
+  }, 1000);
+
+  try {
+    const resp = await fetch(`${AC_CUTTER}/api/process`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ video_path: acPath, edit_mode: mode, direction, model: 'large-v3' }),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop();
+      for (const part of parts) {
+        if (!part.startsWith('data: ')) continue;
+        const d = JSON.parse(part.slice(6));
+        if (d.step === 'meta') {
+          addLog(`영상 길이 ${acDur(d.duration)} · ${d.engine}`);
+        } else if (d.step === 'phase') {
+          lastBeat = Date.now();
+          pct = d.percent;
+          acSet('ac-phase', d.message);
+          acSet('ac-percent', d.percent + '%');
+          const f = document.getElementById('ac-fill');
+          if (f) f.style.width = Math.max(0, Math.min(100, d.percent)) + '%';
+          const order = ['audio', 'stt', 'ai'];
+          document.querySelectorAll('#ac-steps span').forEach(s => {
+            const i = order.indexOf(s.dataset.phase), cur = order.indexOf(d.phase);
+            s.className = i === cur ? 'active' : (i > -1 && i < cur ? 'done' : '');
+          });
+        } else if (d.step === 'heartbeat') {
+          lastBeat = Date.now();
+        } else if (d.step === 'progress') addLog(d.message);
+        else if (d.step === 'error') { clearInterval(tick); addLog(d.message, true); }
+        else if (d.step === 'done') {
+          clearInterval(tick);
+          acSet('ac-percent', '100%');
+          const f = document.getElementById('ac-fill');
+          if (f) f.style.width = '100%';
+          document.querySelectorAll('#ac-steps span').forEach(s => (s.className = 'done'));
+          const cut = (d.segments || []).filter(s => s.action === 'cut').length;
+          const keep = (d.segments || []).filter(s => s.action === 'keep').length;
+          addLog(`분석 완료 — 유지 ${keep}구간 / 삭제 ${cut}구간`);
+          if (d.summary) addLog(d.summary);
+          const a = document.createElement('a');
+          a.href = AC_CUTTER;
+          a.target = '_blank';
+          a.textContent = '→ 컷편집 앱에서 구간 확인하고 편집본 만들기';
+          a.style.cssText = 'display:inline-block;margin-top:10px;font-weight:600';
+          log.appendChild(a);
+        }
+      }
+    }
+  } catch (e) {
+    clearInterval(tick);
+    addLog('컷편집 앱과 연결이 끊겼습니다. 앱이 켜져 있는지 확인해주세요.', true);
+  } finally {
+    clearInterval(tick);
+    btn.disabled = false;
+    btn.textContent = '분석 시작';
+  }
+}
+
+// 경로를 직접 붙여넣는 경우 (Finder 의 "경로 복사")
+function acPathTyped(v) {
+  acPath = (v || '').trim().replace(/^['"]|['"]$/g, '');
+  document.getElementById('ac-start').disabled = !acPath;
+}
+
+function acSet(id, text) { const e = document.getElementById(id); if (e) e.textContent = text; }
+
+function acDur(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? `${h}시간 ${m}분` : m ? `${m}분 ${s}초` : `${s}초`;
+}
+
+// 편집 방식 선택 표시
+document.addEventListener('click', e => {
+  const opt = e.target.closest('.ac-mode');
+  if (!opt) return;
+  document.querySelectorAll('.ac-mode').forEach(el => el.classList.remove('selected'));
+  opt.classList.add('selected');
+  const radio = opt.querySelector('input');
+  if (radio) radio.checked = true;
+});
 
 // 워크시트 탭: 진행 동기화를 위해 plVideos도 함께 로드
 async function loadWorksheetTab() {
@@ -3275,6 +3508,7 @@ async function analyzeVideo() {
   // XHR로 업로드 진행률 표시 + SSE 스트림 수신
   const formData = new FormData();
   formData.append('file', vfSelectedFile);
+  formData.append('topic', (document.getElementById('vf-topic')?.value || '').trim());
 
   const fileSizeMB = (vfSelectedFile.size / 1024 / 1024).toFixed(0);
 
