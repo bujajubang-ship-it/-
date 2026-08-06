@@ -2461,10 +2461,21 @@ function _chatReadPdf(file) {
     r.readAsDataURL(file);
   });
 }
+const CHAT_ATTACH_MAX_MB = 20;   // base64 로 바뀌며 1.33배가 된다 (클로드 PDF 한도 32MB)
+
 function handleChatFiles(input) {
   const preview = document.getElementById('chat-attach-preview');
-  const files = Array.from(input.files);
+  let files = Array.from(input.files);
   if (!files.length) return;
+
+  // 너무 큰 파일은 보내봐야 실패한다. 조용히 실패하지 말고 여기서 알려준다.
+  const tooBig = files.filter(f => f.size > CHAT_ATTACH_MAX_MB * 1024 * 1024);
+  if (tooBig.length) {
+    alert(tooBig.map(f => `${f.name} (${(f.size/1048576).toFixed(1)}MB)`).join('\n')
+      + `\n\n${CHAT_ATTACH_MAX_MB}MB 가 넘어 붙일 수 없어요. PDF는 페이지를 나누거나 이미지로 캡처해 올려주세요.`);
+    files = files.filter(f => f.size <= CHAT_ATTACH_MAX_MB * 1024 * 1024);
+    if (!files.length) { input.value = ''; return; }
+  }
 
   const toRead = files.map(file =>
     file.type === 'application/pdf' ? _chatReadPdf(file) : _chatReadImage(file)
@@ -2590,6 +2601,9 @@ async function sendChat() {
       body: JSON.stringify({ message, history: chatHistory, attachments: attachmentsToSend }),
     });
 
+    // 서버가 오류를 돌려주면 아래 스트림 해석이 조용히 실패해 점만 깜빡인 채 멈춘다.
+    if (!resp.ok) throw new Error(`서버 응답 ${resp.status}`);
+
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -2624,7 +2638,13 @@ async function sendChat() {
       }
     }
   } catch (err) {
-    inner.innerHTML = `<span style="color:var(--red)">연결 오류. 다시 시도해주세요.</span>`;
+    // 이유를 안 보여주면 무엇 때문에 막혔는지 알 수가 없다. 원인을 그대로 적는다.
+    console.error('[채팅] 실패', err);
+    const why = (err && err.message) ? err.message : String(err);
+    const big = chatAttachments.reduce((n, a) => n + (a.data ? a.data.length : 0), 0) / 1048576;
+    inner.innerHTML = `<span style="color:var(--red)">보내지 못했어요 — ${_escapeHtml(why)}</span>`
+      + (big > 8 ? `<div style="color:#94a3b8;font-size:12.5px;margin-top:6px">첨부가 ${big.toFixed(1)}MB 로 큽니다. 파일을 줄여 다시 시도해보세요.</div>` : '')
+      + `<div style="color:#94a3b8;font-size:12.5px;margin-top:6px">잠시 뒤 다시 눌러주세요.</div>`;
   }
 
   chatSending = false;
