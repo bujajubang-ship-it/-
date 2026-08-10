@@ -1303,7 +1303,7 @@ REMIND_PHONE = os.getenv("PIPELINE_REMIND_PHONE", "010-3938-0779")
 REMIND_SECRET = os.getenv("PIPELINE_REMIND_SECRET", "bj-pipeline-2026")
 
 
-@app.post("/api/pipeline/remind")
+@app.post("/api/pipeline-remind")
 async def pipeline_remind(request: Request, days: int = 7, test: int = 0):
     """업로드 예정일이 코앞인데 아직 기획 단계에 머물러 있는 건을 찾아 문자로 알린다.
 
