@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 import os
 import re
@@ -9,7 +10,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1288,6 +1289,75 @@ async def pipeline_update(id: int, item: dict):
 async def pipeline_delete(id: int):
     delete_pipeline_item(id)
     return {"ok": True}
+
+
+# ── 업로드 예정인데 기획이 안 끝난 건 문자로 독촉 ──────────────────────
+# 촬영 전 기획 트랙 7단계. 여기 머물러 있으면 아직 찍을 준비가 안 된 것이다.
+PLAN_TRACK = {
+    "pick": "영상 고르기", "analyze": "영상 뜯어보기", "collect": "비슷한 영상 모으기",
+    "copy": "제목·카피", "thumb": "썸네일", "intro": "도입부 대본", "body": "본문 대본",
+    "planning": "기획",
+}
+SMS_PROXY = "https://bujajubang-analyzer.onrender.com/api/sms/send"
+REMIND_PHONE = os.getenv("PIPELINE_REMIND_PHONE", "010-3938-0779")
+REMIND_SECRET = os.getenv("PIPELINE_REMIND_SECRET", "bj-pipeline-2026")
+
+
+@app.post("/api/pipeline/remind")
+async def pipeline_remind(request: Request, days: int = 7, test: int = 0):
+    """업로드 예정일이 코앞인데 아직 기획 단계에 머물러 있는 건을 찾아 문자로 알린다.
+
+    라이트세일 cron이 매일 아침 부른다. 해당 건이 없으면 아무것도 보내지 않는다.
+    ?test=1 이면 조건과 상관없이 지금 상태를 문자로 한 번 보내본다(설치 확인용).
+    """
+    if request.headers.get("x-secret") != REMIND_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    today = datetime.date.today()
+    limit = today + datetime.timedelta(days=days)
+    late = []
+    for it in list_pipeline():
+        d = (it.get("planned_date") or "").strip()
+        if not d or it.get("stage") not in PLAN_TRACK:
+            continue
+        try:
+            pd = datetime.date.fromisoformat(d[:10])
+        except ValueError:
+            continue
+        if pd <= limit:                       # 지난 것도 포함 — 이미 늦었으니 더 급하다
+            late.append((pd, it))
+    late.sort(key=lambda x: x[0])
+
+    if not late and not test:
+        return {"ok": True, "sent": False, "reason": "독촉할 건 없음"}
+
+    lines = []
+    for pd, it in late[:8]:
+        dday = (pd - today).days
+        when = "오늘" if dday == 0 else ("D%+d" % dday if dday > 0 else "%d일 지남" % -dday)
+        lines.append("· %s(%s) %s — %s 단계"
+                     % (pd.strftime("%m/%d"), when, (it.get("title") or "")[:22],
+                        PLAN_TRACK.get(it.get("stage"), it.get("stage"))))
+
+    if late:
+        msg = ("[부자주방 콘텐츠]\n업로드 예정인데 기획이 안 끝났습니다.\n\n"
+               + "\n".join(lines)
+               + ("\n외 %d건" % (len(late) - 8) if len(late) > 8 else "")
+               + "\n\n기획 마저 진행해 주세요.\nhttps://youtube-researcher.onrender.com/")
+    else:
+        msg = ("[부자주방 콘텐츠]\n설치 확인용 문자입니다.\n"
+               "업로드 예정인데 기획이 안 끝난 건은 지금 없습니다.\n"
+               "https://youtube-researcher.onrender.com/")
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(SMS_PROXY, json={"phone": REMIND_PHONE, "msg": msg})
+            res = r.json()
+    except Exception as e:
+        return {"ok": False, "sent": False, "msg": msg, "error": str(e)[:200]}
+
+    return {"ok": True, "sent": str(res.get("result_code")) == "1",
+            "count": len(late), "msg": msg, "res": res}
 
 
 # ── 기존 영상 최적화 체크리스트 ──────────────────────────────────────
