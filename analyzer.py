@@ -1412,14 +1412,55 @@ empathy_points는 2-3개를 실제 댓글/카페 데이터에서 인용해 작�
         from collections import defaultdict
 
         top10 = sorted(videos, key=lambda x: x["view_count"], reverse=True)[:10]
-        recent50 = videos[:30]
+        recent30 = videos[:30]
+
+        def _missing_label(status, *, reach=False):
+            if status == "pending":
+                return "데이터 준비 중"
+            if status == "not_reported":
+                return "해당 행 미보고"
+            if status == "error":
+                return "수집 오류"
+            if reach:
+                return "Reach 리포트 미수집"
+            return "사용 불가"
 
         def _fmt_video(v, idx):
-            ctr = f" | CTR:{v['ctr']}%" if v.get("ctr") is not None else ""
-            ret = f" | 유지율:{v['avg_view_percentage']}%" if v.get("avg_view_percentage") is not None else ""
-            watch = f" | 시청{v['watch_minutes']:,}분" if v.get("watch_minutes") is not None else ""
+            ctr_period = ""
+            if v.get("ctr_period_start") and v.get("ctr_period_end"):
+                ctr_period = (
+                    f" ({v['ctr_period_start']}~{v['ctr_period_end']}, "
+                    f"n={v.get('ctr_sample_size', 0)})"
+                )
+            ctr = (
+                f"CTR:{v['ctr']:.2f}%{ctr_period}"
+                if v.get("ctr") is not None and v.get("ctr_status") == "available"
+                else f"CTR:{_missing_label(v.get('ctr_status'), reach=True)}"
+            )
+            ret = (
+                f"평균시청률:{v['avg_view_percentage']:.1f}%"
+                if v.get("avg_view_percentage") is not None
+                else f"평균시청률:{_missing_label(v.get('avg_view_percentage_status'))}"
+            )
+            watch = (
+                f"시청:{v['watch_minutes']:,.0f}분"
+                if v.get("watch_minutes") is not None
+                else f"시청:{_missing_label(v.get('watch_minutes_status'))}"
+            )
+            shares = (
+                f"공유:{v['shares']:,}"
+                if v.get("shares") is not None
+                else f"공유:{_missing_label(v.get('shares_status'))}"
+            )
+            subs_lost = (
+                f"구독이탈:{v['subscribers_lost']:,}"
+                if v.get("subscribers_lost") is not None
+                else f"구독이탈:{_missing_label(v.get('subscribers_lost_status'))}"
+            )
             return (
-                f"[{idx}] {v['title']} | 조회수:{v['view_count']:,}{ctr}{ret}{watch}"
+                f"[{idx}] {v['title']} | 조회수:{v['view_count']:,} | {ctr} | {ret}"
+                f" | {watch} | {shares} | {subs_lost}"
+                f" | Analytics data_through:{v.get('analytics_data_through') or '확인 불가'}"
                 f" | {v['published_at']} ({v['publish_day']}요일) | {v['duration_sec']//60}분"
             )
 
@@ -1428,10 +1469,14 @@ empathy_points는 2-3개를 실제 댓글/카페 데이터에서 인용해 작�
         bottom10 = sorted(videos, key=lambda x: x["view_count"])[:10]
         bottom10_text = "\n".join(_fmt_video(v, i+1) for i, v in enumerate(bottom10))
 
-        recent_text = "\n".join(
-            f"{v['published_at']} ({v['publish_day']}요일) | {v['title']} | 조회수:{v['view_count']:,} | {v['duration_sec']//60}분"
-            for v in recent50
-        )
+        recent_text = "\n".join(_fmt_video(v, i + 1) for i, v in enumerate(recent30))
+
+        data_through_values = [
+            v.get("analytics_data_through") for v in videos if v.get("analytics_data_through")
+        ]
+        analytics_data_through = max(data_through_values) if data_through_values else "확인 불가"
+        analytics_sample_size = sum(int(v.get("analytics_sample_size") or 0) for v in videos)
+        reach_sample_size = sum(int(v.get("ctr_sample_size") or 0) for v in videos)
 
         day_stats: dict = defaultdict(list)
         hour_stats: dict = defaultdict(list)
@@ -1474,6 +1519,11 @@ empathy_points는 2-3개를 실제 댓글/카페 데이터에서 인용해 작�
 채널명: {channel_info['title']}
 구독자: {channel_info['subscriber_count']:,}명 / 총 영상: {channel_info['video_count']}개 / 총 조회수: {channel_info['view_count']:,}회
 분석 대상: {len(videos)}개 영상
+최근 업로드 cohort: {len(recent30)}개 (업로드 playlist 최신순, 조회수와 무관하게 포함)
+상위 성과 cohort: {len(top10)}개 (분석 대상 내 조회수순)
+Analytics source: YouTube Analytics API v2 / data_through: {analytics_data_through} / sample size: {analytics_sample_size}
+Thumbnail CTR source: YouTube Reporting API channel_reach_basic_a1 / sample size: {reach_sample_size}
+주의: '데이터 준비 중/미보고/미수집/사용 불가'는 실제 0이 아니다. 해당 값을 0으로 해석하거나 원인 진단에 사용하지 말 것.
 
 == 조회수 TOP 10 ==
 {top10_text}
@@ -1481,7 +1531,7 @@ empathy_points는 2-3개를 실제 댓글/카페 데이터에서 인용해 작�
 == 조회수 하위 10개 ==
 {bottom10_text}
 
-== 최근 50개 업로드 현황 ==
+== 최근 30개 업로드 현황 ==
 {recent_text}
 
 == 요일별 평균 조회수 ==

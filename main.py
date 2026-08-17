@@ -20,6 +20,8 @@ from analyzer import Analyzer
 from naver_service import NaverService
 from youtube_service import YouTubeService
 from analytics_service import AnalyticsService
+from analytics_repository import AnalyticsRepository, init_analytics_schema
+from analytics_sync import AnalyticsSyncCoordinator
 from viewtrap_service import ViewTrapService
 from heatmap_service import fetch_heatmap, summarize_for_prompt
 from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
@@ -29,6 +31,7 @@ from database import (init_db, save_history, list_history, get_history, delete_h
 
 init_db()
 init_pipeline()
+init_analytics_schema()
 
 # ===== 영상 피드백 legacy 보조 사본 =====
 # 운영 source of truth는 Render Starter의 /data Persistent Disk에 있는
@@ -985,6 +988,7 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
 
         yt = YouTubeService(youtube_key)
         analytics = AnalyticsService()
+        analytics_repository = AnalyticsRepository()
         try:
             yield sse({"step": "channel_info", "message": "채널 정보 불러오는 중..."})
             channel_info, videos = await yt.get_channel_videos(req.channel_id.strip(), max_videos=100)
@@ -992,20 +996,77 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
 
             analytics_data = []
             if analytics.is_configured():
-                yield sse({"step": "analytics", "message": "Analytics 데이터 수집 중 (CTR, 시청 유지율)..."})
+                yield sse({"step": "analytics", "message": "Analytics 성과 데이터 수집 중..."})
                 try:
-                    analytics_data = await analytics.get_video_analytics()
+                    analytics_channel_id = await analytics.get_authenticated_channel_id()
+                    if analytics_channel_id != channel_info.get("id"):
+                        yield sse({
+                            "step": "analytics_warn",
+                            "message": "내 채널이 아닌 분석 대상에는 OAuth Analytics를 결합하지 않습니다.",
+                        })
+                    else:
+                        coordinator = AnalyticsSyncCoordinator(analytics, analytics_repository)
+                        analytics_data = await coordinator.sync_video_snapshots(
+                            videos,
+                            period_start="2020-01-01",
+                            period_end=datetime.date.today().isoformat(),
+                        )
                     # video_id 기준으로 videos에 병합
                     analytics_map = {a["video_id"]: a for a in analytics_data}
                     for v in videos:
                         a = analytics_map.get(v["id"], {})
-                        v["ctr"] = a.get("ctr", None)
+                        v["analytics_metric_statuses"] = {
+                            name: metric.get("status")
+                            for name, metric in (a.get("metrics") or {}).items()
+                        }
                         v["avg_view_percentage"] = a.get("avg_view_percentage", None)
+                        v["avg_view_percentage_status"] = a.get(
+                            "avg_view_percentage_status", "unavailable"
+                        )
                         v["watch_minutes"] = a.get("watch_minutes", None)
+                        v["watch_minutes_status"] = a.get(
+                            "watch_minutes_status", "unavailable"
+                        )
+                        v["shares"] = a.get("shares", None)
+                        v["shares_status"] = a.get("shares_status", "unavailable")
                         v["subscribers_gained"] = a.get("subscribers_gained", None)
+                        v["subscribers_gained_status"] = a.get(
+                            "subscribers_gained_status", "unavailable"
+                        )
+                        v["subscribers_lost"] = a.get("subscribers_lost", None)
+                        v["subscribers_lost_status"] = a.get(
+                            "subscribers_lost_status", "unavailable"
+                        )
+                        v["analytics_data_through"] = a.get("data_through")
+                        v["analytics_sample_size"] = a.get("sample_size", 0)
                     yield sse({"step": "analytics_done", "message": f"Analytics {len(analytics_data)}개 영상 데이터 수집 완료!"})
                 except Exception as ae:
                     yield sse({"step": "analytics_warn", "message": f"Analytics 데이터 수집 실패 (공개 데이터로 진행): {ae}"})
+
+            # Thumbnail reach is only loaded from previously imported official
+            # channel_reach_basic_a1 reports. It is never inferred from views.
+            reach_map = analytics_repository.get_reach_for_videos([v["id"] for v in videos])
+            for v in videos:
+                reach = reach_map.get(v["id"])
+                if reach:
+                    ctr = reach["thumbnail_ctr"]
+                    v["impressions"] = reach.get("thumbnail_impressions")
+                    v["impressions_status"] = reach.get(
+                        "thumbnail_impressions_status", "not_reported"
+                    )
+                    v["ctr"] = ctr.get("value")
+                    v["ctr_status"] = ctr.get("status")
+                    v["ctr_source"] = reach.get("source")
+                    v["ctr_period_start"] = reach.get("period_start")
+                    v["ctr_period_end"] = reach.get("period_end")
+                    v["ctr_sample_size"] = ctr.get("sample_size", 0)
+                else:
+                    v["impressions"] = None
+                    v["impressions_status"] = "unavailable"
+                    v["ctr"] = None
+                    v["ctr_status"] = "unavailable"
+                    v["ctr_source"] = "youtube_reporting_api:channel_reach_basic_a1"
+                    v["ctr_sample_size"] = 0
 
             yield sse({"step": "analyzing", "message": "AI 분석 중... (30~60초 소요)"})
             analyzer = Analyzer()
@@ -1017,6 +1078,18 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
             report["channel_info"] = channel_info
             report["total_analyzed"] = len(videos)
             report["has_analytics"] = bool(analytics_data)
+            data_through_values = [
+                item.get("data_through") for item in analytics_data if item.get("data_through")
+            ]
+            report["analytics_metadata"] = {
+                "source": "youtube_analytics_api_v2",
+                "data_through": max(data_through_values) if data_through_values else None,
+                "sample_size": sum(item.get("sample_size", 0) for item in analytics_data),
+                "thumbnail_reach_source": "youtube_reporting_api:channel_reach_basic_a1",
+                "thumbnail_reach_sample_size": sum(
+                    video.get("ctr_sample_size", 0) for video in videos
+                ),
+            }
             save_history("channel", channel_info.get("title", req.channel_id), report)
             yield sse({"step": "done", "report": report})
 
