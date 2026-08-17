@@ -8,28 +8,6 @@ services:
     autoDeploy: true
     branch: main
     envVars:
-      # Existing services ignore new sync:false values during Blueprint sync.
-      # Configure these values manually in the Render Dashboard before deploy.
-      - key: APP_ENV
-        sync: false
-      - key: AUTH_MODE
-        sync: false
-      - key: OWNER_USERNAME
-        sync: false
-      - key: OWNER_PASSWORD_HASH
-        sync: false
-      - key: AUTH_SIGNING_SECRET
-        sync: false
-      - key: AUTH_ALLOWED_ORIGINS
-        sync: false
-      - key: PIPELINE_REMIND_SECRET
-        sync: false
-      - key: PIPELINE_REMIND_PHONE
-        sync: false
-      - key: CNMAKER_BASE
-        sync: false
-      - key: CNMAKER_SECRET
-        sync: false
       - key: YOUTUBE_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY

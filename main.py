@@ -30,10 +30,10 @@ from database import (init_db, save_history, list_history, get_history, delete_h
 init_db()
 init_pipeline()
 
-# ===== 영상 피드백 기록 영구 보관 =====
-# 이 사이트는 Render 무료플랜이라 재배포·재시작 때 history.db 가 통째로 지워진다.
-# 나중에 다시 보려고 남기는 기록이 사라지면 의미가 없어서, 항상 켜져 있는
-# Lightsail(cnmaker) 의 KV 에 복사해 두고 DB 가 비어 있으면 되살린다.
+# ===== 영상 피드백 legacy 보조 사본 =====
+# 운영 source of truth는 Render Starter의 /data Persistent Disk에 있는
+# /data/history.db다. Lightsail KV에는 신규 피드백의 보조 사본만 남기며,
+# 의도적으로 삭제한 기록이 되살아나지 않도록 앱 시작 시 자동복원하지 않는다.
 _KV_BASE = os.environ.get("CNMAKER_BASE", "").rstrip("/")
 _KV_SECRET = os.environ.get("CNMAKER_SECRET", "")
 _VF_KEY = "yt_video_feedback"
@@ -59,39 +59,6 @@ def _vf_backup():
     except Exception:
         pass
 
-
-def _vf_restore_if_empty():
-    """재배포 직후처럼 기록이 비어 있으면 백업본에서 되살린다."""
-    if not _KV_BASE or not _KV_SECRET:
-        return
-    try:
-        if list_history("video_feedback", limit=1):
-            return
-        r = httpx.get(f"{_KV_BASE}/kv/{_VF_KEY}", headers={"x-secret": _KV_SECRET}, timeout=8)
-        if r.status_code != 200:
-            return
-        rows = ((r.json() or {}).get("data") or {}).get("rows") or []
-        if not rows:
-            return
-        # 원래 날짜를 그대로 살려야 '언제 받은 피드백인지'가 맞다 → 직접 넣는다
-        from database import get_db
-        conn = get_db()
-        for x in rows:
-            rep = x.get("report")
-            if not isinstance(rep, str):
-                rep = json.dumps(rep or {}, ensure_ascii=False)
-            conn.execute(
-                "INSERT INTO history (type, keyword, report, created_at) VALUES (?,?,?,?)",
-                ("video_feedback", x.get("keyword") or "기록", rep,
-                 x.get("created_at") or None))
-        conn.commit()
-        conn.close()
-        print(f"[영상피드백] 백업본에서 기록 {len(rows)}건 복원")
-    except Exception as e:
-        print("[영상피드백] 복원 건너뜀:", e)
-
-
-_vf_restore_if_empty()
 
 app = FastAPI(title="YouTube Content Researcher")
 OWNER_AUTH = OwnerAuthenticator(OwnerAuthSettings.from_env())
@@ -1289,7 +1256,7 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
             save_history("video_feedback", _topic or filename,
                          {"transcript": transcript, "feedback": feedback,
                           "주제": _topic, "파일명": filename})
-            _vf_backup()   # Render 무료플랜은 재배포 때 DB가 지워진다 → 항상 켜진 서버에 복사해 둔다
+            _vf_backup()   # /data/history.db가 원본이며 KV는 승인된 수동 복구용 보조 사본이다.
             yield sse({"step": "done", "transcript": transcript, "feedback": feedback})
 
         except Exception as e:

@@ -22,7 +22,9 @@ class PhaseASecurityIntegrationTests(unittest.TestCase):
             os.environ,
             {
                 "APP_ENV": "production",
-                "RENDER": "true",
+                # APP_ENV keeps auth production-grade while DB_PATH stays an
+                # isolated development SQLite file rather than /data.
+                "RENDER": "false",
                 "AUTH_MODE": "owner",
                 "OWNER_USERNAME": "phase-a-owner",
                 "OWNER_PASSWORD_HASH": hash_password(
@@ -42,14 +44,13 @@ class PhaseASecurityIntegrationTests(unittest.TestCase):
         )
         cls.environment.start()
         sys.modules.pop("main", None)
+        sys.modules.pop("database", None)
         cls.main = importlib.import_module("main")
 
     @classmethod
     def tearDownClass(cls):
-        import database
-
-        database.reset_repository_cache()
         sys.modules.pop("main", None)
+        sys.modules.pop("database", None)
         cls.environment.stop()
         cls.temp_dir.cleanup()
 
@@ -202,7 +203,8 @@ class PhaseASecurityIntegrationTests(unittest.TestCase):
         self.assertEqual(client.put(f"/api/worksheet/{worksheet_id}", json={"data": {"title": "수정"}}).status_code, 200)
         self.assertEqual(client.delete(f"/api/worksheet/{worksheet_id}").status_code, 200)
 
-        history_id = self.main.save_history("planning", "인증 테스트", {"ok": True})
+        self.main.save_history("planning", "인증 테스트", {"ok": True})
+        history_id = client.get("/api/history").json()[0]["id"]
         self.assertEqual(client.get(f"/api/history/{history_id}").status_code, 200)
         self.assertEqual(client.delete(f"/api/history/{history_id}").status_code, 200)
 
@@ -243,6 +245,9 @@ class PhaseASecurityIntegrationTests(unittest.TestCase):
     def test_transcript_debug_is_disabled_in_production(self):
         client, _ = self.authenticated_client()
         self.assertEqual(client.get("/api/transcript-debug").status_code, 404)
+
+    def test_video_feedback_kv_restore_is_not_an_application_startup_hook(self):
+        self.assertFalse(hasattr(self.main, "_vf_restore_if_empty"))
 
 
 if __name__ == "__main__":
