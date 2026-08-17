@@ -15,6 +15,7 @@
         <span class="logo-text">콘텐츠 리서처</span>
       </div>
       <div id="api-status" class="api-status"></div>
+      <button type="button" onclick="ownerLogout()" style="border:1px solid #d6deea;background:#fff;color:#526078;border-radius:8px;padding:7px 11px;font-weight:700;cursor:pointer">로그아웃</button>
     </div>
     <div class="tab-bar-wrap">
       <div class="tab-nav">
@@ -1318,7 +1319,7 @@
 
   </main>
 
-  <script src="app.js?v=20260806a"></script>
+  <script src="app.js?v=20260817a"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

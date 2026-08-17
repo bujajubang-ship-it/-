@@ -3,14 +3,14 @@ import datetime
 import json
 import os
 import re
+import secrets
 import uuid
 import subprocess
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -22,6 +22,7 @@ from youtube_service import YouTubeService
 from analytics_service import AnalyticsService
 from viewtrap_service import ViewTrapService
 from heatmap_service import fetch_heatmap, summarize_for_prompt
+from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
 from database import (init_db, save_history, list_history, get_history, delete_history,
                        init_pipeline, list_pipeline, create_pipeline_item,
                        update_pipeline_item, delete_pipeline_item)
@@ -33,8 +34,8 @@ init_pipeline()
 # 이 사이트는 Render 무료플랜이라 재배포·재시작 때 history.db 가 통째로 지워진다.
 # 나중에 다시 보려고 남기는 기록이 사라지면 의미가 없어서, 항상 켜져 있는
 # Lightsail(cnmaker) 의 KV 에 복사해 두고 DB 가 비어 있으면 되살린다.
-_KV_BASE = os.environ.get("CNMAKER_BASE", "http://43.200.232.189")
-_KV_SECRET = os.environ.get("CNMAKER_SECRET", "bj-cnmaker-2026")
+_KV_BASE = os.environ.get("CNMAKER_BASE", "").rstrip("/")
+_KV_SECRET = os.environ.get("CNMAKER_SECRET", "")
 _VF_KEY = "yt_video_feedback"
 
 
@@ -50,6 +51,8 @@ def _vf_rows():
 
 
 def _vf_backup():
+    if not _KV_BASE or not _KV_SECRET:
+        return
     try:
         httpx.post(f"{_KV_BASE}/kv/{_VF_KEY}", json={"rows": _vf_rows()},
                    headers={"x-secret": _KV_SECRET}, timeout=8)
@@ -59,6 +62,8 @@ def _vf_backup():
 
 def _vf_restore_if_empty():
     """재배포 직후처럼 기록이 비어 있으면 백업본에서 되살린다."""
+    if not _KV_BASE or not _KV_SECRET:
+        return
     try:
         if list_history("video_feedback", limit=1):
             return
@@ -89,6 +94,11 @@ def _vf_restore_if_empty():
 _vf_restore_if_empty()
 
 app = FastAPI(title="YouTube Content Researcher")
+OWNER_AUTH = OwnerAuthenticator(OwnerAuthSettings.from_env())
+app.add_middleware(OwnerAuthMiddleware, authenticator=OWNER_AUTH)
+
+if OWNER_AUTH.settings.production and not os.getenv("PIPELINE_REMIND_SECRET", "").strip():
+    raise RuntimeError("PIPELINE_REMIND_SECRET is required in production.")
 
 
 async def fetch_product_info(url: str) -> str:
@@ -142,7 +152,6 @@ async def fetch_product_info(url: str) -> str:
         return "\n".join(parts) if parts else ""
     except Exception:
         return ""
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 class AnalyzeRequest(BaseModel):
@@ -226,8 +235,88 @@ class BlogRequest(BaseModel):
     photos: list = []  # [{"media_type": "image/jpeg", "data": "base64..."}]
 
 
+class OwnerLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.get("/healthz")
+async def healthz():
+    """Public liveness check without configuration or channel details."""
+    return {"ok": True}
+
+
+@app.get("/login")
+async def owner_login_page(request: Request):
+    if OWNER_AUTH.settings.enabled and OWNER_AUTH.request_session(request):
+        return RedirectResponse("/", status_code=303)
+    return FileResponse("static/login.html", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/auth/login")
+async def owner_login(request: Request, credentials: OwnerLoginRequest):
+    if not OWNER_AUTH.settings.enabled:
+        return JSONResponse(
+            {"error": "Owner authentication is disabled."}, status_code=404
+        )
+
+    client_key = request.client.host if request.client else "unknown"
+    retry_after = OWNER_AUTH.rate_limiter.retry_after(client_key)
+    if retry_after:
+        return JSONResponse(
+            {"error": "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요."},
+            status_code=429,
+            headers={"Retry-After": str(retry_after), "Cache-Control": "no-store"},
+        )
+
+    if not OWNER_AUTH.verify_credentials(credentials.username, credentials.password):
+        OWNER_AUTH.rate_limiter.record_failure(client_key)
+        retry_after = OWNER_AUTH.rate_limiter.retry_after(client_key)
+        headers = {"Cache-Control": "no-store"}
+        if retry_after:
+            headers["Retry-After"] = str(retry_after)
+        return JSONResponse(
+            {"error": "아이디 또는 비밀번호가 맞지 않습니다."},
+            status_code=401,
+            headers=headers,
+        )
+
+    OWNER_AUTH.rate_limiter.clear(client_key)
+    response = JSONResponse(
+        {"ok": True}, headers={"Cache-Control": "no-store"}
+    )
+    response.set_cookie(
+        OWNER_AUTH.settings.cookie_name,
+        OWNER_AUTH.issue_session(),
+        max_age=OWNER_AUTH.settings.session_ttl_seconds,
+        httponly=True,
+        secure=OWNER_AUTH.settings.secure_cookie,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+async def owner_logout():
+    response = JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+    response.delete_cookie(
+        OWNER_AUTH.settings.cookie_name,
+        path="/",
+        secure=OWNER_AUTH.settings.secure_cookie,
+        httponly=True,
+        samesite="strict",
+    )
+    return response
+
+
+@app.get("/api/auth/me")
+async def owner_me(request: Request):
+    return {"username": request.state.owner}
 
 
 @app.get("/api/health")
@@ -1082,6 +1171,14 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
     audio_path = f"/tmp/vf_{uid}.mp3"
     filename = file.filename or "영상 피드백"
 
+    def cleanup_temp_files():
+        for path in (video_path, audio_path):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
     with open(video_path, "wb") as f_out:
         while True:
             chunk = await file.read(1024 * 1024)  # 1MB씩 읽기
@@ -1092,6 +1189,7 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
     async def stream():
         if not os.getenv("ANTHROPIC_API_KEY", "").strip():
             yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
+            cleanup_temp_files()
             return
 
         try:
@@ -1144,12 +1242,14 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
                 raise RuntimeError(f"오디오가 너무 큽니다 ({sz//1024//1024}MB). 약 60분 이내로 나눠서 올려주세요.")
             # cnmaker(Lightsail)의 OpenAI 키로 받아쓰기 — 키를 Render로 옮기지 않고 Lightsail이 대신 호출
             async def _transcribe():
+                if not _KV_BASE or not _KV_SECRET:
+                    raise RuntimeError("CNMAKER_BASE 또는 CNMAKER_SECRET이 설정되지 않았습니다.")
                 with open(audio_path, "rb") as af:
                     data = af.read()
                 async with httpx.AsyncClient(timeout=600) as c:
                     return await c.post(
-                        "http://43.200.232.189/transcribe",
-                        headers={"x-secret": "bj-cnmaker-2026", "Content-Type": "application/octet-stream"},
+                        f"{_KV_BASE}/transcribe",
+                        headers={"x-secret": _KV_SECRET, "Content-Type": "application/octet-stream"},
                         content=data,
                     )
             _tt = asyncio.create_task(_transcribe())
@@ -1195,12 +1295,7 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
         finally:
-            for path in [video_path, audio_path]:
-                try:
-                    if os.path.exists(path):
-                        os.remove(path)
-                except Exception:
-                    pass
+            cleanup_temp_files()
 
     return StreamingResponse(
         stream(),
@@ -1299,8 +1394,8 @@ PLAN_TRACK = {
     "planning": "기획",
 }
 SMS_PROXY = "https://bujajubang-analyzer.onrender.com/api/sms/send"
-REMIND_PHONE = os.getenv("PIPELINE_REMIND_PHONE", "010-3938-0779")
-REMIND_SECRET = os.getenv("PIPELINE_REMIND_SECRET", "bj-pipeline-2026")
+REMIND_PHONE = os.getenv("PIPELINE_REMIND_PHONE", "").strip()
+REMIND_SECRET = os.getenv("PIPELINE_REMIND_SECRET", "").strip()
 
 
 @app.post("/api/pipeline-remind")
@@ -1310,7 +1405,8 @@ async def pipeline_remind(request: Request, days: int = 7, test: int = 0):
     라이트세일 cron이 매일 아침 부른다. 해당 건이 없으면 아무것도 보내지 않는다.
     ?test=1 이면 조건과 상관없이 지금 상태를 문자로 한 번 보내본다(설치 확인용).
     """
-    if request.headers.get("x-secret") != REMIND_SECRET:
+    supplied_secret = request.headers.get("x-secret", "")
+    if not REMIND_SECRET or not secrets.compare_digest(supplied_secret, REMIND_SECRET):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
 
     today = datetime.date.today()
@@ -1348,6 +1444,12 @@ async def pipeline_remind(request: Request, days: int = 7, test: int = 0):
         msg = ("[부자주방 콘텐츠]\n설치 확인용 문자입니다.\n"
                "업로드 예정인데 기획이 안 끝난 건은 지금 없습니다.\n"
                "https://youtube-researcher.onrender.com/")
+
+    if not REMIND_PHONE:
+        return JSONResponse(
+            {"ok": False, "sent": False, "error": "PIPELINE_REMIND_PHONE 미설정"},
+            status_code=503,
+        )
 
     try:
         async with httpx.AsyncClient(timeout=30) as c:
@@ -1573,6 +1675,11 @@ async def jjachi(request: Request):
 @app.get("/api/transcript-debug")
 async def transcript_debug(request: Request):
     """쿠키/스크립트 수집 진단. ?url=<영상url> 주면 그 영상으로 실제 수집 시도."""
+    debug_enabled = os.getenv("ENABLE_TRANSCRIPT_DEBUG", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if OWNER_AUTH.settings.production or not debug_enabled:
+        return JSONResponse({"error": "not found"}, status_code=404)
     import transcript_service as ts
     resolved = ts._cookiefile()
     info = {

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>부자주방 콘텐츠 리서처 — 로그인</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      color: #172033;
+      background: linear-gradient(145deg, #07152f 0%, #153d72 52%, #0f766e 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Malgun Gothic", sans-serif;
+    }
+    .login-card {
+      width: min(380px, 100%);
+      padding: 38px 32px 32px;
+      border: 1px solid rgba(255, 255, 255, .55);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, .97);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, .30);
+    }
+    .mark {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 16px;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      color: white;
+      background: #e11d48;
+      font-size: 22px;
+      box-shadow: 0 8px 22px rgba(225, 29, 72, .28);
+    }
+    h1 { margin: 0; text-align: center; font-size: 23px; }
+    .subtitle { margin: 8px 0 26px; text-align: center; color: #718096; font-size: 13px; }
+    label { display: block; margin: 0 0 7px; color: #526078; font-size: 13px; font-weight: 700; }
+    input {
+      width: 100%;
+      margin: 0 0 16px;
+      padding: 13px 14px;
+      border: 1.5px solid #d9e1ec;
+      border-radius: 10px;
+      background: #fff;
+      font: inherit;
+    }
+    input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, .12); }
+    button {
+      width: 100%;
+      margin-top: 4px;
+      padding: 13px 16px;
+      border: 0;
+      border-radius: 10px;
+      color: #fff;
+      background: #173f73;
+      font-size: 15px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    button:disabled { cursor: wait; opacity: .65; }
+    .error {
+      display: none;
+      margin-bottom: 16px;
+      padding: 11px 12px;
+      border-radius: 9px;
+      color: #b42318;
+      background: #fff1f0;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+  <main class="login-card">
+    <div class="mark">▶</div>
+    <h1>콘텐츠 리서처</h1>
+    <p class="subtitle">부자주방 owner 전용</p>
+    <div id="error" class="error" role="alert"></div>
+    <form id="login-form">
+      <label for="username">아이디</label>
+      <input id="username" name="username" autocomplete="username" required autofocus />
+      <label for="password">비밀번호</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+      <button id="login-button" type="submit">로그인</button>
+    </form>
+  </main>
+  <script>
+    const form = document.getElementById('login-form');
+    const button = document.getElementById('login-button');
+    const errorBox = document.getElementById('error');
+
+    function safeNextPath() {
+      const value = new URLSearchParams(location.search).get('next') || '/';
+      return value.startsWith('/') && !value.startsWith('//') ? value : '/';
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      errorBox.style.display = 'none';
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value.trim(),
+            password: document.getElementById('password').value,
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || '로그인하지 못했습니다.');
+        location.replace(safeNextPath());
+      } catch (error) {
+        errorBox.textContent = error.message || '로그인하지 못했습니다.';
+        errorBox.style.display = 'block';
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

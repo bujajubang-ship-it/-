@@ -1,3 +1,26 @@
+// Same-origin API 세션이 만료되면 모든 fetch 호출을 로그인 화면으로 보낸다.
+// localhost 자동 컷편집기 같은 외부 origin 응답에는 관여하지 않는다.
+const nativeFetch = window.fetch.bind(window);
+function redirectToOwnerLogin() {
+  if (location.pathname === '/login') return;
+  const next = location.pathname + location.search + location.hash;
+  location.assign('/login?next=' + encodeURIComponent(next));
+}
+window.fetch = async function ownerAuthenticatedFetch(input, init) {
+  const response = await nativeFetch(input, init);
+  const rawUrl = input instanceof Request ? input.url : String(input);
+  const requestUrl = new URL(rawUrl, location.href);
+  if (requestUrl.origin === location.origin && response.status === 401) {
+    redirectToOwnerLogin();
+  }
+  return response;
+};
+
+async function ownerLogout() {
+  await nativeFetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
+  location.replace('/login');
+}
+
 let midformAnalyzing = false;
 let shortformAnalyzing = false;
 let editAnalyzing = false;
@@ -3575,6 +3598,11 @@ async function analyzeVideo() {
     // 응답 스트림 처리
     let buf = '';
     xhr.onreadystatechange = () => {
+      if (xhr.readyState === 4 && xhr.status === 401) {
+        redirectToOwnerLogin();
+        done();
+        return;
+      }
       if (xhr.readyState < 3) return;
       const newText = xhr.responseText.slice(buf.length);
       if (newText) resetStallTimer();
