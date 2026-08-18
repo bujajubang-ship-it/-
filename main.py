@@ -363,7 +363,10 @@ def sse(data: dict) -> str:
 @app.get("/healthz")
 async def healthz():
     """Public liveness check without configuration or channel details."""
-    return {"ok": True}
+    return JSONResponse(
+        {"ok": True},
+        headers={"X-App-Revision": os.getenv("RENDER_GIT_COMMIT", "local")[:12]},
+    )
 
 
 @app.get("/login")
