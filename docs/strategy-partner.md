@@ -45,7 +45,7 @@ YouTube Reporting API가 Google Cloud 프로젝트에서 꺼져 있으면 Reach/
 
 ## 배포 전 데이터 안전 gate
 
-1. `/data/history.db` SQLite online backup 생성
+1. Render shell에서 `/data/backups`처럼 명시적인 backup directory를 만들고 다음 명령으로 SQLite online backup 생성: `python production_preflight.py --backup /data/backups/history-before-strategy.db`
 2. backup SHA-256과 `PRAGMA integrity_check` 확인
 3. 기존 history/pipeline/worksheet/chat/knowledge/optimize row count 기록
 4. additive migration 후 기존 table count와 schema 재확인
