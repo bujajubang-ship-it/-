@@ -461,18 +461,29 @@ class AnalyticsService:
     ) -> str | None:
         if not video_ids:
             return None
-        payload = await self._query_all_rows(
-            {
-                "ids": "channel==MINE",
-                "startDate": start_date,
-                "endDate": end_date,
-                "metrics": ",".join(ANALYTICS_METRICS),
-                "dimensions": "day",
-                "filters": f"video=={','.join(video_ids)}",
-                "sort": "day",
-            }
-        )
-        days = [str(row.get("day")) for row in response_rows(payload) if row.get("day")]
+        # The Analytics filter has a practical URL/query-size limit. Full-channel
+        # collection can exceed it (the production channel currently has 800+
+        # videos), so derive freshness with the same bounded cohorts used by the
+        # aggregate query instead of sending every ID in one HTTP request.
+        days: list[str] = []
+        unique_ids = list(dict.fromkeys(video_id for video_id in video_ids if video_id))
+        for batch in chunked(unique_ids, 200):
+            payload = await self._query_all_rows(
+                {
+                    "ids": "channel==MINE",
+                    "startDate": start_date,
+                    "endDate": end_date,
+                    "metrics": ",".join(ANALYTICS_METRICS),
+                    "dimensions": "day",
+                    "filters": f"video=={','.join(batch)}",
+                    "sort": "day",
+                }
+            )
+            days.extend(
+                str(row.get("day"))
+                for row in response_rows(payload)
+                if row.get("day")
+            )
         return max(days) if days else None
 
     async def get_video_analytics(
