@@ -18,6 +18,7 @@ class StrategyMode(str, Enum):
     UPLOAD_DECISION = "upload_decision"
     EDIT_FEEDBACK = "edit_feedback"
     VIDEO_FEEDBACK = "video_feedback"
+    EDIT_DIRECTOR = "edit_director"
     WORKSHEET = "worksheet"
     JJACHI = "jjachi"
     SNS_CONVERSION = "sns_conversion"

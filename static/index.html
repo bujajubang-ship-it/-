@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260818-strategy2" />
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="style.css?v=20260818-edit-director" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -29,6 +30,7 @@
         <button class="tab-btn" id="tab-sns" onclick="switchTab('sns')">📣 SNS 변환</button>
         <button class="tab-btn" id="tab-blog" onclick="switchTab('blog')">📝 블로그 기획</button>
         <button class="tab-btn" id="tab-video-feedback" onclick="switchTab('video-feedback')">🎬 영상 피드백</button>
+        <button class="tab-btn tab-btn-edit-director" id="tab-edit-director" onclick="switchTab('edit-director')">🎞️ AI 편집 디렉터</button>
         <button class="tab-btn" id="tab-autocut" onclick="switchTab('autocut')">✂️ 자동 컷편집</button>
         <button class="tab-btn tab-btn-chat" id="tab-chat" onclick="switchTab('chat')">💬 AI 상담</button>
         <button class="tab-btn tab-btn-chat" id="tab-strategy" onclick="switchTab('strategy')">🎯 전략 보관함</button>
@@ -1079,6 +1081,118 @@
       </div>
     </div>
 
+    <!-- ===== 🎞️ AI 편집 디렉터 ===== -->
+    <div id="pane-edit-director" class="pane hidden">
+      <div class="ed-page">
+        <section class="section-card ed-upload-card">
+          <div class="ed-title-row">
+            <div>
+              <h2 class="section-title">🎞️ AI 편집 디렉터</h2>
+              <p class="section-desc">AI가 먼저 분석안을 제안합니다. 대화로 합의하고 승인한 뒤에만 실제 편집을 실행합니다.</p>
+            </div>
+            <span class="ed-safety-badge">분석 → 합의 → 승인 → 편집</span>
+          </div>
+
+          <div class="upload-area">
+            <input type="file" id="ed-file-input" accept="video/*" style="display:none" onchange="edFileSelected(event)">
+            <button class="upload-btn" onclick="document.getElementById('ed-file-input').click()">📁 원본 또는 1차 편집본 선택</button>
+            <p class="upload-hint" id="ed-file-name">파일을 선택하세요</p>
+          </div>
+
+          <div class="ed-form-grid">
+            <label>영상 타입
+              <select id="ed-video-type">
+                <option value="raw_footage">긴 원본 · raw footage</option>
+                <option value="rough_cut">1차 편집본 · rough cut</option>
+              </select>
+            </label>
+            <label>목표 결과
+              <select id="ed-target-format">
+                <option value="short_reel">쇼츠/릴스</option>
+                <option value="mid_form" selected>미드폼</option>
+                <option value="long_form">롱폼</option>
+                <option value="custom">직접 지정</option>
+              </select>
+            </label>
+            <label>목표 길이 <span>(선택 · 초)</span>
+              <input id="ed-target-length" type="number" min="0" max="21600" placeholder="예: 480">
+            </label>
+            <label>영상 목적
+              <select id="ed-purpose">
+                <option value="">선택 안 함</option>
+                <option>조회수형</option><option>상담유도형</option><option>제품판매형</option>
+                <option>현장기록형</option><option>브랜드신뢰형</option>
+              </select>
+            </label>
+            <label>주제 <span>(선택)</span>
+              <input id="ed-topic" type="text" maxlength="300" placeholder="예: 9평 베이커리 주방 동선">
+            </label>
+            <label>연결할 콘텐츠 전략 <span>(선택)</span>
+              <select id="ed-strategy-id"><option value="">연결 안 함</option></select>
+            </label>
+          </div>
+          <button class="analyze-btn" id="ed-analyze-btn" onclick="edAnalyze()" disabled>AI 분석 제안 만들기</button>
+          <div id="ed-progress" class="hidden ed-progress">
+            <div class="step-indicator" id="ed-progress-message">업로드 준비 중...</div>
+            <div class="progress-bar"><div class="progress-fill" id="ed-progress-fill"></div></div>
+          </div>
+        </section>
+
+        <section class="section-card">
+          <div class="ed-section-head"><h3>최근 편집 프로젝트</h3><button onclick="edLoadProjects()">새로고침</button></div>
+          <div id="ed-project-list" class="ed-project-list">불러오는 중…</div>
+        </section>
+
+        <section id="ed-workspace" class="hidden">
+          <div class="section-card ed-workspace-head">
+            <div><div class="ed-eyebrow">현재 프로젝트</div><h2 id="ed-project-title">-</h2></div>
+            <span id="ed-project-status" class="ed-status">-</span>
+          </div>
+
+          <div class="section-card">
+            <div class="ed-section-head"><h3>1. AI 편집 진단</h3><span id="ed-media-meta"></span></div>
+            <div id="ed-diagnosis"></div>
+            <details class="ed-transcript"><summary>받아쓰기 미리보기</summary><pre id="ed-transcript-preview"></pre></details>
+          </div>
+
+          <div class="section-card">
+            <div class="ed-section-head"><h3>2. 타임코드 편집 제안</h3><span id="ed-plan-duration"></span></div>
+            <div class="ed-table-wrap"><table class="ed-segment-table"><thead><tr><th>구간</th><th>액션</th><th>이유</th><th>신뢰도</th></tr></thead><tbody id="ed-segments"></tbody></table></div>
+            <div id="ed-plan-notes" class="ed-plan-notes"></div>
+          </div>
+
+          <div class="section-card">
+            <div class="ed-section-head"><h3>3. 대화로 수정·합의</h3><span>최신 plan만 승인할 수 있습니다</span></div>
+            <div id="ed-conversation" class="ed-conversation"></div>
+            <div class="ed-revision-row">
+              <textarea id="ed-revision-input" rows="3" placeholder="예: 오프닝 5초는 살리고, 설명은 더 짧게. 쇼츠용 버전도 같이 뽑아줘."></textarea>
+              <button id="ed-revise-btn" onclick="edRevise()">수정안 반영</button>
+            </div>
+            <div id="ed-version-list" class="ed-version-list"></div>
+          </div>
+
+          <div class="section-card ed-action-card">
+            <div>
+              <h3>4. 승인 후 실제 편집</h3>
+              <p>승인 전에는 원본을 분석만 하며 ffmpeg 편집은 실행되지 않습니다.</p>
+            </div>
+            <div class="ed-action-buttons">
+              <button id="ed-approve-btn" class="ed-approve-btn" onclick="edApprove()">이 편집안 승인</button>
+              <button id="ed-render-btn" class="ed-render-btn" onclick="edRender()" disabled>승인안으로 편집 실행</button>
+            </div>
+            <div id="ed-render-progress" class="hidden ed-render-progress"><div id="ed-render-message"></div><div class="progress-bar"><div class="progress-fill" id="ed-render-fill"></div></div></div>
+          </div>
+
+          <div id="ed-output-card" class="section-card hidden">
+            <div class="ed-section-head"><h3>5. 편집 결과</h3><span>미리보기 · 다운로드 · 편집 로그</span></div>
+            <video id="ed-output-video" class="ed-output-video" controls preload="metadata"></video>
+            <div id="ed-output-links" class="ed-output-links"></div>
+            <details><summary>적용된 편집 로그</summary><div id="ed-edit-log" class="ed-edit-log"></div></details>
+          </div>
+        </section>
+      </div>
+    </div>
+
     <!-- ===== ✂️ 자동 컷편집 탭 ===== -->
     <!-- 편집 전 원본을 음성 분석해 흐름에 맞게 잘라준다.
          원본은 보통 수 GB 라 업로드하지 않고 파일 경로만 넘긴다 →
@@ -1357,7 +1471,7 @@
 
   </main>
 
-  <script src="app.js?v=20260818-strategy2"></script>
+  <script src="app.js?v=20260818-edit-director"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

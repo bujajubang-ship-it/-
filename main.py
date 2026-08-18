@@ -7,6 +7,7 @@ import secrets
 import time
 import uuid
 import subprocess
+import threading
 from contextlib import asynccontextmanager
 
 import httpx
@@ -34,6 +35,11 @@ from strategy_repository import (
 )
 from strategy_context import generate_strategy_context
 from strategy_memory import init_strategy_memory_schema, remember_interaction
+from edit_project_store import EditProjectStore, public_project, utc_now
+from media_ingest import MediaIngestService, MediaValidationError
+from edit_analysis_service import EditAnalysisService
+from edit_plan_service import prepare_plan, plan_diff
+from edit_render_service import EditRenderService
 from viewtrap_service import ViewTrapService
 from heatmap_service import fetch_heatmap, summarize_for_prompt
 from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
@@ -78,6 +84,8 @@ def _vf_backup():
 
 
 COLLECTION_SCHEDULER = YouTubeCollectionScheduler()
+EDIT_RENDERING: set[int] = set()
+EDIT_RENDERING_LOCK = threading.Lock()
 
 
 @asynccontextmanager
@@ -257,6 +265,18 @@ class StrategyVideoLinkRequest(BaseModel):
     video_id: str
     title_at_upload: str = ""
     thumbnail_text: str = ""
+
+
+class EditPlanRevisionRequest(BaseModel):
+    message: str
+
+
+class EditPlanApprovalRequest(BaseModel):
+    version: int | None = None
+
+
+class EditProjectUploadLinkRequest(BaseModel):
+    video_id: str
 
 
 def sse(data: dict) -> str:
@@ -1665,6 +1685,435 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ===== AI 편집 디렉터 / 협업형 영상 편집 =====
+
+EDIT_VIDEO_TYPES = {"raw_footage", "rough_cut"}
+EDIT_TARGET_FORMATS = {"short_reel", "mid_form", "long_form", "custom"}
+EDIT_PURPOSES = {"조회수형", "상담유도형", "제품판매형", "현장기록형", "브랜드신뢰형", ""}
+
+
+def _edit_row(project_id: int) -> dict:
+    row = EditProjectStore().get(project_id)
+    if not row:
+        raise KeyError("편집 프로젝트를 찾지 못했습니다.")
+    return row
+
+
+@app.get("/api/edit-projects")
+async def edit_projects_list(limit: int = 30):
+    return EditProjectStore().list(limit=limit)
+
+
+@app.get("/api/edit-projects/{project_id}")
+async def edit_projects_get(project_id: int):
+    try:
+        return public_project(_edit_row(project_id))
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+
+
+@app.post("/api/edit-projects/analyze")
+async def edit_projects_analyze(
+    file: UploadFile = File(...),
+    video_type: str = Form("raw_footage"),
+    target_format: str = Form("mid_form"),
+    target_length_seconds: float = Form(0),
+    purpose: str = Form(""),
+    topic: str = Form(""),
+    strategy_id: int | None = Form(None),
+):
+    if video_type not in EDIT_VIDEO_TYPES:
+        return JSONResponse({"error": "영상 타입이 올바르지 않습니다."}, status_code=400)
+    if target_format not in EDIT_TARGET_FORMATS:
+        return JSONResponse({"error": "목표 결과 형식이 올바르지 않습니다."}, status_code=400)
+    if purpose not in EDIT_PURPOSES:
+        return JSONResponse({"error": "영상 목적이 올바르지 않습니다."}, status_code=400)
+    if target_length_seconds < 0 or target_length_seconds > 21600:
+        return JSONResponse({"error": "목표 길이는 0~21600초로 입력해주세요."}, status_code=400)
+    if strategy_id is not None and not StrategyRepository().get(strategy_id):
+        return JSONResponse({"error": "연결할 콘텐츠 전략을 찾지 못했습니다."}, status_code=404)
+
+    store = EditProjectStore()
+    ingest = MediaIngestService(store)
+    project_uuid = uuid.uuid4().hex
+    try:
+        source_path, size_bytes, original_filename = await ingest.persist_upload(file, project_uuid)
+    except MediaValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception:
+        return JSONResponse({"error": "영상을 안전하게 저장하지 못했습니다."}, status_code=503)
+
+    settings = {
+        "video_type": video_type,
+        "target_format": target_format,
+        "target_length_seconds": round(float(target_length_seconds), 3),
+        "purpose": purpose,
+        "topic": topic.strip()[:300],
+        "content_strategy_id": strategy_id,
+    }
+    project = {
+        "schema_version": 1,
+        "project_uuid": project_uuid,
+        "status": "uploaded",
+        "source": {
+            "filename": original_filename,
+            "storage_name": source_path.name,
+            "size_bytes": size_bytes,
+            "media": {},
+        },
+        "settings": settings,
+        "transcript": {},
+        "analysis_signals": {"silences": [], "scene_changes": []},
+        "diagnosis": {},
+        "evidence_trace": [],
+        "evidence_snapshot": {},
+        "strategy_snapshot": None,
+        "plan_versions": [],
+        "conversation": [],
+        "approved_version": None,
+        "approved_at": None,
+        "outputs": {},
+        "render_runs": [],
+        "applied_edit_log": [],
+        "upload_feedback": {"video_id": None, "linked_at": None, "checkpoints": []},
+        "error": None,
+    }
+    project_id = store.create(
+        keyword=topic.strip() or original_filename,
+        project=project,
+    )
+
+    async def stream():
+        nonlocal project
+        try:
+            yield sse({"step": "validating", "message": "업로드를 마쳤습니다. 영상 메타데이터를 확인합니다.", "project_id": project_id})
+            media = await asyncio.to_thread(ingest.probe, source_path)
+            project["source"]["media"] = media
+            project["status"] = "transcribing"
+            store.save(project_id, project)
+
+            yield sse({"step": "signals", "message": "대사·정적·장면 전환을 타임코드로 분석합니다.", "project_id": project_id})
+            inspect_task = asyncio.create_task(ingest.inspect_and_transcribe(source_path, media))
+            waited = 0
+            while not inspect_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(inspect_task), timeout=3)
+                except TimeoutError:
+                    waited += 3
+                    yield sse({
+                        "step": "transcribing",
+                        "message": f"음성과 편집 힌트를 분석하고 있습니다. ({waited}초)",
+                        "project_id": project_id,
+                    })
+            transcript, silences, scenes = inspect_task.result()
+            project["transcript"] = transcript
+            project["analysis_signals"] = {"silences": silences, "scene_changes": scenes}
+            project["status"] = "retrieving_context"
+            store.save(project_id, project)
+
+            analysis = EditAnalysisService()
+            yield sse({"step": "retrieving", "message": "유사 영상 retention·과거 피드백·비즈니스PT 지식을 연결합니다.", "project_id": project_id})
+            evidence_task = asyncio.create_task(
+                analysis.collect_evidence(
+                    topic=settings["topic"], purpose=settings["purpose"], strategy_id=strategy_id
+                )
+            )
+            while not evidence_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(evidence_task), timeout=2)
+                except TimeoutError:
+                    yield sse({"step": "retrieving", "message": "채널 근거를 병렬로 비교하고 있습니다.", "project_id": project_id})
+            evidence, trace, strategy = evidence_task.result()
+            project["evidence_snapshot"] = evidence
+            project["evidence_trace"] = trace
+            project["strategy_snapshot"] = strategy
+            project["status"] = "diagnosing"
+            store.save(project_id, project)
+
+            yield sse({"step": "diagnosing", "message": "AI가 타임코드 기반 최초 편집안을 작성합니다. 아직 편집은 실행하지 않습니다.", "project_id": project_id})
+            diagnosis_task = asyncio.create_task(
+                analysis.diagnose(
+                    transcript=transcript,
+                    media=media,
+                    silences=silences,
+                    scenes=scenes,
+                    settings=settings,
+                    evidence=evidence,
+                    strategy=strategy,
+                )
+            )
+            waited = 0
+            while not diagnosis_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(diagnosis_task), timeout=4)
+                except TimeoutError:
+                    waited += 4
+                    yield sse({
+                        "step": "diagnosing",
+                        "message": f"편집 제안과 채널 근거를 대조하고 있습니다. ({waited}초)",
+                        "project_id": project_id,
+                    })
+            diagnosis = diagnosis_task.result()
+            plan = prepare_plan(diagnosis.get("plan") or {}, float(media["duration"]))
+            project["diagnosis"] = {key: value for key, value in diagnosis.items() if key != "plan"}
+            project["plan_versions"] = [
+                {
+                    "version": 1,
+                    "status": "proposed",
+                    "created_at": utc_now(),
+                    "source": "ai_diagnosis",
+                    "user_request": "",
+                    "revision_summary": "AI 최초 분석 제안",
+                    "diff": [],
+                    "plan": plan,
+                }
+            ]
+            project["status"] = "proposed"
+            project["error"] = None
+            store.save(project_id, project)
+            yield sse({"step": "done", "message": "분석 제안이 준비됐습니다. 대화로 수정한 뒤 승인해주세요.", "project": public_project(store.get(project_id))})
+        except Exception as exc:
+            project["status"] = "analysis_failed"
+            project["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            store.save(project_id, project)
+            yield sse({
+                "step": "error",
+                "message": str(exc)[:300] or "편집 분석에 실패했습니다.",
+                "project_id": project_id,
+                "source_preserved": True,
+            })
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/edit-projects/{project_id}/revise")
+async def edit_projects_revise(project_id: int, req: EditPlanRevisionRequest):
+    message = req.message.strip()
+    if not message:
+        return JSONResponse({"error": "수정 요청을 입력해주세요."}, status_code=400)
+    try:
+        row = _edit_row(project_id)
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    project = row["report"]
+    versions = project.get("plan_versions") or []
+    if not versions:
+        return JSONResponse({"error": "먼저 영상 분석을 완료해주세요."}, status_code=409)
+    if project.get("status") == "rendering":
+        return JSONResponse({"error": "렌더링 중에는 편집안을 바꿀 수 없습니다."}, status_code=409)
+
+    async def stream():
+        try:
+            yield sse({"step": "revising", "message": "요청을 현재 편집안과 대조합니다."})
+            current = versions[-1]["plan"]
+            analysis = EditAnalysisService()
+            revision_task = asyncio.create_task(
+                analysis.revise(
+                    current_plan=current,
+                    user_request=message,
+                    transcript=project.get("transcript") or {},
+                    media=(project.get("source") or {}).get("media") or {},
+                    settings=project.get("settings") or {},
+                    evidence=project.get("evidence_snapshot") or {},
+                    strategy=project.get("strategy_snapshot"),
+                )
+            )
+            waited = 0
+            while not revision_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(revision_task), timeout=3)
+                except TimeoutError:
+                    waited += 3
+                    yield sse({"step": "revising", "message": f"합의안을 갱신하고 있습니다. ({waited}초)"})
+            revised = revision_task.result()
+            media_duration = float(((project.get("source") or {}).get("media") or {}).get("duration") or 0)
+            plan = prepare_plan(revised.get("plan") or {}, media_duration)
+            version = int(versions[-1]["version"]) + 1
+            diff = plan_diff(current, plan)
+            versions.append(
+                {
+                    "version": version,
+                    "status": "revised",
+                    "created_at": utc_now(),
+                    "source": "user_revision",
+                    "user_request": message[:4000],
+                    "revision_summary": str(revised.get("revision_summary") or "수정 요청 반영")[:1000],
+                    "diff": diff,
+                    "plan": plan,
+                }
+            )
+            project["conversation"] = (project.get("conversation") or []) + [
+                {"role": "user", "content": message[:4000], "created_at": utc_now(), "version": version},
+                {"role": "assistant", "content": str(revised.get("revision_summary") or "수정 요청 반영")[:2000], "created_at": utc_now(), "version": version},
+            ]
+            project["status"] = "revised"
+            project["approved_version"] = None
+            project["approved_at"] = None
+            project["error"] = None
+            EditProjectStore().save(project_id, project)
+            yield sse({"step": "done", "message": "수정안을 반영했습니다. 변경 내용을 확인해주세요.", "project": public_project(EditProjectStore().get(project_id))})
+        except Exception as exc:
+            yield sse({"step": "error", "message": str(exc)[:300] or "편집안 수정에 실패했습니다."})
+
+    return StreamingResponse(
+        stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/edit-projects/{project_id}/approve")
+async def edit_projects_approve(project_id: int, req: EditPlanApprovalRequest):
+    try:
+        row = _edit_row(project_id)
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    project = row["report"]
+    versions = project.get("plan_versions") or []
+    if not versions:
+        return JSONResponse({"error": "승인할 편집안이 없습니다."}, status_code=409)
+    latest = int(versions[-1]["version"])
+    requested = req.version if req.version is not None else latest
+    if requested != latest:
+        return JSONResponse({"error": "과거 버전은 승인할 수 없습니다. 최신 수정안을 확인해주세요."}, status_code=409)
+    if project.get("status") == "rendering":
+        return JSONResponse({"error": "이미 렌더링 중입니다."}, status_code=409)
+    project["approved_version"] = latest
+    project["approved_at"] = utc_now()
+    project["status"] = "approved"
+    versions[-1]["status"] = "approved"
+    project["conversation"] = (project.get("conversation") or []) + [
+        {"role": "user", "content": f"편집안 v{latest} 승인", "created_at": utc_now(), "version": latest}
+    ]
+    EditProjectStore().save(project_id, project)
+    return {"ok": True, "project": public_project(EditProjectStore().get(project_id))}
+
+
+@app.post("/api/edit-projects/{project_id}/render")
+async def edit_projects_render(project_id: int):
+    try:
+        row = _edit_row(project_id)
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    project = row["report"]
+    approved_version = project.get("approved_version")
+    versions = project.get("plan_versions") or []
+    version_row = next(
+        (item for item in versions if int(item.get("version") or 0) == int(approved_version or 0)),
+        None,
+    )
+    if not approved_version or not version_row:
+        return JSONResponse({"error": "편집안을 먼저 승인해야 합니다."}, status_code=409)
+    if project.get("status") not in {"approved", "render_failed", "completed"}:
+        return JSONResponse({"error": "현재 상태에서는 렌더링할 수 없습니다."}, status_code=409)
+    with EDIT_RENDERING_LOCK:
+        if project_id in EDIT_RENDERING:
+            return JSONResponse({"error": "이미 렌더링 중입니다."}, status_code=409)
+        EDIT_RENDERING.add(project_id)
+    project["status"] = "rendering"
+    project["error"] = None
+    EditProjectStore().save(project_id, project)
+
+    async def stream():
+        started = time.perf_counter()
+        try:
+            yield sse({"step": "rendering", "percent": 3, "message": "승인된 타임라인을 검증합니다."})
+            store = EditProjectStore()
+            source = store.resolve_media_path(project, "source")
+            directory = store.project_dir(str(project["project_uuid"]))
+            renderer = EditRenderService()
+            task = asyncio.create_task(
+                asyncio.to_thread(
+                    renderer.render_project,
+                    source=source,
+                    directory=directory,
+                    plan=version_row["plan"],
+                    media=(project.get("source") or {}).get("media") or {},
+                    version=int(approved_version),
+                )
+            )
+            while not task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=2)
+                except TimeoutError:
+                    elapsed = time.perf_counter() - started
+                    percent = min(92, 8 + int(elapsed / 3))
+                    yield sse({
+                        "step": "rendering",
+                        "percent": percent,
+                        "message": f"ffmpeg가 승인된 컷을 렌더링하고 있습니다. ({int(elapsed)}초)",
+                    })
+            outputs, edit_log = task.result()
+            project["outputs"] = outputs
+            project["applied_edit_log"] = edit_log
+            project["render_runs"] = (project.get("render_runs") or []) + [
+                {
+                    "version": int(approved_version),
+                    "created_at": utc_now(),
+                    "outputs": outputs,
+                    "edit_log": edit_log,
+                }
+            ]
+            project["status"] = "completed"
+            project["error"] = None
+            store.save(project_id, project)
+            yield sse({"step": "done", "percent": 100, "message": "승인된 편집본을 만들었습니다.", "project": public_project(store.get(project_id))})
+        except Exception as exc:
+            project["status"] = "render_failed"
+            project["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            EditProjectStore().save(project_id, project)
+            yield sse({"step": "error", "message": str(exc)[:300] or "렌더링에 실패했습니다."})
+        finally:
+            with EDIT_RENDERING_LOCK:
+                EDIT_RENDERING.discard(project_id)
+
+    return StreamingResponse(
+        stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/edit-projects/{project_id}/outputs/{kind}")
+async def edit_projects_output(project_id: int, kind: str):
+    if kind not in {"full", "short", "decision"}:
+        return JSONResponse({"error": "출력 파일을 찾지 못했습니다."}, status_code=404)
+    try:
+        row = _edit_row(project_id)
+        path = EditProjectStore().resolve_media_path(row["report"], kind)
+    except (KeyError, FileNotFoundError):
+        return JSONResponse({"error": "출력 파일을 찾지 못했습니다."}, status_code=404)
+    media_type = "application/json" if kind == "decision" else "video/mp4"
+    return FileResponse(path, media_type=media_type, filename=path.name)
+
+
+@app.post("/api/edit-projects/{project_id}/link-upload")
+async def edit_projects_link_upload(project_id: int, req: EditProjectUploadLinkRequest):
+    video_id = req.video_id.strip()
+    if not video_id or len(video_id) > 64:
+        return JSONResponse({"error": "YouTube video ID를 입력해주세요."}, status_code=400)
+    try:
+        row = _edit_row(project_id)
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    project = row["report"]
+    project["upload_feedback"] = {
+        "video_id": video_id,
+        "linked_at": utc_now(),
+        "checkpoints": (project.get("upload_feedback") or {}).get("checkpoints") or [],
+    }
+    strategy_id = (project.get("settings") or {}).get("content_strategy_id")
+    if strategy_id:
+        try:
+            StrategyRepository().link_video(int(strategy_id), video_id)
+        except Exception:
+            pass
+    EditProjectStore().save(project_id, project)
+    return {"ok": True}
 
 
 @app.post("/api/chat")

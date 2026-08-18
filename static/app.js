@@ -33,7 +33,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'ytsearch', 'topic', 'jjachi', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'autocut', 'chat', 'strategy', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'ytsearch', 'topic', 'jjachi', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'edit-director', 'autocut', 'chat', 'strategy', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -51,6 +51,7 @@ function switchTab(tab) {
   if (tab === 'ytsearch') ysInit();
   if (tab === 'autocut') acInit();
   if (tab === 'video-feedback') loadVfHistory();
+  if (tab === 'edit-director') edInit();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -128,6 +129,326 @@ async function delVfRecord(id) {
   if (!confirm('이 기록을 지울까요?')) return;
   await fetch('/api/history/' + id, { method: 'DELETE' });
   loadVfHistory();
+}
+
+// ===== 🎞️ AI 편집 디렉터 =====
+
+let edSelectedFile = null;
+let edCurrentProject = null;
+let edBusy = false;
+
+const ED_STATUS_LABELS = {
+  uploaded: '업로드 완료', transcribing: '받아쓰기 중', retrieving_context: '채널 근거 조회 중',
+  diagnosing: 'AI 진단 중', proposed: '최초 제안', revised: '수정안 확인 필요',
+  approved: '편집안 승인됨', rendering: '편집 렌더링 중', completed: '편집 완료',
+  analysis_failed: '분석 실패', render_failed: '렌더링 실패'
+};
+
+const ED_STEP_PROGRESS = {
+  uploading: 7, validating: 12, signals: 22, transcribing: 46,
+  retrieving: 66, diagnosing: 84, revising: 70, done: 100, error: 100
+};
+
+function edTime(sec) {
+  sec = Math.max(0, Number(sec) || 0);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function edFileSelected(event) {
+  edSelectedFile = event.target.files[0] || null;
+  const name = document.getElementById('ed-file-name');
+  const button = document.getElementById('ed-analyze-btn');
+  if (!edSelectedFile) {
+    name.textContent = '파일을 선택하세요';
+    button.disabled = true;
+    return;
+  }
+  const mb = (edSelectedFile.size / 1024 / 1024).toFixed(1);
+  name.textContent = `${edSelectedFile.name} · ${mb}MB`;
+  button.disabled = false;
+}
+
+async function edInit() {
+  await Promise.allSettled([edLoadProjects(), edLoadStrategies()]);
+}
+
+async function edLoadStrategies() {
+  const select = document.getElementById('ed-strategy-id');
+  if (!select || select.dataset.loaded === '1') return;
+  try {
+    const rows = await fetch('/api/strategies?limit=80').then(r => r.json());
+    select.innerHTML = '<option value="">연결 안 함</option>' + (rows || []).map(item =>
+      `<option value="${Number(item.id)}">#${Number(item.id)} · ${escHtml(item.topic || '제목 없음')}</option>`
+    ).join('');
+    select.dataset.loaded = '1';
+  } catch (e) {}
+}
+
+async function edLoadProjects() {
+  const target = document.getElementById('ed-project-list');
+  if (!target) return;
+  try {
+    const rows = await fetch('/api/edit-projects?limit=30').then(r => r.json());
+    if (!rows.length) {
+      target.innerHTML = '<div class="ed-project-meta">아직 편집 프로젝트가 없습니다.</div>';
+      return;
+    }
+    target.innerHTML = rows.map(item => `
+      <button class="ed-project-item" onclick="edOpenProject(${Number(item.id)})">
+        <b>${escHtml(item.keyword || item.filename || '편집 프로젝트')}</b>
+        <div class="ed-project-meta">${escHtml(ED_STATUS_LABELS[item.status] || item.status || '-')} · v${Number(item.version || 0)}<br>${escHtml(item.video_type || '-')} · ${edTime(item.duration)}</div>
+      </button>`).join('');
+  } catch (e) {
+    target.innerHTML = '<div class="ed-project-meta" style="color:#dc2626">프로젝트를 불러오지 못했습니다.</div>';
+  }
+}
+
+function edSetProgress(step, message, percent) {
+  const box = document.getElementById('ed-progress');
+  const msg = document.getElementById('ed-progress-message');
+  const fill = document.getElementById('ed-progress-fill');
+  if (box) box.classList.remove('hidden');
+  if (msg) msg.textContent = message || step;
+  if (fill) {
+    fill.style.width = Math.max(0, Math.min(100, percent == null ? (ED_STEP_PROGRESS[step] || 0) : percent)) + '%';
+    fill.style.background = step === 'error' ? '#ef4444' : '';
+  }
+}
+
+function edHandleSseText(state, text, onEvent) {
+  state.buffer += text;
+  const chunks = state.buffer.split('\n\n');
+  state.buffer = chunks.pop() || '';
+  chunks.forEach(chunk => {
+    const line = chunk.split('\n').find(value => value.startsWith('data: '));
+    if (!line) return;
+    try { onEvent(JSON.parse(line.slice(6))); } catch (e) { console.warn('[edit-director] SSE parse', e); }
+  });
+}
+
+async function edAnalyze() {
+  if (!edSelectedFile || edBusy) return;
+  edBusy = true;
+  const button = document.getElementById('ed-analyze-btn');
+  button.disabled = true;
+  button.textContent = '분석 중...';
+  edSetProgress('uploading', '영상 업로드를 시작합니다.', 1);
+
+  const form = new FormData();
+  form.append('file', edSelectedFile);
+  form.append('video_type', document.getElementById('ed-video-type').value);
+  form.append('target_format', document.getElementById('ed-target-format').value);
+  form.append('target_length_seconds', document.getElementById('ed-target-length').value || '0');
+  form.append('purpose', document.getElementById('ed-purpose').value);
+  form.append('topic', document.getElementById('ed-topic').value.trim());
+  const strategyId = document.getElementById('ed-strategy-id').value;
+  if (strategyId) form.append('strategy_id', strategyId);
+
+  await new Promise(resolve => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/edit-projects/analyze');
+    const state = {offset: 0, buffer: ''};
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      edBusy = false;
+      button.disabled = !edSelectedFile;
+      button.textContent = 'AI 분석 제안 만들기';
+      resolve();
+    };
+    xhr.upload.onprogress = event => {
+      if (!event.lengthComputable) return;
+      const percent = Math.max(1, Math.round(event.loaded / event.total * 8));
+      edSetProgress('uploading', `서버로 업로드 중... ${(event.loaded / 1024 / 1024).toFixed(0)} / ${(event.total / 1024 / 1024).toFixed(0)}MB`, percent);
+    };
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState >= 3 && xhr.responseText.length > state.offset) {
+        const next = xhr.responseText.slice(state.offset);
+        state.offset = xhr.responseText.length;
+        edHandleSseText(state, next, data => {
+          edSetProgress(data.step, data.message, data.percent);
+          if (data.step === 'done' && data.project) {
+            edRenderProject(data.project);
+            edLoadProjects();
+            finish();
+          } else if (data.step === 'error') {
+            finish();
+          }
+        });
+      }
+      if (xhr.readyState === 4 && !finished) {
+        if (xhr.status === 401) redirectToOwnerLogin();
+        else if (xhr.status < 200 || xhr.status >= 300) {
+          let message = `업로드 요청 실패 (${xhr.status})`;
+          try { message = JSON.parse(xhr.responseText).error || message; } catch (e) {}
+          edSetProgress('error', message, 100);
+        }
+        finish();
+      }
+    };
+    xhr.onerror = () => { edSetProgress('error', '네트워크 오류로 업로드하지 못했습니다.', 100); finish(); };
+    xhr.send(form);
+  });
+}
+
+async function edReadSse(response, onEvent) {
+  if (!response.ok) {
+    let message = `서버 응답 ${response.status}`;
+    try { message = (await response.json()).error || message; } catch (e) {}
+    throw new Error(message);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const state = {buffer: ''};
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    edHandleSseText(state, decoder.decode(value, {stream: true}), onEvent);
+  }
+}
+
+async function edOpenProject(id) {
+  try {
+    const response = await fetch(`/api/edit-projects/${id}`);
+    const project = await response.json();
+    if (!response.ok) throw new Error(project.error || '프로젝트를 찾지 못했습니다.');
+    edRenderProject(project);
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+function edRenderProject(project) {
+  edCurrentProject = project;
+  const workspace = document.getElementById('ed-workspace');
+  workspace.classList.remove('hidden');
+  document.getElementById('ed-project-title').textContent = project.settings?.topic || project.source?.filename || `프로젝트 #${project.id}`;
+  const status = document.getElementById('ed-project-status');
+  status.className = `ed-status ${project.status || ''}`;
+  status.textContent = ED_STATUS_LABELS[project.status] || project.status || '-';
+  const media = project.source?.media || {};
+  document.getElementById('ed-media-meta').textContent = `${edTime(media.duration)} · ${media.width || '-'}×${media.height || '-'} · ${project.settings?.video_type || '-'}`;
+  document.getElementById('ed-transcript-preview').textContent = project.transcript?.preview || '받아쓰기 없음';
+
+  const diagnosis = project.diagnosis || {};
+  const list = (items) => (items || []).map(item => `<li>${escHtml(String(item))}</li>`).join('') || '<li>없음</li>';
+  const basis = (diagnosis.channel_basis || []).map(item =>
+    `<span class="ed-evidence-chip" title="${escHtml(item.insight || '')}">${escHtml(item.source || '근거')} · ${escHtml(item.confidence || '')}</span>`
+  ).join('');
+  document.getElementById('ed-diagnosis').innerHTML = diagnosis.overall_summary ? `
+    <div class="ed-diagnosis-summary"><b>결론</b><br>${escHtml(diagnosis.overall_summary)}</div>
+    <div class="ed-diagnosis-grid">
+      <div class="ed-diagnosis-box"><h4>강점</h4><ul>${list(diagnosis.strong_points)}</ul></div>
+      <div class="ed-diagnosis-box"><h4>약점·이탈 위험</h4><ul>${list([...(diagnosis.weak_points || []), ...(diagnosis.estimated_problems || [])])}</ul></div>
+    </div>
+    <div class="ed-diagnosis-summary"><b>추천 방향</b><br>${escHtml(diagnosis.recommended_direction || '-')}<br><small>추천 길이 ${edTime(diagnosis.suggested_final_length)} · 훅 ${edTime(diagnosis.suggested_hook_range?.start_time)}~${edTime(diagnosis.suggested_hook_range?.end_time)}</small></div>
+    <div class="ed-evidence-list">${basis}</div>
+    ${(diagnosis.data_limitations || []).length ? `<div class="ed-plan-notes"><b>데이터 한계</b><br>${(diagnosis.data_limitations || []).map(escHtml).join('<br>')}</div>` : ''}` :
+    `<div class="ed-diagnosis-summary">${escHtml(project.error || '분석 제안이 아직 없습니다.')}</div>`;
+
+  const versions = project.plan_versions || [];
+  const latest = versions[versions.length - 1] || {};
+  const plan = latest.plan || {};
+  document.getElementById('ed-plan-duration').textContent = plan.estimated_output_duration != null ? `예상 ${edTime(plan.estimated_output_duration)}${plan.create_short_highlight ? ` · 쇼츠 ${edTime(plan.estimated_short_duration)}` : ''}` : '';
+  document.getElementById('ed-segments').innerHTML = (plan.segments || []).map(item => `
+    <tr><td>${edTime(item.start_time)}~${edTime(item.end_time)}</td><td><span class="ed-action-pill">${escHtml(item.action || '')}</span></td><td>${escHtml(item.reason || '')}<br><small>${escHtml(item.expected_effect || '')}</small></td><td>${Math.round(Number(item.confidence || 0) * 100)}%</td></tr>`
+  ).join('') || '<tr><td colspan="4">타임코드 제안이 없습니다.</td></tr>';
+  const timeline = (plan.render_timeline || []).map((item, i) => `${i + 1}. ${edTime(item.source_start)}~${edTime(item.source_end)} (${item.action})`).join('<br>');
+  document.getElementById('ed-plan-notes').innerHTML = `<b>실제 승인 시 출력 순서</b><br>${timeline || '출력 구간 없음'}${(plan.editor_notes || []).length ? `<br><br><b>편집자 지시</b><br>${plan.editor_notes.map(escHtml).join('<br>')}` : ''}`;
+
+  document.getElementById('ed-conversation').innerHTML = (project.conversation || []).map(item =>
+    `<div class="ed-conversation-item ${item.role === 'user' ? 'user' : ''}">${escHtml(item.content || '')}</div>`
+  ).join('');
+  document.getElementById('ed-version-list').innerHTML = versions.map((item, index) => `
+    <div class="ed-version-item ${index === versions.length - 1 ? 'current' : ''}"><b>v${Number(item.version)} · ${escHtml(item.status || '')}</b> — ${escHtml(item.revision_summary || '')}${(item.diff || []).length ? `<br>${item.diff.map(d => `${escHtml(d.field)}: ${escHtml(d.before)} → ${escHtml(d.after)}`).join(' · ')}` : ''}</div>`
+  ).join('');
+
+  const rendering = project.status === 'rendering';
+  const approved = Number(project.approved_version || 0) === Number(latest.version || -1);
+  const approve = document.getElementById('ed-approve-btn');
+  approve.disabled = rendering || !latest.version || approved;
+  approve.textContent = approved ? `v${latest.version} 승인 완료` : '이 편집안 승인';
+  document.getElementById('ed-revise-btn').disabled = rendering || !latest.version;
+  const render = document.getElementById('ed-render-btn');
+  render.disabled = !approved || rendering;
+  render.textContent = rendering ? '편집 실행 중...' : '승인안으로 편집 실행';
+
+  const outputs = project.outputs || {};
+  const outputCard = document.getElementById('ed-output-card');
+  if (outputs.full) {
+    outputCard.classList.remove('hidden');
+    const video = document.getElementById('ed-output-video');
+    video.src = outputs.full.download_url + `?v=${encodeURIComponent(outputs.full.created_at || '')}`;
+    document.getElementById('ed-output-links').innerHTML = `
+      <a href="${outputs.full.download_url}" download>전체 편집본 다운로드</a>
+      ${outputs.short ? `<a href="${outputs.short.download_url}" download>쇼츠 하이라이트 다운로드</a>` : ''}
+      ${outputs.decision ? `<a href="${outputs.decision.download_url}" download>편집 결정 JSON</a>` : ''}`;
+    document.getElementById('ed-edit-log').innerHTML = (project.applied_edit_log || []).map(item =>
+      `<div class="ed-log-row">${item.output === 'short' ? '쇼츠' : '전체'} #${Number(item.order)} · ${edTime(item.source_start)}~${edTime(item.source_end)} · ${escHtml(item.action || '')}<br>${escHtml(item.reason || '')}</div>`
+    ).join('');
+  } else {
+    outputCard.classList.add('hidden');
+  }
+  workspace.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+async function edRevise() {
+  if (!edCurrentProject || edBusy) return;
+  const input = document.getElementById('ed-revision-input');
+  const message = input.value.trim();
+  if (!message) return;
+  edBusy = true;
+  document.getElementById('ed-revise-btn').disabled = true;
+  try {
+    const response = await fetch(`/api/edit-projects/${edCurrentProject.id}/revise`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message})
+    });
+    await edReadSse(response, data => {
+      edSetProgress(data.step, data.message, data.percent);
+      if (data.step === 'done' && data.project) { input.value = ''; edRenderProject(data.project); edLoadProjects(); }
+      if (data.step === 'error') throw new Error(data.message);
+    });
+  } catch (e) { edSetProgress('error', e.message, 100); }
+  finally { edBusy = false; document.getElementById('ed-revise-btn').disabled = false; }
+}
+
+async function edApprove() {
+  if (!edCurrentProject || edBusy) return;
+  const versions = edCurrentProject.plan_versions || [];
+  const version = versions[versions.length - 1]?.version;
+  try {
+    const response = await fetch(`/api/edit-projects/${edCurrentProject.id}/approve`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({version})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '승인하지 못했습니다.');
+    edRenderProject(data.project);
+    edLoadProjects();
+  } catch (e) { alert(e.message); }
+}
+
+async function edRender() {
+  if (!edCurrentProject || edBusy) return;
+  edBusy = true;
+  const progress = document.getElementById('ed-render-progress');
+  progress.classList.remove('hidden');
+  document.getElementById('ed-render-btn').disabled = true;
+  try {
+    const response = await fetch(`/api/edit-projects/${edCurrentProject.id}/render`, {method: 'POST'});
+    await edReadSse(response, data => {
+      document.getElementById('ed-render-message').textContent = data.message || '';
+      document.getElementById('ed-render-fill').style.width = Math.max(0, Math.min(100, Number(data.percent || 0))) + '%';
+      if (data.step === 'done' && data.project) { edRenderProject(data.project); edLoadProjects(); }
+      if (data.step === 'error') throw new Error(data.message);
+    });
+  } catch (e) {
+    document.getElementById('ed-render-message').textContent = '오류: ' + e.message;
+  } finally {
+    edBusy = false;
+    if (edCurrentProject) edOpenProject(edCurrentProject.id);
+  }
 }
 
 // ===== ✂️ 자동 컷편집 =====
@@ -1765,12 +2086,12 @@ async function loadHistory(type) {
   const typeLabels = {
     topic: '주제 추천', midform: '미드폼', shortform: '숏폼', edit: '편집 피드백',
     sns: 'SNS 변환', research: '시장조사', planning: '기획', intro: '도입부', script: '대본',
-    video_feedback: '🎬 영상 피드백'
+    video_feedback: '🎬 영상 피드백', edit_project: '🎞️ AI 편집 프로젝트'
   };
   const typeColors = {
     topic: '#ef4444', midform: '#3b82f6', shortform: '#ec4899', edit: '#8b5cf6',
     sns: '#f97316', research: '#6366f1', planning: '#f59e0b', intro: '#10b981', script: '#ef4444',
-    video_feedback: '#0ea5e9'
+    video_feedback: '#0ea5e9', edit_project: '#7c3aed'
   };
 
   list.innerHTML = '';
@@ -1789,7 +2110,7 @@ async function loadHistory(type) {
         <div class="history-keyword">"${item.keyword}"</div>
       </div>
       <div class="history-card-actions">
-        <button class="history-del-btn" onclick="deleteHistoryItem(${item.id}, this)" title="삭제">✕</button>
+        ${item.type === 'edit_project' ? '' : `<button class="history-del-btn" onclick="deleteHistoryItem(${item.id}, this)" title="삭제">✕</button>`}
       </div>
     `;
     list.appendChild(card);
@@ -1878,6 +2199,10 @@ async function loadHistoryItem(id) {
         document.getElementById('vf-progress').classList.add('hidden');
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }, 100);
+    },
+    edit_project: () => {
+      switchTab('edit-director');
+      setTimeout(() => edOpenProject(data.id), 100);
     },
     sns: () => {
       switchTab('sns'); resetToSns();
