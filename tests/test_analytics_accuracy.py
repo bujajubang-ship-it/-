@@ -255,6 +255,22 @@ class QueryConstructionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await service.get_video_analytics("2026-08-01")
 
+    async def test_full_channel_freshness_filter_is_chunked(self):
+        service = CapturingAnalyticsService()
+        video_ids = [f"video-{index}" for index in range(401)]
+        await service.get_video_analytics(
+            "2020-03-06", end_date="2026-08-18", video_ids=video_ids
+        )
+        freshness_calls = [
+            call for call in service.calls if call["dimensions"] == "day"
+        ]
+        self.assertEqual(len(freshness_calls), 3)
+        filter_sizes = [
+            len(call["filters"].removeprefix("video==").split(","))
+            for call in freshness_calls
+        ]
+        self.assertEqual(filter_sizes, [200, 200, 1])
+
     async def test_retention_query_uses_single_video_filter(self):
         service = CapturingAnalyticsService()
 
