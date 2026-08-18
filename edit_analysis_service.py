@@ -179,6 +179,8 @@ class EditAnalysisService:
             "worksheets": (self.retrieval.search_previous_worksheets, {"query": query, "limit": 5}),
             "memory": (self.retrieval.search_long_term_memory, {"query": query, "limit": 6}),
         }
+        if hasattr(self.retrieval, "get_ctr_performance"):
+            calls["ctr_performance"] = (self.retrieval.get_ctr_performance, {"limit": 30})
 
         async def run_one(name: str, method: Any, args: dict[str, Any]) -> tuple[str, Any]:
             try:
@@ -366,6 +368,7 @@ class EditAnalysisService:
 - raw_footage는 말실수·반복·대기·정적을 적극 찾고, rough_cut은 이미 만든 리듬과 의도를 존중한다.
 - 제목·썸네일·훅 전략이 있으면 본문이 그 약속을 회수하는지 확인한다.
 - editing_benchmarks의 실제 retention 중앙값과 강/약 오프닝 표본을 편집 길이·첫 훅 판단에 우선 적용한다.
+- Reporting Reach CTR 근거가 있으면 클릭을 만든 제목·썸네일 약속을 첫 5~30초가 실제로 회수하는지 교차 판단한다.
 - 비즈니스PT 지식은 단순 인용하지 말고 해당 원칙이 바꾸는 컷·훅·B-roll·자막 결정을 명시한다.
 - 연결 strategy의 제목·썸네일 약속, worksheet 촬영 우선순위, pipeline 목적과 충돌 여부를 strategy_alignment에 쓴다.
 - 데이터가 없으면 일반론을 채널 사실처럼 말하지 말고 data_limitations에 적는다.

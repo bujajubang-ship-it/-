@@ -44,6 +44,16 @@ services:
         value: "3600"
       - key: EDIT_FFMPEG_THREADS
         value: "1"
+      - key: EDIT_JOB_STALE_SECONDS
+        value: "180"
+      - key: EDIT_MULTIPART_PART_MB
+        value: "64"
+      - key: EDIT_TRANSCRIPT_CHUNK_SECONDS
+        value: "1200"
+      - key: EDIT_SIGNAL_CHUNK_SECONDS
+        value: "900"
+      - key: EDIT_SCENE_CHUNK_SECONDS
+        value: "900"
       - key: NAVER_CLIENT_ID
         sync: false
       - key: NAVER_CLIENT_SECRET

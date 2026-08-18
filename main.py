@@ -9,6 +9,8 @@ import uuid
 import subprocess
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
 import httpx
 from dotenv import load_dotenv
@@ -38,12 +40,14 @@ from strategy_repository import (
 )
 from strategy_context import generate_strategy_context
 from strategy_memory import init_strategy_memory_schema, remember_interaction
-from edit_project_store import EditProjectStore, public_project, utc_now
+from edit_project_store import EditProjectStore, public_project, transition_project, utc_now
 from media_ingest import MediaIngestService, MediaValidationError, StorageCapacityError
 from edit_analysis_service import EditAnalysisService
 from edit_plan_service import prepare_plan, plan_diff
 from edit_render_service import EditRenderService
-from edit_storage import EditStorageService
+from edit_storage import EditStorageService, object_storage_configured, object_storage_from_env
+from edit_job_queue import EditJobQueue, EditJobWorker
+from edit_pipeline import EditPipeline
 from edit_learning_service import (
     EditFeedbackService,
     record_approved_edit_memory,
@@ -95,11 +99,23 @@ COLLECTION_SCHEDULER = YouTubeCollectionScheduler()
 EDIT_RENDERING: set[int] = set()
 EDIT_RENDERING_LOCK = threading.Lock()
 EDIT_RENDER_TASKS: dict[int, asyncio.Task] = {}
+EDIT_JOB_QUEUE = EditJobQueue()
+EDIT_PIPELINE = EditPipeline()
+EDIT_JOB_WORKER = EditJobWorker(
+    EDIT_JOB_QUEUE,
+    {
+        "analysis": EDIT_PIPELINE.analysis,
+        "rendering": EDIT_PIPELINE.rendering,
+        "performance_sync": EDIT_PIPELINE.performance_sync,
+    },
+    allowed_types={"analysis", "rendering", "performance_sync"},
+)
 
 
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
     COLLECTION_SCHEDULER.start()
+    EDIT_JOB_WORKER.start()
     cleanup_task = asyncio.create_task(_edit_storage_cleanup_loop())
     try:
         yield
@@ -114,6 +130,7 @@ async def app_lifespan(_app: FastAPI):
             task.cancel()
         if render_tasks:
             await asyncio.gather(*render_tasks, return_exceptions=True)
+        await EDIT_JOB_WORKER.stop()
         await COLLECTION_SCHEDULER.stop()
 
 
@@ -1760,6 +1777,10 @@ async def _edit_storage_cleanup_loop():
         try:
             with EDIT_RENDERING_LOCK:
                 active = set(EDIT_RENDERING)
+            active.update(
+                int(job.get("project_id") or 0)
+                for job in (EDIT_JOB_QUEUE.snapshot().get("active") or [])
+            )
             result = await asyncio.to_thread(
                 EditStorageService().cleanup, in_memory_active=active
             )
@@ -1774,7 +1795,7 @@ async def _edit_storage_cleanup_loop():
 
 
 class EditStoragePreflightRequest(BaseModel):
-    file_size: int = Field(ge=0, le=20 * 1024 * 1024 * 1024)
+    file_size: int = Field(ge=0, le=100 * 1024 * 1024 * 1024)
     target_format: str = "mid_form"
 
 
@@ -1782,15 +1803,108 @@ class EditStorageCleanupRequest(BaseModel):
     dry_run: bool = False
 
 
+class EditMediaPurgeRequest(BaseModel):
+    confirmed: bool = False
+
+
+class EditMultipartStartRequest(BaseModel):
+    client_upload_id: str = Field(min_length=8, max_length=160)
+    filename: str = Field(min_length=1, max_length=240)
+    file_size: int = Field(gt=0, le=100 * 1024 * 1024 * 1024)
+    content_type: str = Field(default="video/mp4", max_length=120)
+    video_type: str = "raw_footage"
+    target_format: str = "mid_form"
+    target_length_seconds: float = Field(default=0, ge=0, le=21600)
+    purpose: str = ""
+    topic: str = Field(default="", max_length=300)
+    strategy_id: int | None = None
+
+
+class EditMultipartPartRequest(BaseModel):
+    part_number: int = Field(ge=1, le=10000)
+
+
+class EditMultipartCompleteRequest(BaseModel):
+    parts: list[dict[str, Any]] = Field(min_length=1, max_length=10000)
+
+
+def _new_edit_project(project_uuid: str, *, settings: dict, source: dict, status: str) -> dict:
+    return transition_project(
+        {
+            "schema_version": 2, "project_uuid": project_uuid, "status": status,
+            "source": source, "settings": settings, "transcript": {},
+            "analysis_signals": {"silences": [], "scene_changes": []},
+            "diagnosis": {}, "evidence_trace": [], "evidence_snapshot": {},
+            "strategy_snapshot": None, "plan_versions": [], "conversation": [],
+            "approved_version": None, "approved_at": None, "outputs": {},
+            "render_runs": [], "applied_edit_log": [], "advisory_edit_log": [],
+            "timings": {}, "approval_memory_id": None,
+            "upload_feedback": {"video_id": None, "linked_at": None, "checkpoints": []},
+            "error": None,
+        },
+        status,
+        reason="project created",
+    )
+
+
 @app.get("/api/edit-storage")
 async def edit_storage_status():
-    return await asyncio.to_thread(EditStorageService().snapshot)
+    storage, queue = await asyncio.gather(
+        asyncio.to_thread(EditStorageService().snapshot),
+        asyncio.to_thread(EDIT_JOB_QUEUE.snapshot),
+    )
+    storage["queue"] = queue
+    return storage
+
+
+@app.get("/api/edit-jobs")
+async def edit_jobs_status(project_id: int | None = None):
+    if project_id is None:
+        return await asyncio.to_thread(EDIT_JOB_QUEUE.snapshot)
+    return {
+        "project_id": project_id,
+        "jobs": await asyncio.to_thread(EDIT_JOB_QUEUE.list, project_id=project_id, limit=100),
+        "queue": await asyncio.to_thread(EDIT_JOB_QUEUE.snapshot),
+    }
+
+
+@app.post("/api/edit-jobs/{job_id}/retry")
+async def edit_jobs_retry(job_id: int):
+    try:
+        job = await asyncio.to_thread(EDIT_JOB_QUEUE.retry, job_id)
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    row = EditProjectStore().get(int(job["project_id"]))
+    if row:
+        project = row["report"]
+        next_status = "queued" if job.get("type") == "rendering" else "uploaded"
+        project = transition_project(project, next_status, lifecycle="QUEUED", reason="owner retry", job_id=job_id)
+        project["error"] = None
+        EditProjectStore().save(int(job["project_id"]), project)
+    return {"ok": True, "job": job}
 
 
 @app.post("/api/edit-storage/preflight")
 async def edit_storage_preflight(req: EditStoragePreflightRequest):
     if req.target_format not in EDIT_TARGET_FORMATS:
         return JSONResponse({"error": "목표 결과 형식이 올바르지 않습니다."}, status_code=400)
+    if object_storage_configured():
+        local = await asyncio.to_thread(EditStorageService().snapshot)
+        if not local.get("direct_upload_enabled"):
+            return await asyncio.to_thread(
+                EditStorageService().estimate_upload,
+                req.file_size,
+                target_format=req.target_format,
+            )
+        reserve = int((local.get("policy") or {}).get("reserve_bytes") or 0)
+        return {
+            "enough": int(local.get("free_bytes") or 0) >= reserve,
+            "direct_upload": True, "file_bytes": req.file_size,
+            "required_bytes": reserve, "reserve_bytes": reserve,
+            "free_bytes": local.get("free_bytes"), "shortfall_bytes": max(0, reserve - int(local.get("free_bytes") or 0)),
+        }
     return await asyncio.to_thread(
         EditStorageService().estimate_upload,
         req.file_size,
@@ -1798,10 +1912,176 @@ async def edit_storage_preflight(req: EditStoragePreflightRequest):
     )
 
 
+@app.post("/api/edit-uploads/multipart/start")
+async def edit_multipart_start(req: EditMultipartStartRequest):
+    if not object_storage_configured():
+        return JSONResponse({"error": "Object Storage 직접 업로드가 아직 설정되지 않았습니다."}, status_code=503)
+    if req.video_type not in EDIT_VIDEO_TYPES or req.target_format not in EDIT_TARGET_FORMATS or req.purpose not in EDIT_PURPOSES:
+        return JSONResponse({"error": "편집 프로젝트 설정이 올바르지 않습니다."}, status_code=400)
+    if req.strategy_id is not None and not StrategyRepository().get(req.strategy_id):
+        return JSONResponse({"error": "연결할 콘텐츠 전략을 찾지 못했습니다."}, status_code=404)
+    suffix = Path(req.filename).suffix.lower()
+    if suffix not in {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}:
+        return JSONResponse({"error": "지원하지 않는 영상 형식입니다."}, status_code=400)
+    store = EditProjectStore()
+    existing = store.find_by_client_upload_id(req.client_upload_id)
+    backend = object_storage_from_env()
+    if existing:
+        project = existing["report"]
+        upload = project.get("upload") or {}
+        parts = []
+        if upload.get("multipart_upload_id"):
+            try:
+                parts = await asyncio.to_thread(backend.list_parts, upload["object_key"], upload["multipart_upload_id"])
+            except Exception:
+                parts = []
+            return {"project_id": existing["id"], "part_size": upload.get("part_size"), "uploaded_parts": parts, "status": project.get("status")}
+        if project.get("status") != "upload_failed":
+            return {"project_id": existing["id"], "part_size": upload.get("part_size"), "uploaded_parts": parts, "status": project.get("status")}
+        backend = object_storage_from_env()
+        try:
+            upload_id = await asyncio.to_thread(
+                backend.initiate_multipart, upload["object_key"], content_type=req.content_type
+            )
+            upload["multipart_upload_id"] = upload_id
+            upload["restarted_at"] = utc_now()
+            project["upload"] = upload
+            project = transition_project(project, "uploading", lifecycle="UPLOADING", reason="multipart upload resumed")
+            store.save(int(existing["id"]), project)
+            return {"project_id": existing["id"], "part_size": upload.get("part_size"), "uploaded_parts": [], "status": "uploading"}
+        except Exception:
+            return JSONResponse({"error": "중단된 업로드를 재개하지 못했습니다."}, status_code=503)
+    project_uuid = uuid.uuid4().hex
+    settings = {
+        "video_type": req.video_type, "target_format": req.target_format,
+        "target_length_seconds": round(float(req.target_length_seconds), 3),
+        "purpose": req.purpose, "topic": req.topic.strip()[:300],
+        "content_strategy_id": req.strategy_id,
+    }
+    object_key = backend.key(project_uuid, f"source{suffix}")
+    part_size = max(8 * 1024 * 1024, int(os.getenv("EDIT_MULTIPART_PART_MB", "64")) * 1024 * 1024)
+    project = _new_edit_project(
+        project_uuid, settings=settings, status="uploading",
+        source={"filename": req.filename, "size_bytes": req.file_size, "media": {}, "storage_backend": "object", "object_key": object_key},
+    )
+    project["upload"] = {
+        "client_upload_id": req.client_upload_id, "object_key": object_key,
+        "part_size": part_size, "file_size": req.file_size, "started_at": utc_now(),
+        "multipart_upload_id": None,
+    }
+    project_id = store.create(keyword=req.topic.strip() or req.filename, project=project)
+    try:
+        upload_id = await asyncio.to_thread(backend.initiate_multipart, object_key, content_type=req.content_type)
+        project["upload"]["multipart_upload_id"] = upload_id
+        store.save(project_id, project)
+    except Exception as exc:
+        project = transition_project(project, "upload_failed", lifecycle="FAILED_UPLOAD", reason=type(exc).__name__)
+        project["error"] = "Object Storage 업로드를 시작하지 못했습니다."
+        store.save(project_id, project)
+        return JSONResponse({"error": project["error"], "project_id": project_id}, status_code=503)
+    return {"project_id": project_id, "part_size": part_size, "uploaded_parts": [], "status": "uploading"}
+
+
+def _multipart_project(project_id: int) -> tuple[EditProjectStore, dict, Any, dict]:
+    store = EditProjectStore()
+    row = store.get(project_id)
+    if not row:
+        raise KeyError("편집 프로젝트를 찾지 못했습니다.")
+    project = row["report"]
+    upload = project.get("upload") or {}
+    if not upload.get("multipart_upload_id") or not upload.get("object_key"):
+        raise RuntimeError("진행 중인 multipart upload가 없습니다.")
+    backend = object_storage_from_env()
+    if backend is None:
+        raise RuntimeError("Object Storage가 설정되지 않았습니다.")
+    return store, project, backend, upload
+
+
+@app.post("/api/edit-uploads/{project_id}/parts/sign")
+async def edit_multipart_sign(project_id: int, req: EditMultipartPartRequest):
+    try:
+        _store, project, backend, upload = _multipart_project(project_id)
+        if project.get("status") != "uploading":
+            return JSONResponse({"error": "현재 프로젝트는 업로드 중이 아닙니다."}, status_code=409)
+        url = await asyncio.to_thread(backend.presigned_part, upload["object_key"], upload["multipart_upload_id"], req.part_number)
+        return {"url": url, "part_number": req.part_number, "expires_seconds": 3600}
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception:
+        return JSONResponse({"error": "업로드 URL을 만들지 못했습니다."}, status_code=503)
+
+
+@app.get("/api/edit-uploads/{project_id}/status")
+async def edit_multipart_status(project_id: int):
+    try:
+        _store, project, backend, upload = _multipart_project(project_id)
+        parts = await asyncio.to_thread(backend.list_parts, upload["object_key"], upload["multipart_upload_id"])
+        return {"project_id": project_id, "status": project.get("status"), "part_size": upload["part_size"], "uploaded_parts": parts}
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception:
+        return JSONResponse({"error": "업로드 상태를 확인하지 못했습니다."}, status_code=503)
+
+
+@app.post("/api/edit-uploads/{project_id}/complete")
+async def edit_multipart_complete(project_id: int, req: EditMultipartCompleteRequest):
+    try:
+        store, project, backend, upload = _multipart_project(project_id)
+        metadata = await asyncio.to_thread(
+            backend.complete_multipart, upload["object_key"], upload["multipart_upload_id"], req.parts
+        )
+        if int(metadata.get("size_bytes") or 0) != int(upload.get("file_size") or 0):
+            raise RuntimeError("완료된 object 크기가 선택한 영상과 일치하지 않습니다.")
+        project["source"]["size_bytes"] = metadata["size_bytes"]
+        project["source"]["etag"] = metadata.get("etag")
+        project["upload"]["completed_at"] = utc_now()
+        project["upload"].pop("multipart_upload_id", None)
+        project = transition_project(project, "uploaded", lifecycle="UPLOADED", reason="multipart upload completed")
+        store.save(project_id, project)
+        job = EDIT_JOB_QUEUE.enqueue(
+            project_id, "analysis", idempotency_key=f"analysis:{project_id}:{metadata.get('etag') or metadata['size_bytes']}",
+            payload={"source_size": metadata["size_bytes"]}, max_attempts=3, priority=50,
+            defer_seconds=1 if EDIT_JOB_WORKER._task is not None else 0,
+        )
+        project["jobs"] = sorted(set((project.get("jobs") or []) + [int(job["job_id"])]))
+        store.save(project_id, project)
+        return {"ok": True, "project": public_project(store.get(project_id)), "job": job}
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception:
+        return JSONResponse({"error": "업로드 완료 처리에 실패했습니다. 업로드 데이터는 보존됩니다."}, status_code=503)
+
+
+@app.delete("/api/edit-uploads/{project_id}")
+async def edit_multipart_abort(project_id: int):
+    try:
+        store, project, backend, upload = _multipart_project(project_id)
+        await asyncio.to_thread(backend.abort_multipart, upload["object_key"], upload["multipart_upload_id"])
+        project = transition_project(project, "upload_failed", lifecycle="FAILED_UPLOAD", reason="owner aborted upload")
+        project["upload"]["aborted_at"] = utc_now()
+        project["upload"].pop("multipart_upload_id", None)
+        store.save(project_id, project)
+        return {"ok": True, "project": public_project(store.get(project_id))}
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+
+
 @app.post("/api/edit-storage/cleanup")
 async def edit_storage_cleanup(req: EditStorageCleanupRequest):
     with EDIT_RENDERING_LOCK:
         active = set(EDIT_RENDERING)
+    active.update(
+        int(job.get("project_id") or 0)
+        for job in (EDIT_JOB_QUEUE.snapshot().get("active") or [])
+    )
     result = await asyncio.to_thread(
         EditStorageService().cleanup,
         dry_run=req.dry_run,
@@ -1818,6 +2098,34 @@ def _edit_row(project_id: int) -> dict:
     return row
 
 
+async def _run_edit_job_without_lifespan(job: dict, store: EditProjectStore) -> None:
+    """Exercise the same durable handler in CLI/tests that omit ASGI lifespan.
+
+    Production always has the singleton worker. This fallback prevents an API
+    request from waiting forever in embedded/TestClient environments while
+    keeping the persisted job state and idempotent handler contract identical.
+    """
+    pipeline = EditPipeline(store)
+    handler = {
+        "analysis": pipeline.analysis,
+        "rendering": pipeline.rendering,
+        "performance_sync": pipeline.performance_sync,
+    }.get(str(job.get("type") or ""))
+    if not handler:
+        return
+    claimed = EDIT_JOB_QUEUE.claim("embedded-worker", allowed_types={str(job["type"])})
+    if not claimed:
+        return
+    try:
+        timings = await handler(claimed) or {}
+        EDIT_JOB_QUEUE.finish(int(claimed["job_id"]), timings=timings)
+    except Exception as exc:
+        EDIT_JOB_QUEUE.fail(
+            int(claimed["job_id"]), exc,
+            retryable=getattr(exc, "retryable", True),
+        )
+
+
 @app.get("/api/edit-projects")
 async def edit_projects_list(limit: int = 30):
     return EditProjectStore().list(limit=limit)
@@ -1829,6 +2137,17 @@ async def edit_projects_get(project_id: int):
         project = public_project(_edit_row(project_id))
         with EDIT_RENDERING_LOCK:
             project["runtime_rendering"] = project_id in EDIT_RENDERING
+        jobs = EDIT_JOB_QUEUE.list(project_id=project_id, limit=100)
+        current_job = next((job for job in jobs if job.get("status") in {"running", "queued"}), None)
+        project["last_job"] = jobs[0] if jobs else None
+        project["failed_job"] = next((job for job in jobs if job.get("status") == "failed"), None)
+        if current_job:
+            project["current_job"] = current_job
+            project["runtime_rendering"] = bool(current_job.get("type") == "rendering" and current_job.get("status") == "running")
+            if current_job.get("status") == "queued":
+                active = EDIT_JOB_QUEUE.snapshot().get("active") or []
+                queued = [job for job in active if job.get("status") == "queued"]
+                project["queue_position"] = next((index for index, job in enumerate(queued, 1) if int(job["job_id"]) == int(current_job["job_id"])), None)
         return project
     except KeyError as exc:
         return JSONResponse({"error": str(exc)}, status_code=404)
@@ -2052,10 +2371,11 @@ async def edit_projects_revise(project_id: int, req: EditPlanRevisionRequest):
     versions = project.get("plan_versions") or []
     if not versions:
         return JSONResponse({"error": "먼저 영상 분석을 완료해주세요."}, status_code=409)
-    if project.get("status") == "rendering":
+    if project.get("status") in {"queued", "rendering"}:
         return JSONResponse({"error": "렌더링 중에는 편집안을 바꿀 수 없습니다."}, status_code=409)
 
     async def stream():
+        nonlocal project
         try:
             yield sse({"step": "revising", "message": "요청을 현재 편집안과 대조합니다."})
             current = versions[-1]["plan"]
@@ -2103,7 +2423,7 @@ async def edit_projects_revise(project_id: int, req: EditPlanRevisionRequest):
                 {"role": "user", "content": message[:4000], "created_at": utc_now(), "version": version},
                 {"role": "assistant", "content": str(revised.get("revision_summary") or "수정 요청 반영")[:2000], "created_at": utc_now(), "version": version},
             ]
-            project["status"] = "revised"
+            project = transition_project(project, "revised", lifecycle="AWAITING_REVIEW", reason="owner revision")
             project["approved_version"] = None
             project["approved_at"] = None
             project["error"] = None
@@ -2132,12 +2452,13 @@ async def edit_projects_approve(project_id: int, req: EditPlanApprovalRequest):
     requested = req.version if req.version is not None else latest
     if requested != latest:
         return JSONResponse({"error": "과거 버전은 승인할 수 없습니다. 최신 수정안을 확인해주세요."}, status_code=409)
-    if project.get("status") == "rendering":
+    if project.get("status") in {"queued", "rendering"}:
         return JSONResponse({"error": "이미 렌더링 중입니다."}, status_code=409)
     project["approved_version"] = latest
     project["approved_at"] = utc_now()
-    project["status"] = "approved"
+    project = transition_project(project, "approved", lifecycle="APPROVED", reason=f"owner approved v{latest}")
     versions[-1]["status"] = "approved"
+    project["approved_plan_snapshot"] = json.loads(json.dumps(versions[-1], ensure_ascii=False))
     project["conversation"] = (project.get("conversation") or []) + [
         {"role": "user", "content": f"편집안 v{latest} 승인", "created_at": utc_now(), "version": latest}
     ]
@@ -2226,38 +2547,44 @@ async def edit_projects_render(project_id: int):
     )
     if not approved_version or not version_row:
         return JSONResponse({"error": "편집안을 먼저 승인해야 합니다."}, status_code=409)
-    with EDIT_RENDERING_LOCK:
-        runtime_active = project_id in EDIT_RENDERING
-    if project.get("status") == "rendering" and not runtime_active:
-        # A previous process cannot still own work after a new process starts.
-        # Recovery is only performed when the owner explicitly requests render.
-        project["status"] = "render_failed"
-        project["error"] = "이전 렌더링 연결이 중단됐습니다. 원본을 사용해 안전하게 다시 시작합니다."
-        EditProjectStore().save(project_id, project)
-        await asyncio.to_thread(
-            EditStorageService().cleanup, in_memory_active=set()
-        )
-    if project.get("status") not in {"approved", "render_failed", "completed"}:
+    active_job = next((job for job in EDIT_JOB_QUEUE.list(project_id=project_id, limit=100) if job.get("type") == "rendering" and job.get("status") in {"queued", "running"}), None)
+    if project.get("status") not in {"approved", "render_failed", "completed", "queued", "rendering"} and not active_job:
         return JSONResponse({"error": "현재 상태에서는 렌더링할 수 없습니다."}, status_code=409)
     store = EditProjectStore()
-    try:
-        store.resolve_media_path(project, "source")
-    except FileNotFoundError:
-        return JSONResponse(
-            {"error": "원본 보존 기간이 끝났거나 원본 파일이 없습니다. 다시 업로드해주세요."},
-            status_code=410,
-        )
+    source = project.get("source") or {}
+    if source.get("storage_backend") == "object" and source.get("object_key"):
+        try:
+            backend = object_storage_from_env()
+            await asyncio.to_thread(backend.head, source["object_key"])
+        except Exception:
+            return JSONResponse({"error": "Object Storage 원본을 확인하지 못했습니다."}, status_code=503)
+    else:
+        try:
+            store.resolve_media_path(project, "source")
+        except FileNotFoundError:
+            return JSONResponse(
+                {"error": "원본 보존 기간이 끝났거나 원본 파일이 없습니다. 다시 업로드해주세요."},
+                status_code=410,
+            )
     required_kinds = {"full", "decision"}
     if version_row["plan"].get("create_short_highlight"):
         required_kinds.add("short")
     existing_complete = True
     for kind in required_kinds:
-        try:
-            store.resolve_media_path(project, kind)
-        except FileNotFoundError:
-            existing_complete = False
-            break
-    if not existing_complete:
+        value = (project.get("outputs") or {}).get(kind) or {}
+        if value.get("storage_backend") == "object" and value.get("object_key"):
+            try:
+                await asyncio.to_thread(object_storage_from_env().head, value["object_key"])
+            except Exception:
+                existing_complete = False
+                break
+        else:
+            try:
+                store.resolve_media_path(project, kind)
+            except FileNotFoundError:
+                existing_complete = False
+                break
+    if not existing_complete and source.get("storage_backend") != "object":
         capacity = await asyncio.to_thread(
             EditStorageService(store).estimate_render, project, version_row["plan"]
         )
@@ -2271,32 +2598,45 @@ async def edit_projects_render(project_id: int):
                 },
                 status_code=507,
             )
-    with EDIT_RENDERING_LOCK:
-        if project_id in EDIT_RENDERING:
-            return JSONResponse({"error": "이미 렌더링 중입니다."}, status_code=409)
-        EDIT_RENDERING.add(project_id)
-    project["status"] = "rendering"
-    project["error"] = None
-    project.setdefault("storage_state", {})["render_started_at"] = utc_now()
-    EditProjectStore().save(project_id, project)
-    task = asyncio.create_task(
-        _run_edit_render_job(project_id, project, version_row, int(approved_version))
-    )
-    EDIT_RENDER_TASKS[project_id] = task
+    if active_job:
+        job = active_job
+    elif existing_complete:
+        return {"ok": True, "project": public_project(store.get(project_id)), "reused": True}
+    else:
+        job = EDIT_JOB_QUEUE.enqueue(
+            project_id, "rendering",
+            idempotency_key=f"render:{project_id}:v{approved_version}:run{len(project.get('render_runs') or []) + 1}",
+            payload={"approved_version": int(approved_version)}, max_attempts=2, priority=60,
+            defer_seconds=1 if EDIT_JOB_WORKER._task is not None else 0,
+        )
+        project["jobs"] = sorted(set((project.get("jobs") or []) + [int(job["job_id"])]))
+        project = transition_project(project, "queued", lifecycle="QUEUED", reason="approved render queued", job_id=int(job["job_id"]))
+        project["error"] = None
+        store.save(project_id, project)
+        if EDIT_JOB_WORKER._task is None:
+            asyncio.create_task(_run_edit_job_without_lifespan(job, store))
 
     async def stream():
         started = time.perf_counter()
         yield sse({"step": "rendering", "percent": 3, "message": "승인된 타임라인을 검증합니다."})
-        while not task.done():
+        while True:
             await asyncio.sleep(2)
             elapsed = time.perf_counter() - started
+            current = EDIT_JOB_QUEUE.get(int(job["job_id"])) or {}
+            if current.get("status") in {"completed", "failed", "cancelled"}:
+                break
+            queue_position = None
+            if current.get("status") == "queued":
+                queue_position = next((item.get("queue_position") for item in EDIT_JOB_QUEUE.snapshot().get("active") or [] if int(item["job_id"]) == int(job["job_id"])), None)
             yield sse({
-                "step": "rendering", "percent": min(92, 8 + int(elapsed / 3)),
-                "message": f"ffmpeg가 승인된 컷을 렌더링하고 있습니다. ({int(elapsed)}초)",
+                "step": "queued" if current.get("status") == "queued" else "rendering",
+                "percent": min(92, 8 + int(elapsed / 8)), "queue_position": queue_position,
+                "message": (f"안전한 작업 큐 {queue_position or '-'}번째에서 기다리고 있습니다." if current.get("status") == "queued" else f"ffmpeg가 승인된 컷을 렌더링하고 있습니다. ({int(elapsed)}초)"),
             })
         row = store.get(project_id)
         final_project = (row or {}).get("report") or {}
-        if final_project.get("status") == "completed":
+        current = EDIT_JOB_QUEUE.get(int(job["job_id"])) or {}
+        if final_project.get("status") == "completed" and current.get("status") == "completed":
             yield sse({
                 "step": "done", "percent": 100,
                 "message": "승인된 편집본을 만들었습니다.",
@@ -2318,6 +2658,10 @@ async def edit_projects_render(project_id: int):
 async def edit_projects_delete_files(project_id: int, scope: str = "all"):
     with EDIT_RENDERING_LOCK:
         active = set(EDIT_RENDERING)
+    active.update(
+        int(job.get("project_id") or 0)
+        for job in (EDIT_JOB_QUEUE.snapshot().get("active") or [])
+    )
     try:
         result = await asyncio.to_thread(
             EditStorageService().delete_project_files,
@@ -2335,14 +2679,65 @@ async def edit_projects_delete_files(project_id: int, scope: str = "all"):
     return result
 
 
+@app.post("/api/edit-projects/{project_id}/media-purge")
+async def edit_projects_media_purge(project_id: int, req: EditMediaPurgeRequest):
+    if not req.confirmed:
+        return JSONResponse(
+            {"error": "다운로드/업로드 완료 확인이 필요합니다. 편집 기록과 EDL은 계속 보존됩니다."},
+            status_code=409,
+        )
+    try:
+        row = _edit_row(project_id)
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    project = row["report"]
+    if project.get("status") not in {"completed", "published_or_downloaded", "media_purged"}:
+        return JSONResponse({"error": "완료된 편집 프로젝트만 미디어를 정리할 수 있습니다."}, status_code=409)
+    active = {
+        int(job.get("project_id") or 0)
+        for job in (EDIT_JOB_QUEUE.snapshot().get("active") or [])
+    }
+    try:
+        result = await asyncio.to_thread(
+            EditStorageService().delete_project_files,
+            project_id,
+            scope="media",
+            in_memory_active=active,
+        )
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    saved = EditProjectStore().get(project_id)
+    latest = saved["report"]
+    latest = transition_project(latest, "media_purged", lifecycle="MEDIA_PURGED", reason="owner confirmed media purge")
+    latest.setdefault("storage_state", {})["owner_confirmed_purge_at"] = utc_now()
+    EditProjectStore().save(project_id, latest)
+    result["project"] = public_project(EditProjectStore().get(project_id))
+    return result
+
+
 @app.get("/api/edit-projects/{project_id}/outputs/{kind}")
 async def edit_projects_output(project_id: int, kind: str):
     if kind not in {"full", "short", "decision"}:
         return JSONResponse({"error": "출력 파일을 찾지 못했습니다."}, status_code=404)
     try:
         row = _edit_row(project_id)
+    except KeyError:
+        return JSONResponse({"error": "출력 파일을 찾지 못했습니다."}, status_code=404)
+    output = (row["report"].get("outputs") or {}).get(kind) or {}
+    if output.get("storage_backend") == "object" and output.get("object_key"):
+        backend = object_storage_from_env()
+        if backend is None:
+            return JSONResponse({"error": "Object Storage 연결을 확인해주세요."}, status_code=503)
+        try:
+            url = await asyncio.to_thread(
+                backend.presigned_download, output["object_key"], expires_seconds=3600
+            )
+        except Exception:
+            return JSONResponse({"error": "다운로드 링크를 만들지 못했습니다."}, status_code=503)
+        return RedirectResponse(url, status_code=302)
+    try:
         path = EditProjectStore().resolve_media_path(row["report"], kind)
-    except (KeyError, FileNotFoundError):
+    except FileNotFoundError:
         return JSONResponse({"error": "출력 파일을 찾지 못했습니다."}, status_code=404)
     media_type = "application/json" if kind == "decision" else "video/mp4"
     return FileResponse(path, media_type=media_type, filename=path.name)
@@ -2364,6 +2759,10 @@ async def edit_projects_link_upload(project_id: int, req: EditProjectUploadLinkR
         "checkpoints": (project.get("upload_feedback") or {}).get("checkpoints") or [],
         "comparisons": (project.get("upload_feedback") or {}).get("comparisons") or [],
     }
+    project = transition_project(
+        project, "published_or_downloaded", lifecycle="PUBLISHED_OR_DOWNLOADED",
+        reason=f"YouTube video linked: {video_id}",
+    )
     strategy_id = (project.get("settings") or {}).get("content_strategy_id")
     if strategy_id:
         try:
@@ -2384,6 +2783,14 @@ async def edit_projects_link_upload(project_id: int, req: EditProjectUploadLinkR
         project["upload_feedback"]["comparisons"] = (
             project["upload_feedback"].get("comparisons") or []
         ) + [comparison]
+    EditProjectStore().save(project_id, project)
+    job = EDIT_JOB_QUEUE.enqueue(
+        project_id, "performance_sync",
+        idempotency_key=f"performance:{project_id}:{video_id}:{datetime.date.today().isoformat()}",
+        payload={"video_id": video_id}, max_attempts=5, priority=150,
+        defer_seconds=1 if EDIT_JOB_WORKER._task is not None else 0,
+    )
+    project["jobs"] = sorted(set((project.get("jobs") or []) + [int(job["job_id"])]))
     EditProjectStore().save(project_id, project)
     return {"ok": True, "project": public_project(EditProjectStore().get(project_id))}
 

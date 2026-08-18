@@ -102,37 +102,11 @@ class EditRenderService:
         part.unlink(missing_ok=True)
         filter_complex = self._filter(timeline, has_audio=has_audio)
         threads = str(self._thread_count())
-        command = [
-            self.ffmpeg,
-            "-hide_banner",
-            "-loglevel", "error",
-            "-filter_complex_threads", threads,
-        ]
-        for item in timeline:
-            start = float(item["source_start"])
-            segment_duration = float(item["source_end"]) - start
-            command.extend(
-                [
-                    "-threads:v", threads,
-                    "-ss", f"{start:.3f}",
-                    "-t", f"{segment_duration:.3f}",
-                    "-i", str(source),
-                ]
-            )
-        command.extend(["-filter_complex", filter_complex, "-map", "[vout]"])
-        if has_audio:
-            command.extend(["-map", "[aout]"])
-        command.extend(
-            [
-                "-c:v", "libx264", "-threads:v", threads,
-                "-preset", "veryfast", "-crf", "22",
-                "-pix_fmt", "yuv420p",
-            ]
+        command = self._command(
+            source=str(source), timeline=timeline, has_audio=has_audio,
+            threads=threads, output=["-movflags", "+faststart", str(part), "-y"],
         )
-        if has_audio:
-            command.extend(["-c:a", "aac", "-b:a", "160k"])
-        command.extend(["-movflags", "+faststart", str(part), "-y"])
-        timeout = max(300, min(7200, int(output_duration * 6) + 180))
+        timeout = max(300, min(21600, int(output_duration * 8) + 300))
         try:
             result = subprocess.run(
                 command,
@@ -159,6 +133,150 @@ class EditRenderService:
             "created_at": utc_now(),
             "codec": "h264+aac" if has_audio else "h264",
         }
+
+    def _command(
+        self, *, source: str, timeline: list[dict[str, Any]], has_audio: bool,
+        threads: str, output: list[str],
+    ) -> list[str]:
+        filter_complex = self._filter(timeline, has_audio=has_audio)
+        command = [
+            self.ffmpeg,
+            "-hide_banner",
+            "-loglevel", "error",
+            "-filter_complex_threads", threads,
+        ]
+        for item in timeline:
+            start = float(item["source_start"])
+            segment_duration = float(item["source_end"]) - start
+            command.extend(
+                [
+                    "-threads:v", threads,
+                    "-ss", f"{start:.3f}",
+                    "-t", f"{segment_duration:.3f}",
+                    "-i", source,
+                ]
+            )
+        command.extend(["-filter_complex", filter_complex, "-map", "[vout]"])
+        if has_audio:
+            command.extend(["-map", "[aout]"])
+        command.extend(
+            [
+                "-c:v", "libx264", "-threads:v", threads,
+                "-preset", "veryfast", "-crf", "22",
+                "-pix_fmt", "yuv420p",
+            ]
+        )
+        if has_audio:
+            command.extend(["-c:a", "aac", "-b:a", "160k"])
+        command.extend(output)
+        return command
+
+    def render_timeline_to_object(
+        self, *, source_url: str, backend: Any, object_key: str,
+        timeline: list[dict[str, Any]], duration: float, has_audio: bool,
+    ) -> dict[str, Any]:
+        if not self.ffmpeg:
+            raise EditRenderError("ffmpeg가 설치되어 있지 않습니다.")
+        validate_approved_timeline(timeline, duration)
+        output_duration = sum(float(item["source_end"]) - float(item["source_start"]) for item in timeline)
+        try:
+            existing = backend.head(object_key)
+        except Exception:
+            existing = None
+        if existing and int(existing.get("size_bytes") or 0) > 0:
+            return {
+                "object_key": object_key, "filename": object_key.rsplit("/", 1)[-1],
+                "duration": round(output_duration, 3), "size_bytes": existing["size_bytes"],
+                "created_at": utc_now(), "codec": "h264+aac" if has_audio else "h264",
+                "storage_backend": "object", "reused": True,
+            }
+        threads = str(self._thread_count())
+        command = self._command(
+            source=source_url, timeline=timeline, has_audio=has_audio, threads=threads,
+            output=["-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"],
+        )
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            if process.stdout is None:
+                raise EditRenderError("ffmpeg 출력 스트림을 시작하지 못했습니다.")
+            backend.client.upload_fileobj(
+                process.stdout, backend.bucket, object_key,
+                ExtraArgs={"ContentType": "video/mp4"},
+            )
+            stderr = (process.stderr.read() if process.stderr else b"")[-1200:]
+            return_code = process.wait(timeout=max(300, min(21600, int(output_duration * 8) + 300)))
+        except Exception as exc:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except Exception:
+                process.kill()
+            try:
+                backend.delete(object_key)
+            except Exception:
+                pass
+            if isinstance(exc, EditRenderError):
+                raise
+            raise EditRenderError("Object Storage 렌더 전송에 실패했습니다.") from exc
+        if return_code != 0:
+            try:
+                backend.delete(object_key)
+            except Exception:
+                pass
+            raise EditRenderError(f"편집본을 만들지 못했습니다: {stderr.decode('utf-8', 'replace')[-600:]}")
+        metadata = backend.head(object_key)
+        if int(metadata.get("size_bytes") or 0) <= 0:
+            raise EditRenderError("Object Storage 편집본이 비어 있습니다.")
+        return {
+            "object_key": object_key, "filename": object_key.rsplit("/", 1)[-1],
+            "duration": round(output_duration, 3), "size_bytes": metadata["size_bytes"],
+            "created_at": utc_now(), "codec": "h264+aac" if has_audio else "h264",
+            "storage_backend": "object",
+        }
+
+    def render_project_object(
+        self, *, source_url: str, backend: Any, project_uuid: str,
+        plan: dict[str, Any], media: dict[str, Any], version: int,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        outputs: dict[str, Any] = {}
+        edit_log: list[dict[str, Any]] = []
+        duration = float(media.get("duration") or 0)
+        has_audio = bool(media.get("has_audio"))
+        full_name = f"edited-v{version}.mp4"
+        outputs["full"] = self.render_timeline_to_object(
+            source_url=source_url, backend=backend,
+            object_key=backend.key(project_uuid, full_name),
+            timeline=plan.get("render_timeline") or [], duration=duration, has_audio=has_audio,
+        )
+        for order, item in enumerate(plan.get("render_timeline") or [], start=1):
+            edit_log.append({"order": order, "source_start": item["source_start"], "source_end": item["source_end"], "action": item.get("action") or "keep", "reason": item.get("reason") or "", "output": "full"})
+        short_timeline = plan.get("short_timeline") or []
+        if plan.get("create_short_highlight") and short_timeline:
+            short_name = f"short-v{version}.mp4"
+            outputs["short"] = self.render_timeline_to_object(
+                source_url=source_url, backend=backend,
+                object_key=backend.key(project_uuid, short_name),
+                timeline=short_timeline, duration=duration, has_audio=has_audio,
+            )
+            for order, item in enumerate(short_timeline, start=1):
+                edit_log.append({"order": order, "source_start": item["source_start"], "source_end": item["source_end"], "action": item.get("action") or "short_highlight", "reason": item.get("reason") or "", "output": "short"})
+        decision_name = f"edit-decision-v{version}.json"
+        decision_payload = {
+            "version": version, "approved_plan": plan, "applied_edit_log": edit_log,
+            "advisory_edit_log": self.advisory_log(plan),
+            "exports": {key: value for key, value in outputs.items()},
+        }
+        decision_key = backend.upload_bytes(
+            json.dumps(decision_payload, ensure_ascii=False, indent=2).encode("utf-8"),
+            project_uuid=project_uuid, filename=decision_name, content_type="application/json",
+        )
+        decision_meta = backend.head(decision_key)
+        outputs["decision"] = {
+            "object_key": decision_key, "filename": decision_name,
+            "size_bytes": decision_meta["size_bytes"], "created_at": utc_now(),
+            "content_type": "application/json", "storage_backend": "object",
+        }
+        return outputs, edit_log
 
     @staticmethod
     def _valid_existing_output(path: Path) -> bool:
