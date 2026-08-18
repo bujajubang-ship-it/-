@@ -10,7 +10,9 @@ window.fetch = async function ownerAuthenticatedFetch(input, init) {
   const response = await nativeFetch(input, init);
   const rawUrl = input instanceof Request ? input.url : String(input);
   const requestUrl = new URL(rawUrl, location.href);
-  if (requestUrl.origin === location.origin && response.status === 401) {
+  const responseUrl = new URL(response.url || requestUrl.href, location.href);
+  const loginHtmlRedirect = response.redirected && responseUrl.origin === location.origin && responseUrl.pathname === '/login';
+  if (requestUrl.origin === location.origin && (response.status === 401 || loginHtmlRedirect)) {
     redirectToOwnerLogin();
   }
   return response;
@@ -137,6 +139,52 @@ let edSelectedFile = null;
 let edCurrentProject = null;
 let edBusy = false;
 
+function edIsJsonContentType(value) {
+  return String(value || '').toLowerCase().includes('json');
+}
+
+function edIsHtmlResponse(contentType, text) {
+  return String(contentType || '').toLowerCase().includes('text/html') || /^\s*<!doctype\s+html|^\s*<html/i.test(String(text || ''));
+}
+
+function edResponseErrorMessage(response, contentType, text, fallback) {
+  let finalPath = '';
+  try { finalPath = new URL(response.url || '', location.href).pathname; } catch (e) {}
+  if (response.status === 401 || response.status === 403 || finalPath === '/login') {
+    return '로그인 세션이 만료되었습니다. 다시 로그인해주세요.';
+  }
+  if (response.status === 502 || response.status === 503 || response.status === 504) {
+    return `편집 서버가 재시작 중이거나 일시적으로 응답하지 않습니다. 잠시 후 다시 시도해주세요. (${response.status})`;
+  }
+  if (edIsHtmlResponse(contentType, text)) {
+    return `서버가 예상하지 않은 HTML 응답을 반환했습니다. 화면을 새로고침한 뒤 다시 시도해주세요. (${response.status})`;
+  }
+  return fallback || `서버 요청에 실패했습니다. (${response.status})`;
+}
+
+async function edParseJsonResponse(response, fallback) {
+  const contentType = response.headers.get('content-type') || '';
+  const text = await response.text();
+  if (!edIsJsonContentType(contentType)) {
+    throw new Error(edResponseErrorMessage(response, contentType, text, fallback));
+  }
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (e) {
+    throw new Error(`서버 JSON 응답이 올바르지 않습니다. 잠시 후 다시 시도해주세요. (${response.status})`);
+  }
+  if (!response.ok) {
+    throw new Error(data?.error || fallback || `서버 요청에 실패했습니다. (${response.status})`);
+  }
+  return data;
+}
+
+async function edFetchJson(input, init, fallback) {
+  const response = await fetch(input, init);
+  return edParseJsonResponse(response, fallback);
+}
+
 const ED_STATUS_LABELS = {
   uploaded: '업로드 완료', transcribing: '받아쓰기 중', retrieving_context: '채널 근거 조회 중',
   diagnosing: 'AI 진단 중', proposed: '최초 제안', revised: '수정안 확인 필요',
@@ -177,19 +225,21 @@ async function edLoadStrategies() {
   const select = document.getElementById('ed-strategy-id');
   if (!select || select.dataset.loaded === '1') return;
   try {
-    const rows = await fetch('/api/strategies?limit=80').then(r => r.json());
+    const rows = await edFetchJson('/api/strategies?limit=80', undefined, '콘텐츠 전략을 불러오지 못했습니다.');
     select.innerHTML = '<option value="">연결 안 함</option>' + (rows || []).map(item =>
       `<option value="${Number(item.id)}">#${Number(item.id)} · ${escHtml(item.topic || '제목 없음')}</option>`
     ).join('');
     select.dataset.loaded = '1';
-  } catch (e) {}
+  } catch (e) {
+    console.warn('[edit-director] strategy load failed');
+  }
 }
 
 async function edLoadProjects() {
   const target = document.getElementById('ed-project-list');
   if (!target) return;
   try {
-    const rows = await fetch('/api/edit-projects?limit=30').then(r => r.json());
+    const rows = await edFetchJson('/api/edit-projects?limit=30', undefined, '편집 프로젝트를 불러오지 못했습니다.');
     if (!rows.length) {
       target.innerHTML = '<div class="ed-project-meta">아직 편집 프로젝트가 없습니다.</div>';
       return;
@@ -223,7 +273,10 @@ function edHandleSseText(state, text, onEvent) {
   chunks.forEach(chunk => {
     const line = chunk.split('\n').find(value => value.startsWith('data: '));
     if (!line) return;
-    try { onEvent(JSON.parse(line.slice(6))); } catch (e) { console.warn('[edit-director] SSE parse', e); }
+    let data;
+    try { data = JSON.parse(line.slice(6)); }
+    catch (e) { console.warn('[edit-director] invalid SSE event'); return; }
+    onEvent(data);
   });
 }
 
@@ -279,11 +332,24 @@ async function edAnalyze() {
         });
       }
       if (xhr.readyState === 4 && !finished) {
-        if (xhr.status === 401) redirectToOwnerLogin();
-        else if (xhr.status < 200 || xhr.status >= 300) {
+        const contentType = xhr.getResponseHeader('content-type') || '';
+        let finalPath = '';
+        try { finalPath = new URL(xhr.responseURL || '', location.href).pathname; } catch (e) {}
+        if (xhr.status === 401 || xhr.status === 403 || finalPath === '/login') {
+          redirectToOwnerLogin();
+          edSetProgress('error', '로그인 세션이 만료되었습니다. 다시 로그인해주세요.', 100);
+        } else if (xhr.status < 200 || xhr.status >= 300) {
           let message = `업로드 요청 실패 (${xhr.status})`;
-          try { message = JSON.parse(xhr.responseText).error || message; } catch (e) {}
+          if (edIsJsonContentType(contentType)) {
+            try { message = JSON.parse(xhr.responseText || '{}').error || message; } catch (e) {}
+          } else if (xhr.status === 502 || xhr.status === 503 || xhr.status === 504) {
+            message = `편집 서버가 재시작 중이거나 일시적으로 응답하지 않습니다. 잠시 후 다시 시도해주세요. (${xhr.status})`;
+          } else if (edIsHtmlResponse(contentType, xhr.responseText)) {
+            message = `서버가 예상하지 않은 HTML 응답을 반환했습니다. 화면을 새로고침한 뒤 다시 시도해주세요. (${xhr.status})`;
+          }
           edSetProgress('error', message, 100);
+        } else if (!String(contentType).toLowerCase().includes('text/event-stream')) {
+          edSetProgress('error', '서버가 예상한 분석 스트림을 반환하지 않았습니다. 화면을 새로고침한 뒤 다시 시도해주세요.', 100);
         }
         finish();
       }
@@ -294,10 +360,15 @@ async function edAnalyze() {
 }
 
 async function edReadSse(response, onEvent) {
-  if (!response.ok) {
-    let message = `서버 응답 ${response.status}`;
-    try { message = (await response.json()).error || message; } catch (e) {}
-    throw new Error(message);
+  const contentType = response.headers.get('content-type') || '';
+  if (!response.ok || !String(contentType).toLowerCase().includes('text/event-stream')) {
+    const text = await response.text();
+    if (edIsJsonContentType(contentType)) {
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch (e) {}
+      throw new Error(data.error || edResponseErrorMessage(response, contentType, text, `서버 응답 ${response.status}`));
+    }
+    throw new Error(edResponseErrorMessage(response, contentType, text, `서버 응답 ${response.status}`));
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -311,12 +382,10 @@ async function edReadSse(response, onEvent) {
 
 async function edOpenProject(id) {
   try {
-    const response = await fetch(`/api/edit-projects/${id}`);
-    const project = await response.json();
-    if (!response.ok) throw new Error(project.error || '프로젝트를 찾지 못했습니다.');
+    const project = await edFetchJson(`/api/edit-projects/${id}`, undefined, '프로젝트를 불러오지 못했습니다.');
     edRenderProject(project);
   } catch (e) {
-    alert(e.message);
+    edSetProgress('error', e.message, 100);
   }
 }
 
@@ -426,23 +495,23 @@ async function edLinkUpload() {
   const videoId = input.value.trim();
   if (!videoId) return;
   try {
-    const response = await fetch(`/api/edit-projects/${edCurrentProject.id}/link-upload`, {
+    const data = await edFetchJson(`/api/edit-projects/${edCurrentProject.id}/link-upload`, {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({video_id: videoId})
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || '영상을 연결하지 못했습니다.');
+    }, '영상을 연결하지 못했습니다.');
     if (data.project) edRenderProject(data.project);
-  } catch (e) { alert(e.message); }
+  } catch (e) { edSetProgress('error', e.message, 100); }
 }
 
 async function edRefreshFeedback() {
   if (!edCurrentProject) return;
   try {
-    const response = await fetch(`/api/edit-projects/${edCurrentProject.id}/feedback/refresh`, {method: 'POST'});
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || '성과를 갱신하지 못했습니다.');
+    const data = await edFetchJson(
+      `/api/edit-projects/${edCurrentProject.id}/feedback/refresh`,
+      {method: 'POST'},
+      '성과를 갱신하지 못했습니다.'
+    );
     if (data.project) edRenderProject(data.project);
-  } catch (e) { alert(e.message); }
+  } catch (e) { edSetProgress('error', e.message, 100); }
 }
 
 async function edRevise() {
@@ -470,14 +539,12 @@ async function edApprove() {
   const versions = edCurrentProject.plan_versions || [];
   const version = versions[versions.length - 1]?.version;
   try {
-    const response = await fetch(`/api/edit-projects/${edCurrentProject.id}/approve`, {
+    const data = await edFetchJson(`/api/edit-projects/${edCurrentProject.id}/approve`, {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({version})
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || '승인하지 못했습니다.');
+    }, '편집안을 승인하지 못했습니다.');
     edRenderProject(data.project);
     edLoadProjects();
-  } catch (e) { alert(e.message); }
+  } catch (e) { edSetProgress('error', e.message, 100); }
 }
 
 async function edRender() {
@@ -486,19 +553,26 @@ async function edRender() {
   const progress = document.getElementById('ed-render-progress');
   progress.classList.remove('hidden');
   document.getElementById('ed-render-btn').disabled = true;
+  let renderCompleted = false;
   try {
     const response = await fetch(`/api/edit-projects/${edCurrentProject.id}/render`, {method: 'POST'});
     await edReadSse(response, data => {
       document.getElementById('ed-render-message').textContent = data.message || '';
       document.getElementById('ed-render-fill').style.width = Math.max(0, Math.min(100, Number(data.percent || 0))) + '%';
-      if (data.step === 'done' && data.project) { edRenderProject(data.project); edLoadProjects(); }
+      if (data.step === 'done' && data.project) {
+        renderCompleted = true;
+        edRenderProject(data.project);
+        edLoadProjects();
+      }
       if (data.step === 'error') throw new Error(data.message);
     });
   } catch (e) {
     document.getElementById('ed-render-message').textContent = '오류: ' + e.message;
   } finally {
     edBusy = false;
-    if (edCurrentProject) edOpenProject(edCurrentProject.id);
+    // The final SSE event already contains the complete project. Avoid a redundant
+    // request exactly when Render may recycle the instance after a long render.
+    if (edCurrentProject && !renderCompleted) await edOpenProject(edCurrentProject.id);
   }
 }
 

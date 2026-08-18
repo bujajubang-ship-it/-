@@ -366,6 +366,36 @@ class FakeAnalysis:
         return {"revision_summary": "사용자 요청 반영", "plan": plan}
 
 
+class EditDirectorResponseContractTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(main.app)
+
+    def test_edit_api_http_and_validation_errors_are_json(self):
+        cases = (
+            self.client.get("/api/edit-projects/not-an-integer"),
+            self.client.put("/api/edit-projects/999999/approve"),
+            self.client.get("/api/edit-projects/999999/missing-route"),
+        )
+        for response in cases:
+            with self.subTest(status=response.status_code):
+                self.assertIn(response.status_code, (404, 405, 422))
+                self.assertTrue(response.headers["content-type"].startswith("application/json"))
+                self.assertIsInstance(response.json().get("error"), str)
+                self.assertEqual(response.headers.get("x-content-type-options"), "nosniff")
+
+    def test_editor_frontend_guards_json_and_sse_and_skips_success_refresh(self):
+        source = (Path(__file__).parents[1] / "static" / "app.js").read_text(encoding="utf-8")
+        editor = source[source.index("let edSelectedFile"):source.index("// ===== ✂️ 자동 컷편집 =====")]
+        self.assertIn("async function edParseJsonResponse", editor)
+        self.assertIn("async function edFetchJson", editor)
+        self.assertIn("text/event-stream", editor)
+        self.assertIn("서버가 예상하지 않은 HTML 응답", editor)
+        self.assertIn("if (edCurrentProject && !renderCompleted)", editor)
+        self.assertNotIn("await response.json()", editor)
+        self.assertNotIn(".then(r => r.json())", editor)
+        self.assertNotIn("Unexpected token", editor)
+
+
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg required")
 class EditDirectorApiTests(unittest.TestCase):
     def setUp(self):

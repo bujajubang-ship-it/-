@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -270,7 +271,11 @@ class RetrievalTests(RepositoryFixture):
         self.retrieval = StrategyRetrieval(self.connect, analytics=self.analytics, strategies=self.strategies)
 
     def test_retrieves_only_matching_sources_with_freshness(self):
-        recent = self.retrieval.get_recent_channel_performance({"days": None, "limit": 10})
+        # Keep this fixed-date fixture independent from the wall clock.
+        with patch("strategy_brain.retrieval.date") as mocked_date:
+            mocked_date.today.return_value = date(2026, 8, 18)
+            mocked_date.fromisoformat.side_effect = date.fromisoformat
+            recent = self.retrieval.get_recent_channel_performance({"days": None, "limit": 10})
         self.assertEqual(recent.sample_size, 1)
         self.assertEqual(recent.freshness, "current")
         self.assertEqual(recent.data[0]["video_id"], "video-a")
