@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
+import time
 from dataclasses import asdict, dataclass
 from typing import Any, Awaitable, Callable, Union
 
@@ -34,6 +36,7 @@ class ToolDefinition:
 class ReadOnlyToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolDefinition] = {}
+        self.trace: list[dict[str, Any]] = []
 
     def register(self, definition: ToolDefinition) -> None:
         if not definition.read_only:
@@ -63,17 +66,41 @@ class ReadOnlyToolRegistry:
         ]
 
     async def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        started = time.perf_counter()
         if name not in self._tools:
-            return asdict(
+            result = asdict(
                 EvidenceEnvelope(
                     data=None,
                     source=f"tool:{name}",
                     unavailable_reason="Tool is not registered for this deployment.",
                 )
             )
-        result = self._tools[name].handler(arguments)
-        if inspect.isawaitable(result):
-            result = await result
+            self.trace.append(
+                {"tool": name, "source": result["source"], "duration_ms": 0, "unavailable": True}
+            )
+            return result
+        handler = self._tools[name].handler
+        if inspect.iscoroutinefunction(handler):
+            result = await handler(arguments)
+        else:
+            # SQLite retrievals are independent reads.  Running synchronous
+            # handlers in worker threads lets a prefetched/tool round overlap
+            # them without blocking SSE progress delivery.
+            result = await asyncio.to_thread(handler, arguments)
+            if inspect.isawaitable(result):
+                result = await result
         if isinstance(result, EvidenceEnvelope):
-            return asdict(result)
-        return asdict(EvidenceEnvelope(data=result, source=f"tool:{name}"))
+            envelope = asdict(result)
+        else:
+            envelope = asdict(EvidenceEnvelope(data=result, source=f"tool:{name}"))
+        self.trace.append(
+            {
+                "tool": name,
+                "source": envelope.get("source"),
+                "duration_ms": round((time.perf_counter() - started) * 1000),
+                "sample_size": envelope.get("sample_size"),
+                "freshness": envelope.get("freshness"),
+                "unavailable": bool(envelope.get("unavailable_reason")),
+            }
+        )
+        return envelope
