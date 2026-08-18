@@ -96,12 +96,19 @@ def validate_production_sqlite_path(raw_path: str | None) -> Path:
 def validate_existing_sqlite_database(
     path: Path, *, required_tables: frozenset[str] = PRODUCTION_REQUIRED_TABLES
 ) -> None:
-    """Open read-only, run quick_check, and verify the established six tables."""
+    """Open an existing DB without creating it, recover, and verify its schema.
 
-    uri = f"file:{quote(str(path), safe='/')}?mode=ro"
+    ``mode=rw`` is intentional.  A process shutdown can leave a valid rollback
+    journal that SQLite must replay before any reader can safely inspect the
+    database.  Opening that state with ``mode=ro`` turns normal crash recovery
+    into a permanent startup failure (``attempt to write a readonly database``).
+    ``mode=rw`` still refuses to create a missing/replacement database, while
+    allowing SQLite's atomic journal recovery before ``quick_check`` runs.
+    """
+
+    uri = f"file:{quote(str(path), safe='/')}?mode=rw"
     try:
         with closing(sqlite3.connect(uri, uri=True, timeout=5)) as connection:
-            connection.execute("PRAGMA query_only = ON")
             check_messages = [
                 str(row[0])
                 for row in connection.execute("PRAGMA quick_check").fetchall()
