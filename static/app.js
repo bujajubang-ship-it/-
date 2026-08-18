@@ -354,20 +354,47 @@ function makeProgressStepper(stepsElId) {
   };
 }
 
-async function streamSSE(url, body, addStep, onDone, onError) {
+async function streamSSE(url, body, addStep, onDone, onError, options = {}) {
   let buffer = '';
+  const overallTimeoutMs = options.overallTimeoutMs || 600000;
+  const idleTimeoutMs = options.idleTimeoutMs || 90000;
+  const controller = new AbortController();
+  let overallTimedOut = false;
+  const overallTimer = setTimeout(() => {
+    overallTimedOut = true;
+    controller.abort();
+  }, overallTimeoutMs);
   try {
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
-    if (!resp.ok) throw new Error(`서버 오류: ${resp.status}`);
+    if (!resp.ok) {
+      throw new Error(`서버 오류: ${resp.status}`);
+    }
+    const contentType = resp.headers.get('content-type') || '';
+    if (!contentType.includes('text/event-stream')) {
+      throw new Error('로그인 세션 또는 서버 스트리밍 설정을 확인해주세요.');
+    }
+    if (!resp.body) throw new Error('서버가 스트리밍 응답을 시작하지 못했습니다.');
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) { onError('서버 연결이 끊어졌습니다. 다시 시도해주세요.'); return; }
+      let idleTimer;
+      const idleTimeout = new Promise((_, reject) => {
+        idleTimer = setTimeout(() => reject(new Error(
+          `서버 응답이 ${Math.round(idleTimeoutMs / 1000)}초 이상 멈췄습니다. 다시 시도해주세요.`
+        )), idleTimeoutMs);
+      });
+      const { done, value } = await Promise.race([reader.read(), idleTimeout]);
+      clearTimeout(idleTimer);
+      if (done) {
+        buffer += decoder.decode();
+        onError('서버가 완료 신호 없이 연결을 종료했습니다. 다시 시도해주세요.');
+        return;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop();
@@ -379,11 +406,19 @@ async function streamSSE(url, body, addStep, onDone, onError) {
           if (data.step === 'done') { onDone(data); return; }
           if (data.step === 'ping') continue;
           if (data.message) addStep(data.message, 'active');
-        } catch (e) {}
+        } catch (e) {
+          throw new Error('서버 응답을 해석하지 못했습니다. 다시 시도해주세요.');
+        }
       }
     }
   } catch (err) {
-    onError(err.message);
+    controller.abort();
+    const message = overallTimedOut
+      ? `요청이 ${Math.round(overallTimeoutMs / 60000)}분 제한 시간을 초과했습니다. 다시 시도해주세요.`
+      : (err.message || '서버 연결 중 오류가 발생했습니다.');
+    onError(message);
+  } finally {
+    clearTimeout(overallTimer);
   }
 }
 
@@ -2195,7 +2230,8 @@ function startChannelAnalyze() {
       document.getElementById('channel-btn').disabled = false;
       document.getElementById('channel-input-section').classList.remove('hidden');
       document.getElementById('channel-progress-section').classList.add('hidden');
-    }
+    },
+    { overallTimeoutMs: 300000, idleTimeoutMs: 45000 }
   );
 }
 

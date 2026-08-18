@@ -34,14 +34,18 @@ def init_db():
 def save_history(type_: str, keyword: str, report: dict):
     import json
     conn = get_db()
-    cursor = conn.execute(
-        "INSERT INTO history (type, keyword, report) VALUES (?, ?, ?)",
-        (type_, keyword, json.dumps(report, ensure_ascii=False)),
-    )
-    conn.commit()
-    history_id = int(cursor.lastrowid)
-    conn.close()
-    return history_id
+    try:
+        cursor = conn.execute(
+            "INSERT INTO history (type, keyword, report) VALUES (?, ?, ?)",
+            (type_, keyword, json.dumps(report, ensure_ascii=False)),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def list_history(type_: str = "", limit: int = 50):

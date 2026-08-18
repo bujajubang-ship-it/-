@@ -72,6 +72,10 @@ class OpenAIResponsesProvider:
             }
         if request.metadata:
             kwargs["metadata"] = request.metadata
+        if request.mode.value == "channel_analysis":
+            # The channel button is an interactive flow. This is ample for the
+            # strict report schema while preventing an unexpectedly long answer.
+            kwargs["max_output_tokens"] = 8000
         kwargs["text"] = {
             **kwargs.get("text", {}),
             "verbosity": "high" if request.mode.value in {"strategy_chat", "planning", "midform_planning", "shortform_planning", "worksheet", "postmortem"} else "medium",

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import time
 import uuid
 import subprocess
 from contextlib import asynccontextmanager
@@ -23,6 +24,7 @@ from youtube_service import YouTubeService
 from analytics_service import AnalyticsService
 from analytics_repository import AnalyticsRepository, init_analytics_schema
 from analytics_sync import AnalyticsSyncCoordinator
+from channel_analysis import analyze_channel_with_fallback, fetch_retention_sample
 from collection_service import YouTubeCollectionScheduler, YouTubeCollectionService
 from strategy_brain.chat_service import StrategyChatService
 from strategy_repository import (
@@ -1162,11 +1164,28 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
     youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
 
     async def stream():
+        request_id = uuid.uuid4().hex[:10]
+        started_at = time.monotonic()
+        stage = "validation"
+
+        def elapsed() -> float:
+            return round(time.monotonic() - started_at, 2)
+
+        def log_stage(name: str, **fields):
+            details = " ".join(f"{key}={value}" for key, value in fields.items())
+            print(
+                f"[channel-analyze:{request_id}] stage={name} elapsed={elapsed()}s {details}".rstrip(),
+                flush=True,
+            )
+
         if not youtube_key:
-            yield sse({"step": "error", "message": ".env 파일에 YOUTUBE_API_KEY를 설정해주세요."})
+            yield sse({"step": "error", "message": "YouTube Data API 설정을 확인해주세요."})
             return
-        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-            yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
+        if not (
+            os.getenv("OPENAI_API_KEY", "").strip()
+            or os.getenv("ANTHROPIC_API_KEY", "").strip()
+        ):
+            yield sse({"step": "error", "message": "AI 분석 API 설정을 확인해주세요."})
             return
         if not req.channel_id.strip():
             yield sse({"step": "error", "message": "채널 ID를 입력해주세요."})
@@ -1176,15 +1195,29 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
         analytics = AnalyticsService()
         analytics_repository = AnalyticsRepository()
         try:
+            log_stage("started")
+            stage = "youtube_data"
             yield sse({"step": "channel_info", "message": "채널 정보 불러오는 중..."})
-            channel_info, videos = await yt.get_channel_videos(req.channel_id.strip(), max_videos=100)
+            channel_info, videos = await asyncio.wait_for(
+                yt.get_channel_videos(req.channel_id.strip(), max_videos=100),
+                timeout=45,
+            )
+            log_stage("youtube_data_done", videos=len(videos))
             yield sse({"step": "videos_loaded", "message": f"영상 {len(videos)}개 데이터 수집 완료!"})
 
             analytics_data = []
+            retention_data = []
+            retention_failed = 0
             if analytics.is_configured():
-                yield sse({"step": "analytics", "message": "Analytics 성과 데이터 수집 중..."})
+                stage = "youtube_analytics"
+                yield sse({
+                    "step": "analytics",
+                    "message": "Analytics와 retention 데이터를 병렬 수집 중...",
+                })
                 try:
-                    analytics_channel_id = await analytics.get_authenticated_channel_id()
+                    analytics_channel_id = await asyncio.wait_for(
+                        analytics.get_authenticated_channel_id(), timeout=30
+                    )
                     if analytics_channel_id != channel_info.get("id"):
                         yield sse({
                             "step": "analytics_warn",
@@ -1192,11 +1225,26 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
                         })
                     else:
                         coordinator = AnalyticsSyncCoordinator(analytics, analytics_repository)
-                        analytics_data = await coordinator.sync_video_snapshots(
-                            videos,
-                            period_start="2020-01-01",
-                            period_end=datetime.date.today().isoformat(),
+                        period_end = datetime.date.today().isoformat()
+                        metrics_task = asyncio.create_task(
+                            coordinator.sync_video_snapshots(
+                                videos,
+                                period_start="2020-01-01",
+                                period_end=period_end,
+                            )
                         )
+                        retention_task = asyncio.create_task(
+                            fetch_retention_sample(
+                                analytics,
+                                videos,
+                                period_start="2020-01-01",
+                                period_end=period_end,
+                            )
+                        )
+                        analytics_data, retention_result = await asyncio.wait_for(
+                            asyncio.gather(metrics_task, retention_task), timeout=55
+                        )
+                        retention_data, retention_failed = retention_result
                     # video_id 기준으로 videos에 병합
                     analytics_map = {a["video_id"]: a for a in analytics_data}
                     for v in videos:
@@ -1225,13 +1273,41 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
                         )
                         v["analytics_data_through"] = a.get("data_through")
                         v["analytics_sample_size"] = a.get("sample_size", 0)
-                    yield sse({"step": "analytics_done", "message": f"Analytics {len(analytics_data)}개 영상 데이터 수집 완료!"})
+                    log_stage(
+                        "youtube_analytics_done",
+                        metrics=len(analytics_data),
+                        retention=len(retention_data),
+                        retention_failed=retention_failed,
+                    )
+                    yield sse({
+                        "step": "analytics_done",
+                        "message": (
+                            f"Analytics {len(analytics_data)}개 · retention "
+                            f"{len(retention_data)}개 수집 완료!"
+                        ),
+                    })
                 except Exception as ae:
-                    yield sse({"step": "analytics_warn", "message": f"Analytics 데이터 수집 실패 (공개 데이터로 진행): {ae}"})
+                    log_stage("youtube_analytics_partial", error=type(ae).__name__)
+                    yield sse({
+                        "step": "analytics_warn",
+                        "message": "Analytics 일부를 가져오지 못해 공개 데이터로 계속 진행합니다.",
+                    })
 
             # Thumbnail reach is only loaded from previously imported official
-            # channel_reach_basic_a1 reports. It is never inferred from views.
-            reach_map = analytics_repository.get_reach_for_videos([v["id"] for v in videos])
+            # channel_reach_basic_a1 reports. A user click never creates or waits
+            # for a Reporting API job; that belongs to scheduled collection.
+            stage = "reporting_cache"
+            try:
+                reach_map = analytics_repository.get_reach_for_videos(
+                    [v["id"] for v in videos]
+                )
+            except Exception as reach_error:
+                reach_map = {}
+                log_stage("reporting_cache_skipped", error=type(reach_error).__name__)
+                yield sse({
+                    "step": "reporting_warn",
+                    "message": "공식 Reach 캐시는 건너뛰고 Analytics 데이터로 계속 진행합니다.",
+                })
             for v in videos:
                 reach = reach_map.get(v["id"])
                 if reach:
@@ -1254,13 +1330,24 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
                     v["ctr_source"] = "youtube_reporting_api:channel_reach_basic_a1"
                     v["ctr_sample_size"] = 0
 
-            yield sse({"step": "analyzing", "message": "AI 분석 중... (30~60초 소요)"})
-            analyzer = Analyzer()
-            _task = asyncio.create_task(analyzer.analyze_channel(channel_info, videos))
+            log_stage("reporting_cache_done", reach_rows=len(reach_map))
+            stage = "ai_analysis"
+            yield sse({
+                "step": "analyzing",
+                "message": "GPT-5.6 Sol이 채널 전략을 생성 중...",
+            })
+            _task = asyncio.create_task(
+                analyze_channel_with_fallback(channel_info, videos, retention_data)
+            )
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(3)
-            report = _task.result()
+            report, ai_provider, openai_error = _task.result()
+            log_stage(
+                "ai_analysis_done",
+                provider=ai_provider,
+                openai_fallback_reason=openai_error or "none",
+            )
             report["channel_info"] = channel_info
             report["total_analyzed"] = len(videos)
             report["has_analytics"] = bool(analytics_data)
@@ -1275,12 +1362,51 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
                 "thumbnail_reach_sample_size": sum(
                     video.get("ctr_sample_size", 0) for video in videos
                 ),
+                "reporting_mode": "cached_async_collection_only",
+                "retention_source": "youtube_analytics_api_v2",
+                "retention_requested": len(retention_data) + retention_failed,
+                "retention_sample_size": len(retention_data),
+                "retention_failed": retention_failed,
+                "ai_provider": ai_provider,
+                "openai_fallback_reason": openai_error,
             }
-            save_history("channel", channel_info.get("title", req.channel_id), report)
-            yield sse({"step": "done", "report": report})
+            stage = "history_save"
+            history_id = await asyncio.wait_for(
+                asyncio.to_thread(
+                    save_history,
+                    "channel",
+                    channel_info.get("title", req.channel_id),
+                    report,
+                ),
+                timeout=35,
+            )
+            report["analysis_metadata"] = {
+                "request_id": request_id,
+                "elapsed_seconds": elapsed(),
+                "history_id": history_id,
+            }
+            log_stage("done", history_id=history_id)
+            yield sse({
+                "step": "done",
+                "report": report,
+                "elapsed_seconds": elapsed(),
+                "history_id": history_id,
+            })
 
         except Exception as e:
-            yield sse({"step": "error", "message": str(e)})
+            log_stage("failed", failed_stage=stage, error=type(e).__name__)
+            messages = {
+                "youtube_data": "YouTube 채널 데이터를 가져오지 못했습니다.",
+                "youtube_analytics": "YouTube Analytics 조회가 완료되지 않았습니다.",
+                "ai_analysis": "AI 분석이 제한 시간 안에 완료되지 않았습니다.",
+                "history_save": "분석 결과 저장이 완료되지 않았습니다.",
+            }
+            yield sse({
+                "step": "error",
+                "message": messages.get(stage, "채널 분석을 완료하지 못했습니다."),
+                "failed_stage": stage,
+                "request_id": request_id,
+            })
         finally:
             await yt.close()
             await analytics.close()

@@ -141,8 +141,13 @@ class DatabaseRuntime:
         if self.production:
             # mode=rw permits normal CRUD but refuses to create a replacement DB.
             uri = f"file:{quote(str(self.path), safe='/')}?mode=rw"
-            return sqlite3.connect(uri, uri=True)
-        return sqlite3.connect(str(self.path))
+            connection = sqlite3.connect(uri, uri=True, timeout=30)
+        else:
+            connection = sqlite3.connect(str(self.path), timeout=30)
+        # Normal concurrent reads and short background writes should wait for a
+        # bounded period instead of immediately failing with "database is locked".
+        connection.execute("PRAGMA busy_timeout = 30000")
+        return connection
 
 
 def load_database_runtime() -> DatabaseRuntime:
