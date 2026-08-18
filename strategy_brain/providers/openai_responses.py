@@ -83,7 +83,11 @@ class OpenAIResponsesProvider:
             kwargs["max_output_tokens"] = 12000
         kwargs["text"] = {
             **kwargs.get("text", {}),
-            "verbosity": "high" if request.mode.value in {"planning", "midform_planning", "shortform_planning", "worksheet", "postmortem"} else "medium",
+            "verbosity": (
+                "high"
+                if request.mode.value in {"planning", "midform_planning", "shortform_planning", "worksheet", "postmortem"}
+                else "low" if request.mode.value == "strategy_chat" else "medium"
+            ),
         }
         return kwargs
 
