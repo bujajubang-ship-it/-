@@ -384,6 +384,13 @@ async function edCheckSelectedCapacity() {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({file_size: edSelectedFile.size, target_format: document.getElementById('ed-target-format').value})
     }, '저장공간 사전 검사를 완료하지 못했습니다.');
+    // The tab initialization and the owner's first file selection can race.
+    // Preflight is authoritative for this exact request, so retain its direct
+    // upload decision instead of falling back to a Render-proxied upload while
+    // the storage dashboard request is still in flight.
+    if (data.direct_upload) {
+      edStorageState = {...(edStorageState || {}), direct_upload_enabled: true};
+    }
     edCapacityOkay = Boolean(data.enough);
     if (warning) {
       warning.textContent = data.enough
@@ -486,6 +493,10 @@ async function edAnalyze() {
   button.disabled = true;
   button.textContent = '분석 중...';
   edSetProgress('uploading', '영상 업로드를 시작합니다.', 1);
+
+  // Do not proxy a potentially multi-gigabyte original through Render merely
+  // because the asynchronous dashboard request has not completed yet.
+  if (!edStorageState) await edLoadStorage();
 
   if (edStorageState?.direct_upload_enabled) {
     try {
