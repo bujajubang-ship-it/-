@@ -71,7 +71,7 @@ class ProductionPathPolicyTests(unittest.TestCase):
             ):
                 validate_production_sqlite_path(str(candidate))
 
-    def test_normal_render_configuration_runs_read_only_preflight(self):
+    def test_normal_render_configuration_runs_existing_database_preflight(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "existing.db"
             create_sqlite(database_path)
@@ -93,6 +93,24 @@ class ProductionPathPolicyTests(unittest.TestCase):
 
 
 class ProductionDatabasePreflightTests(unittest.TestCase):
+    def test_preflight_uses_existing_read_write_mode_for_journal_recovery(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "complete.db"
+            create_sqlite(path)
+            real_connect = sqlite3.connect
+            calls = []
+
+            def capturing_connect(database, *args, **kwargs):
+                calls.append((str(database), dict(kwargs)))
+                return real_connect(database, *args, **kwargs)
+
+            with patch("db_safety.sqlite3.connect", side_effect=capturing_connect):
+                validate_existing_sqlite_database(path)
+
+            self.assertEqual(len(calls), 1)
+            self.assertIn("?mode=rw", calls[0][0])
+            self.assertTrue(calls[0][1]["uri"])
+
     def test_invalid_sqlite_file_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "invalid.db"

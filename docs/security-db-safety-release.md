@@ -32,6 +32,11 @@ or `render.yaml`, and do not recreate or edit the Persistent Disk resource.
 `RENDER` is supplied by Render and is not a value to invent locally.
 `DATABASE_URL` is ignored by this release and should not be used for cutover.
 
+The production preflight opens the already-existing database with SQLite
+`mode=rw`: this still refuses to create a replacement file, but permits atomic
+rollback-journal recovery after an interrupted worker. It then runs
+`quick_check` and verifies all required tables before application startup.
+
 Generate the password hash interactively on the Mac:
 
 ```bash
