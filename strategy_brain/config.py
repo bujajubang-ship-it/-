@@ -19,14 +19,10 @@ def _env_bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class BrainSettings:
-    """Runtime settings for the future shared strategy brain.
+    """Runtime settings for the shared strategy brain and rollback provider."""
 
-    The provider defaults to Anthropic while migration is in progress.  The
-    requested OpenAI model and effort are already the OpenAI defaults, so a
-    mode can be enabled without hard-coding model configuration in a route.
-    """
-
-    provider: str = "anthropic"
+    provider: str = "openai"
+    fallback_provider: str = "anthropic"
     openai_model: str = "gpt-5.6-sol"
     reasoning_effort: str = "max"
     store_responses: bool = False
@@ -35,7 +31,10 @@ class BrainSettings:
     @classmethod
     def from_env(cls) -> "BrainSettings":
         settings = cls(
-            provider=os.getenv("STRATEGY_BRAIN_PROVIDER", "anthropic").strip().lower(),
+            provider=os.getenv("STRATEGY_BRAIN_PROVIDER", "openai").strip().lower(),
+            fallback_provider=os.getenv(
+                "STRATEGY_BRAIN_FALLBACK_PROVIDER", "anthropic"
+            ).strip().lower(),
             openai_model=os.getenv("OPENAI_MODEL", "gpt-5.6-sol").strip(),
             reasoning_effort=os.getenv(
                 "OPENAI_REASONING_EFFORT", "max"
@@ -50,6 +49,10 @@ class BrainSettings:
         if self.provider not in ALLOWED_PROVIDERS:
             raise ValueError(
                 "STRATEGY_BRAIN_PROVIDER must be 'anthropic' or 'openai'."
+            )
+        if self.fallback_provider not in ALLOWED_PROVIDERS:
+            raise ValueError(
+                "STRATEGY_BRAIN_FALLBACK_PROVIDER must be 'anthropic' or 'openai'."
             )
         if not self.openai_model:
             raise ValueError("OPENAI_MODEL must not be empty.")

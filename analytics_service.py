@@ -382,6 +382,11 @@ class AnalyticsService:
         self._access_token = str(token)
         return self._access_token
 
+    async def get_access_token(self) -> str:
+        """Return a valid OAuth access token for sibling Google API clients."""
+
+        return await self._get_access_token()
+
     async def _query(self, params: Dict[str, Any]) -> Dict[str, Any]:
         token = await self._get_access_token()
         try:

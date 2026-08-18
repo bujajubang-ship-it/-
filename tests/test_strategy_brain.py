@@ -30,7 +30,8 @@ class BrainSettingsTests(unittest.TestCase):
     def test_requested_openai_defaults_are_configurable(self):
         with patch.dict(os.environ, {}, clear=True):
             settings = BrainSettings.from_env()
-        self.assertEqual(settings.provider, "anthropic")
+        self.assertEqual(settings.provider, "openai")
+        self.assertEqual(settings.fallback_provider, "anthropic")
         self.assertEqual(settings.openai_model, "gpt-5.6-sol")
         self.assertEqual(settings.reasoning_effort, "max")
         self.assertFalse(settings.store_responses)
@@ -119,7 +120,7 @@ class OpenAIProviderTests(unittest.IsolatedAsyncioTestCase):
 
         call = client.responses.calls[0]
         self.assertEqual(call["model"], "gpt-5.6-sol")
-        self.assertEqual(call["reasoning"], {"effort": "max"})
+        self.assertEqual(call["reasoning"], {"effort": "max", "context": "all_turns"})
         self.assertFalse(call["store"])
         self.assertTrue(call["text"]["format"]["strict"])
         self.assertEqual(result.parsed, {"answer": "ok"})

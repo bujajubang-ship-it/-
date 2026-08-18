@@ -37,6 +37,7 @@ class StrategyBrain:
             output_schema=output_schema,
             output_schema_name=output_schema_name,
             metadata=metadata or {},
+            reasoning_effort=spec.reasoning_effort,
         )
 
     async def run(self, request: BrainRequest) -> BrainResult:

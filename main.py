@@ -6,13 +6,14 @@ import re
 import secrets
 import uuid
 import subprocess
+from contextlib import asynccontextmanager
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -22,6 +23,14 @@ from youtube_service import YouTubeService
 from analytics_service import AnalyticsService
 from analytics_repository import AnalyticsRepository, init_analytics_schema
 from analytics_sync import AnalyticsSyncCoordinator
+from collection_service import YouTubeCollectionScheduler, YouTubeCollectionService
+from strategy_brain.chat_service import StrategyChatService
+from strategy_repository import (
+    StrategyRepository,
+    capture_legacy_strategy,
+    init_strategy_schema,
+)
+from strategy_context import generate_strategy_context
 from viewtrap_service import ViewTrapService
 from heatmap_service import fetch_heatmap, summarize_for_prompt
 from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
@@ -32,6 +41,7 @@ from database import (init_db, save_history, list_history, get_history, delete_h
 init_db()
 init_pipeline()
 init_analytics_schema()
+init_strategy_schema()
 
 # ===== 영상 피드백 legacy 보조 사본 =====
 # 운영 source of truth는 Render Starter의 /data Persistent Disk에 있는
@@ -63,13 +73,24 @@ def _vf_backup():
         pass
 
 
-app = FastAPI(title="YouTube Content Researcher")
+COLLECTION_SCHEDULER = YouTubeCollectionScheduler()
+
+
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    COLLECTION_SCHEDULER.start()
+    try:
+        yield
+    finally:
+        await COLLECTION_SCHEDULER.stop()
+
+
+app = FastAPI(title="YouTube Content Researcher", lifespan=app_lifespan)
 OWNER_AUTH = OwnerAuthenticator(OwnerAuthSettings.from_env())
 app.add_middleware(OwnerAuthMiddleware, authenticator=OWNER_AUTH)
 
 if OWNER_AUTH.settings.production and not os.getenv("PIPELINE_REMIND_SECRET", "").strip():
     raise RuntimeError("PIPELINE_REMIND_SECRET is required in production.")
-
 
 async def fetch_product_info(url: str) -> str:
     """스마트스토어 상품 페이지에서 제품 정보 추출"""
@@ -210,6 +231,29 @@ class OwnerLoginRequest(BaseModel):
     password: str
 
 
+class StrategyGenerateRequest(BaseModel):
+    prompt: str
+    content_type: str = "미드폼"
+    existing_strategy_id: int | None = None
+
+
+class StrategyCreateRequest(BaseModel):
+    topic: str
+    content_type: str = "미드폼"
+    strategy: dict
+    evidence: list = Field(default_factory=list)
+    status: str = "draft"
+    source_history_id: int | None = None
+    pipeline_id: int | None = None
+    worksheet_id: int | None = None
+
+
+class StrategyVideoLinkRequest(BaseModel):
+    video_id: str
+    title_at_upload: str = ""
+    thumbnail_text: str = ""
+
+
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -294,10 +338,14 @@ async def health():
     return {
         "youtube": bool(os.getenv("YOUTUBE_API_KEY")),
         "anthropic": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "openai": bool(os.getenv("OPENAI_API_KEY")),
+        "strategy_provider": os.getenv("STRATEGY_BRAIN_PROVIDER", "openai"),
         "naver": bool(os.getenv("NAVER_CLIENT_ID")),
         "analytics": bool(os.getenv("OAUTH_REFRESH_TOKEN")),
         "viewtrap": bool(os.getenv("VIEWTRAP_TOKEN")),
         "my_channel_id": os.getenv("MY_CHANNEL_ID", ""),
+        "collection": AnalyticsRepository().get_collection_status(),
+        "revision": os.getenv("RENDER_GIT_COMMIT", "local")[:12],
     }
 
 
@@ -312,6 +360,124 @@ async def viewtrap_ref():
         svc.get_hot_videos(),
     )
     return {"top_videos": top[:20], "hot_videos": hot[:20]}
+
+
+@app.get("/api/analytics/status")
+async def analytics_collection_status():
+    status = AnalyticsRepository().get_collection_status()
+    data_through = status.get("data_through")
+    lag_days = None
+    if data_through:
+        try:
+            lag_days = (datetime.date.today() - datetime.date.fromisoformat(data_through[:10])).days
+        except ValueError:
+            pass
+    status["data_lag_days"] = lag_days
+    status["is_stale"] = lag_days is None or lag_days > 7
+    status["scheduler_enabled"] = COLLECTION_SCHEDULER.enabled
+    return status
+
+
+@app.post("/api/analytics/refresh")
+async def analytics_manual_refresh():
+    async def stream():
+        yield sse({"step": "starting", "message": "YouTube 전체 성과 snapshot 수집을 시작합니다."})
+        try:
+            result = await YouTubeCollectionService().run_once(trigger="manual")
+            yield sse({"step": "done", **result.public_dict()})
+        except Exception as exc:
+            yield sse({"step": "error", "message": str(exc)[:300]})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/strategies/generate")
+async def strategy_generate(req: StrategyGenerateRequest):
+    if not req.prompt.strip():
+        return JSONResponse({"error": "기획 요청을 입력해주세요."}, status_code=400)
+    repository = StrategyRepository()
+    existing = None
+    if req.existing_strategy_id is not None:
+        existing_row = repository.get(req.existing_strategy_id)
+        if not existing_row:
+            return JSONResponse({"error": "기존 전략을 찾지 못했습니다."}, status_code=404)
+        existing = existing_row.get("strategy")
+    try:
+        strategy = await generate_strategy_context(
+            req.prompt, content_type=req.content_type, existing=existing
+        )
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:300]}, status_code=503)
+    evidence = strategy.get("evidence") or []
+    if req.existing_strategy_id is not None:
+        repository.update(
+            req.existing_strategy_id,
+            {"topic": strategy.get("topic") or req.prompt, "strategy": strategy, "evidence": evidence},
+        )
+        strategy_id = req.existing_strategy_id
+    else:
+        strategy_id = repository.create(
+            topic=strategy.get("topic") or req.prompt,
+            content_type=req.content_type,
+            strategy=strategy,
+            evidence=evidence,
+        )
+    return {"id": strategy_id, "strategy": strategy}
+
+
+@app.get("/api/strategies")
+async def strategies_list(q: str = "", limit: int = 50):
+    return StrategyRepository().list(limit=max(1, min(limit, 100)), query=q)
+
+
+@app.post("/api/strategies")
+async def strategies_create(req: StrategyCreateRequest):
+    strategy_id = StrategyRepository().create(
+        topic=req.topic,
+        content_type=req.content_type,
+        strategy=req.strategy,
+        evidence=req.evidence,
+        status=req.status,
+        source_history_id=req.source_history_id,
+        pipeline_id=req.pipeline_id,
+        worksheet_id=req.worksheet_id,
+    )
+    return {"id": strategy_id}
+
+
+@app.get("/api/strategies/{strategy_id}")
+async def strategies_get(strategy_id: int):
+    item = StrategyRepository().get(strategy_id)
+    if not item:
+        return JSONResponse({"error": "전략을 찾지 못했습니다."}, status_code=404)
+    return item
+
+
+@app.put("/api/strategies/{strategy_id}")
+async def strategies_update(strategy_id: int, request: Request):
+    fields = await request.json()
+    if not StrategyRepository().update(strategy_id, fields):
+        return JSONResponse({"error": "수정할 전략을 찾지 못했거나 필드가 없습니다."}, status_code=404)
+    return {"ok": True}
+
+
+@app.post("/api/strategies/{strategy_id}/link-video")
+async def strategy_link_video(strategy_id: int, req: StrategyVideoLinkRequest):
+    repository = StrategyRepository()
+    if not repository.get(strategy_id):
+        return JSONResponse({"error": "전략을 찾지 못했습니다."}, status_code=404)
+    repository.link_video(
+        strategy_id,
+        req.video_id.strip(),
+        title_at_upload=req.title_at_upload,
+        thumbnail_text=req.thumbnail_text,
+    )
+    repository.refresh_performance_checkpoints()
+    return {"ok": True}
 
 
 @app.post("/api/analyze")
@@ -517,8 +683,11 @@ async def planning(req: PlanningRequest):
             yield sse({"step": "analyzing", "message": "AI가 문제 정의 + 제목 + 썸네일 기획 중... (30초 내외)"})
             analyzer = Analyzer()
             report = await analyzer.analyze_planning(req.keyword, req.product_desc, req.market_insights)
-            save_history("planning", req.keyword, report)
-            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+            history_id = save_history("planning", req.keyword, report)
+            strategy_id = capture_legacy_strategy(
+                "기획", req.keyword, report, source_history_id=history_id
+            )
+            yield sse({"step": "done", "report": report, "keyword": req.keyword, "strategy_id": strategy_id})
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
 
@@ -640,8 +809,11 @@ async def shortform(req: ShortformRequest):
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)
             report = _task.result()
-            save_history("shortform", req.keyword, report)
-            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+            history_id = save_history("shortform", req.keyword, report)
+            strategy_id = capture_legacy_strategy(
+                "숏폼", req.keyword, report, source_history_id=history_id
+            )
+            yield sse({"step": "done", "report": report, "keyword": req.keyword, "strategy_id": strategy_id})
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
         finally:
@@ -739,8 +911,11 @@ async def midform(req: MidformRequest):
             if viewtrap_refs:
                 report["viewtrap_top"] = viewtrap_refs.get("top_videos", [])[:10]
                 report["viewtrap_hot"] = viewtrap_refs.get("hot_videos", [])[:10]
-            save_history("midform", req.keyword, report)
-            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+            history_id = save_history("midform", req.keyword, report)
+            strategy_id = capture_legacy_strategy(
+                "미드폼", req.keyword, report, source_history_id=history_id
+            )
+            yield sse({"step": "done", "report": report, "keyword": req.keyword, "strategy_id": strategy_id})
 
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
@@ -1347,20 +1522,23 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     async def stream():
-        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-            yield sse({"error": "ANTHROPIC_API_KEY가 설정되지 않았습니다."})
-            return
         if not req.message.strip():
             yield sse({"error": "메시지를 입력해주세요."})
             return
         try:
-            analyzer = Analyzer()
-            kb = list_knowledge(active_only=True)  # 지식탭 활성 지식 전체를 채팅에 주입
-            async for token in analyzer.chat_stream(req.message, req.history, req.attachments, kb):
-                yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            service = StrategyChatService()
+            active_provider = None
+            async for provider, token in service.stream(
+                req.message, req.history, req.attachments
+            ):
+                if provider != active_provider:
+                    active_provider = provider
+                    yield sse({"provider": provider})
+                yield sse({"token": token})
             yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+            message = str(e)[:300] or "AI 전략가 요청에 실패했습니다."
+            yield f"data: {json.dumps({'error': message}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         stream(),

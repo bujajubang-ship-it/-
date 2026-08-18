@@ -892,7 +892,7 @@
             <div class="chat-ai-avatar">AI</div>
             <div>
               <div class="chat-ai-name">부자주방 콘텐츠 전략가</div>
-              <div class="chat-ai-desc">미드폼·숏폼·제목·썸네일·업로드 전략 전담 AI 파트너</div>
+              <div class="chat-ai-desc" id="chat-provider-status">GPT-5.6 Sol · 채널 성과·기획·지식·피드백을 직접 조회</div>
             </div>
           </div>
           <button class="chat-clear-btn" onclick="newChat()">＋ 새 대화</button>
@@ -901,13 +901,13 @@
           <div class="chat-bubble assistant">
             <div class="chat-bubble-inner">
               안녕하세요! 부자주방 채널 전담 콘텐츠 전략 파트너입니다. 👋<br><br>
-              미드폼·숏폼 기획, 제목·썸네일 전략, 업로드 타이밍, 채널 성장까지 궁금한 것은 무엇이든 물어보세요.<br><br>
-              채널 목표(CTR 10%+, 30초 이탈률 40% 미만)와 풀링·키 콘텐츠 전략을 기반으로 구체적으로 답변드립니다.
+              질문에 맞는 실제 채널 성과, retention, 과거 기획, 지식과 파이프라인을 직접 찾아 연결해서 답합니다.<br><br>
+              데이터와 생각이 다르면 반박하고, 주제부터 촬영 워크시트와 업로드 KPI까지 한 전략으로 제안합니다.
               <div class="chat-suggestion-chips">
-                <span class="chat-chip" onclick="sendChatChip(this)">릴스 훅 잡는 법</span>
-                <span class="chat-chip" onclick="sendChatChip(this)">조회수 오르는 제목 공식</span>
-                <span class="chat-chip" onclick="sendChatChip(this)">풀링 vs 키 콘텐츠 차이</span>
-                <span class="chat-chip" onclick="sendChatChip(this)">업로드 최적 요일·시간</span>
+                <span class="chat-chip" onclick="sendChatChip(this)">다음 영상 뭐 찍을까?</span>
+                <span class="chat-chip" onclick="sendChatChip(this)">요즘 채널 방향이 맞아?</span>
+                <span class="chat-chip" onclick="sendChatChip(this)">최근 실패 패턴 먼저 알려줘</span>
+                <span class="chat-chip" onclick="sendChatChip(this)">촬영 워크시트까지 기획해줘</span>
               </div>
             </div>
           </div>
@@ -1319,13 +1319,14 @@
 
   </main>
 
-  <script src="app.js?v=20260817a"></script>
+  <script src="app.js?v=20260818-strategy"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');
       const items = [
         { key: 'youtube', label: 'YouTube API' },
         { key: 'anthropic', label: 'Claude AI' },
+        { key: 'openai', label: 'GPT 전략가' },
         { key: 'naver', label: '네이버 카페' },
         { key: 'analytics', label: 'Analytics' },
       ];

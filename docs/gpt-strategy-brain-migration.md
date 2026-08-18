@@ -64,9 +64,9 @@ AI 추측은 자동으로 `confirmed_rule`이 되지 않는다. 사용자 승인
 
 1. Claude inventory, 공통 계약, mode/tool registry와 eval baseline 작성
 2. PostgreSQL 영속성, Analytics 정확성, 인증/CORS/secret 정리
-3. OpenAI Responses provider를 feature flag 뒤에 추가하고 어떤 endpoint에도 기본 적용하지 않음
-4. 전략 상담 shadow test 후 선택적 GPT 전환
-5. 미드폼·숏폼·제목·썸네일·워크시트 전환
+3. OpenAI Responses provider를 provider switch 뒤에 추가
+4. 전략 상담을 GPT 기본값으로 전환하고 기존 Claude fallback 유지
+5. 미드폼·숏폼 결과를 공통 전략 context에 연결
 6. 영상/편집 피드백 전환과 프레임·content context 연결
 7. 채널 분석·주제추천·나머지 구조화 기능 전환
 8. 내부 retrieval tool과 BusinessPT·과거 콘텐츠 검색 강화
@@ -77,12 +77,12 @@ AI 추측은 자동으로 `confirmed_rule`이 되지 않는다. 사용자 승인
 
 ## rollout과 rollback
 
-- `STRATEGY_BRAIN_PROVIDER=anthropic|openai`를 전체 kill switch로 둔다.
+- `STRATEGY_BRAIN_PROVIDER=anthropic|openai`를 전체 kill switch로 둔다. 현재 기본값은 `openai`다.
 - 기능별 `GPT_MODE_*_ENABLED` flag로 한 mode씩 전환한다.
 - shadow mode에서는 GPT 결과를 사용자에게 노출하지 않고 Claude 결과와 평가한다.
 - 기존 endpoint 응답 schema를 adapter가 유지한다.
 - Claude SDK와 기존 `Analyzer`는 전체 회귀 검증 전까지 삭제하지 않는다.
-- DB 파괴적 migration, Render 환경변수 변경, production 배포는 별도 승인 단계로 둔다.
+- DB migration은 additive-only로 유지하고 production 배포 전 SQLite backup/integrity gate를 통과한다.
 
 ## 품질 gate
 

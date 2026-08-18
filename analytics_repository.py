@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import uuid
 from contextlib import closing
@@ -24,6 +25,7 @@ ANALYTICS_TABLES = frozenset(
         "video_retention_points",
         "youtube_reporting_jobs",
         "youtube_reporting_files",
+        "youtube_collection_state",
     }
 )
 
@@ -189,11 +191,33 @@ SCHEMA_STATEMENTS = (
         FOREIGN KEY(job_id) REFERENCES youtube_reporting_jobs(job_id)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS youtube_collection_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        status TEXT NOT NULL DEFAULT 'idle',
+        lock_owner TEXT,
+        lock_until TEXT,
+        last_started_at TEXT,
+        last_completed_at TEXT,
+        last_success_at TEXT,
+        data_through TEXT,
+        videos_seen INTEGER,
+        snapshots_saved INTEGER,
+        retention_saved INTEGER,
+        reach_imported INTEGER,
+        error_message TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}'
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_video_snapshots_video_collected ON video_metric_snapshots(video_id, collected_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON video_daily_metrics(metric_date, video_id)",
     "CREATE INDEX IF NOT EXISTS idx_reach_metrics_date ON video_reach_metrics(metric_date, video_id)",
     "CREATE INDEX IF NOT EXISTS idx_retention_video_collected ON video_retention_snapshots(video_id, collected_at DESC)",
 )
+
+
+def _fingerprint(value: Any) -> str:
+    return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
 
 
 def utc_now() -> str:
@@ -233,6 +257,45 @@ class AnalyticsRepository:
             connection.execute("PRAGMA foreign_keys = ON")
             for statement in SCHEMA_STATEMENTS:
                 connection.execute(statement)
+            # Additive migrations only. Existing application tables and rows are
+            # deliberately untouched so this can run safely against /data/history.db.
+            metric_columns = {
+                str(row[1])
+                for row in connection.execute(
+                    "PRAGMA table_info(video_metric_snapshots)"
+                ).fetchall()
+            }
+            if "snapshot_fingerprint" not in metric_columns:
+                connection.execute(
+                    "ALTER TABLE video_metric_snapshots ADD COLUMN snapshot_fingerprint TEXT"
+                )
+            retention_columns = {
+                str(row[1])
+                for row in connection.execute(
+                    "PRAGMA table_info(video_retention_snapshots)"
+                ).fetchall()
+            }
+            if "snapshot_fingerprint" not in retention_columns:
+                connection.execute(
+                    "ALTER TABLE video_retention_snapshots ADD COLUMN snapshot_fingerprint TEXT"
+                )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_video_metric_snapshot_fingerprint
+                ON video_metric_snapshots(video_id, snapshot_fingerprint)
+                WHERE snapshot_fingerprint IS NOT NULL
+                """
+            )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_video_retention_snapshot_fingerprint
+                ON video_retention_snapshots(video_id, snapshot_fingerprint)
+                WHERE snapshot_fingerprint IS NOT NULL
+                """
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO youtube_collection_state(singleton) VALUES (1)"
+            )
             connection.commit()
 
     def begin_sync_run(
@@ -301,6 +364,9 @@ class AnalyticsRepository:
             return
         with closing(self._connect()) as connection:
             for video in rows:
+                video_id = video.get("video_id") or video.get("id")
+                if not video_id:
+                    continue
                 connection.execute(
                     """
                     INSERT INTO youtube_videos (
@@ -316,10 +382,10 @@ class AnalyticsRepository:
                         last_synced_at=excluded.last_synced_at
                     """,
                     (
-                        video["video_id"],
+                        video_id,
                         video.get("title") or "",
                         video.get("published_at"),
-                        video.get("duration_seconds"),
+                        video.get("duration_seconds", video.get("duration_sec")),
                         video.get("content_id"),
                         video.get("source") or "youtube_data_api_v3",
                         collected_at,
@@ -334,9 +400,10 @@ class AnalyticsRepository:
         *,
         sync_run_id: str,
         collected_at: str,
-    ) -> None:
+    ) -> int:
         if not rows:
-            return
+            return 0
+        saved = 0
         with closing(self._connect()) as connection:
             connection.execute("PRAGMA foreign_keys = ON")
             try:
@@ -373,17 +440,26 @@ class AnalyticsRepository:
                             "formula": "subscribers_gained / views",
                         },
                     }
-                    connection.execute(
+                    snapshot_fingerprint = _fingerprint(
+                        {
+                            "period_start": row["period_start"],
+                            "data_through": row.get("data_through"),
+                            "values": values,
+                            "statuses": _status_map(metrics),
+                        }
+                    )
+                    cursor = connection.execute(
                         """
-                        INSERT INTO video_metric_snapshots (
+                        INSERT OR IGNORE INTO video_metric_snapshots (
                             video_id, snapshot_label, period_start, period_end,
                             data_through, collected_at, source, sync_run_id,
                             views, likes, comments, shares, subscribers_gained,
                             subscribers_lost, estimated_minutes_watched,
                             average_view_duration, average_view_percentage,
                             view_growth_per_day, subscriber_conversion,
-                            metric_statuses_json, derivation_metadata_json, sample_size
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            metric_statuses_json, derivation_metadata_json, sample_size,
+                            snapshot_fingerprint
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         """,
                         (
                             row["video_id"],
@@ -408,12 +484,15 @@ class AnalyticsRepository:
                             _json(_status_map(metrics)),
                             _json(derivation_metadata),
                             int(row.get("sample_size") or 0),
+                            snapshot_fingerprint,
                         ),
                     )
+                    saved += max(cursor.rowcount, 0)
                 connection.commit()
             except Exception:
                 connection.rollback()
                 raise
+        return saved
 
     def save_daily_metrics(
         self,
@@ -547,18 +626,27 @@ class AnalyticsRepository:
         estimate_metadata: Dict[str, Any],
         sync_run_id: str,
         collected_at: str,
-    ) -> int:
+    ) -> int | None:
         with closing(self._connect()) as connection:
             connection.execute("PRAGMA foreign_keys = ON")
             try:
+                snapshot_fingerprint = _fingerprint(
+                    {
+                        "period_start": result["period_start"],
+                        "data_through": result.get("data_through"),
+                        "status": result["status"],
+                        "points": result.get("points") or [],
+                    }
+                )
                 cursor = connection.execute(
                     """
-                    INSERT INTO video_retention_snapshots (
+                    INSERT OR IGNORE INTO video_retention_snapshots (
                         video_id, period_start, period_end, data_through,
                         collected_at, source, status, duration_seconds,
                         retention_30s_estimate, estimate_metadata_json,
-                        point_count, sync_run_id, error_message
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        point_count, sync_run_id, error_message,
+                        snapshot_fingerprint
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         result["video_id"],
@@ -574,8 +662,12 @@ class AnalyticsRepository:
                         len(result.get("points") or []),
                         sync_run_id,
                         result.get("error_message"),
+                        snapshot_fingerprint,
                     ),
                 )
+                if cursor.rowcount == 0:
+                    connection.commit()
+                    return None
                 snapshot_id = int(cursor.lastrowid)
                 for point in result.get("points") or []:
                     connection.execute(
@@ -829,6 +921,128 @@ class AnalyticsRepository:
             "data_through": max(data_through_values) if data_through_values else None,
             "source": "video_metric_snapshots",
         }
+
+    def get_collection_status(self) -> Dict[str, Any]:
+        with closing(self._connect()) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT * FROM youtube_collection_state WHERE singleton=1"
+            ).fetchone()
+        if not row:
+            return {"status": "not_initialized"}
+        item = dict(row)
+        item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+        item.pop("lock_owner", None)
+        return item
+
+    def acquire_collection_lease(
+        self, owner: str, *, now: str, lock_until: str
+    ) -> bool:
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE youtube_collection_state
+                SET status='running', lock_owner=?, lock_until=?,
+                    last_started_at=?, error_message=NULL
+                WHERE singleton=1
+                  AND (lock_until IS NULL OR lock_until < ? OR lock_owner=?)
+                """,
+                (owner, lock_until, now, now, owner),
+            )
+            connection.commit()
+            return cursor.rowcount == 1
+
+    def finish_collection(
+        self,
+        owner: str,
+        *,
+        status: str,
+        completed_at: str,
+        data_through: str | None = None,
+        videos_seen: int | None = None,
+        snapshots_saved: int | None = None,
+        retention_saved: int | None = None,
+        reach_imported: int | None = None,
+        error_message: str | None = None,
+        metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE youtube_collection_state
+                SET status=?, lock_owner=NULL, lock_until=NULL,
+                    last_completed_at=?,
+                    last_success_at=CASE WHEN ?='success' THEN ? ELSE last_success_at END,
+                    data_through=COALESCE(?, data_through),
+                    videos_seen=COALESCE(?, videos_seen),
+                    snapshots_saved=COALESCE(?, snapshots_saved),
+                    retention_saved=COALESCE(?, retention_saved),
+                    reach_imported=COALESCE(?, reach_imported),
+                    error_message=?, metadata_json=?
+                WHERE singleton=1 AND lock_owner=?
+                """,
+                (
+                    status,
+                    completed_at,
+                    status,
+                    completed_at,
+                    data_through,
+                    videos_seen,
+                    snapshots_saved,
+                    retention_saved,
+                    reach_imported,
+                    error_message,
+                    _json(metadata or {}),
+                    owner,
+                ),
+            )
+            connection.commit()
+
+    def videos_needing_retention(self, *, limit: int = 20) -> List[Dict[str, Any]]:
+        with closing(self._connect()) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                """
+                SELECT v.*,
+                       MAX(r.collected_at) AS retention_collected_at,
+                       COUNT(r.id) AS retention_snapshot_count
+                FROM youtube_videos v
+                LEFT JOIN video_retention_snapshots r ON r.video_id=v.video_id
+                GROUP BY v.video_id
+                ORDER BY CASE WHEN COUNT(r.id)=0 THEN 0 ELSE 1 END,
+                         MAX(r.collected_at), v.published_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_video_metric_history(
+        self, video_id: str, *, limit: int = 30
+    ) -> List[Dict[str, Any]]:
+        with closing(self._connect()) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                """
+                SELECT * FROM video_metric_snapshots
+                WHERE video_id=?
+                ORDER BY collected_at DESC, id DESC LIMIT ?
+                """,
+                (video_id, limit),
+            ).fetchall()
+        result = []
+        for raw in rows:
+            item = dict(raw)
+            item["metric_statuses"] = json.loads(
+                item.pop("metric_statuses_json") or "{}"
+            )
+            item["derivation_metadata"] = json.loads(
+                item.pop("derivation_metadata_json") or "{}"
+            )
+            item.pop("snapshot_fingerprint", None)
+            result.append(item)
+        return result
 
 
 def init_analytics_schema() -> None:

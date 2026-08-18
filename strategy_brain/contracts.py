@@ -47,6 +47,7 @@ class BrainRequest:
     output_schema: dict[str, Any] | None = None
     output_schema_name: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
+    reasoning_effort: str | None = None
 
 
 @dataclass

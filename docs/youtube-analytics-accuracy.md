@@ -58,17 +58,17 @@ through date, sync run ID, and metric status metadata where applicable.
    altering the established table schemas.
 5. Re-run integrity check and compare the six original table schemas/counts.
 
-## Google setup still requiring owner approval
+## Google setup
 
-The local code does not create jobs or change OAuth configuration. Before Reach
-data can be collected in production, the owner must:
+The collector idempotently creates one Reach job when none exists and never
+deletes jobs or reports. Before Reach data can be collected in production:
 
 1. Confirm YouTube Reporting API is enabled for the existing Google project.
 2. Confirm the existing refresh token grants the currently required read-only
    scopes. The repository already requests both `youtube.readonly` and
    `yt-analytics.readonly`; no automatic reauthorization occurs.
-3. Explicitly approve creating one `channel_reach_basic_a1` reporting job.
-4. Approve a scheduler only after the first report is manually verified.
+3. Let the first collection create one `channel_reach_basic_a1` reporting job.
+4. Verify the first downloaded report and weighted CTR once it becomes available.
 
 No Render change is needed for fixture tests. Production collection continues
 to use the existing `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, and

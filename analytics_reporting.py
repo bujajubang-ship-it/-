@@ -1,7 +1,7 @@
-"""YouTube Reporting API Reach parsing and read-only report retrieval.
+"""YouTube Reporting API Reach parsing and report retrieval.
 
 The Reach report is the authoritative source for thumbnail impressions and CTR.
-This module intentionally does not expose a jobs.create operation.
+Job creation is idempotent: a Reach job is created only when none exists.
 """
 
 from __future__ import annotations
@@ -32,6 +32,23 @@ REACH_METRICS = (
     "video_thumbnail_impressions_ctr",
 )
 CTR_UNIT = "percent"
+
+
+def _safe_google_error(response: httpx.Response) -> str:
+    """Return only Google machine-readable error codes, never response messages."""
+
+    codes: list[str] = []
+    try:
+        error = response.json().get("error") or {}
+        if isinstance(error.get("status"), str):
+            codes.append(error["status"])
+        for detail in error.get("details") or []:
+            if isinstance(detail, dict) and isinstance(detail.get("reason"), str):
+                codes.append(detail["reason"])
+    except (AttributeError, TypeError, ValueError):
+        pass
+    unique = list(dict.fromkeys(code for code in codes if code))
+    return f" ({', '.join(unique[:3])})" if unique else ""
 
 
 def _parse_nonnegative_int(raw: str, *, column: str) -> int:
@@ -209,7 +226,7 @@ def aggregate_reach_by_video(rows: Iterable[Dict[str, Any]]) -> Dict[str, Dict[s
 
 
 class YouTubeReportingService:
-    """Read-only Reporting API client. It cannot create or delete jobs."""
+    """Reporting API client. It never deletes jobs or reports."""
 
     def __init__(
         self,
@@ -233,7 +250,8 @@ class YouTubeReportingService:
             payload = response.json()
         except httpx.HTTPStatusError as exc:
             raise AnalyticsApiError(
-                f"YouTube Reporting request failed with HTTP {exc.response.status_code}"
+                "YouTube Reporting request failed with HTTP "
+                f"{exc.response.status_code}{_safe_google_error(exc.response)}"
             ) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise AnalyticsApiError("YouTube Reporting request failed") from exc
@@ -248,6 +266,32 @@ class YouTubeReportingService:
             for job in jobs
             if job.get("reportTypeId") == REACH_REPORT_TYPE_ID
         ]
+
+    async def ensure_reach_job(self, *, name: str = "bujajubang-reach") -> Dict[str, Any]:
+        """Return the existing Reach job or create exactly one when absent."""
+
+        jobs = await self.list_jobs()
+        if jobs:
+            return jobs[0]
+        token = await self._token_provider()
+        try:
+            response = await self.http.post(
+                f"{REPORTING_API_BASE}/jobs",
+                json={"reportTypeId": REACH_REPORT_TYPE_ID, "name": name},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise AnalyticsApiError(
+                "YouTube Reporting job creation failed with HTTP "
+                f"{exc.response.status_code}{_safe_google_error(exc.response)}"
+            ) from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise AnalyticsApiError("YouTube Reporting job creation failed") from exc
+        if not isinstance(payload, dict) or not payload.get("id"):
+            raise AnalyticsApiError("YouTube Reporting job creation returned invalid data")
+        return payload
 
     async def list_reports(
         self, job_id: str, *, created_after: str | None = None

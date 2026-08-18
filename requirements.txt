@@ -2,7 +2,7 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 httpx==0.27.2
 anthropic>=0.120.0   # Opus 5: output_config(effort)·adaptive thinking 지원 버전
-openai>=2.48.0,<3    # Responses API 기반 GPT Strategy Brain (전환 중에는 feature flag 뒤에서 사용)
+openai>=2.48.0,<3    # Responses API 기반 GPT Strategy Brain; provider env로 Claude rollback 가능
 python-dotenv==1.0.1
 python-multipart==0.0.9
 yt-dlp

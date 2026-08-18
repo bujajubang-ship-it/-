@@ -30,9 +30,8 @@ def _usage_dict(response: Any) -> dict[str, Any]:
 class OpenAIResponsesProvider:
     """Responses API adapter with a bounded read-only function-call loop.
 
-    It is not connected to any production endpoint yet.  A client can be
-    injected for contract tests, so importing this module does not require the
-    OpenAI SDK until the provider is actually instantiated.
+    A client can be injected for contract tests, so importing this module does
+    not require the OpenAI SDK until the provider is actually instantiated.
     """
 
     def __init__(self, settings: BrainSettings | None = None, client: Any = None):
@@ -52,7 +51,10 @@ class OpenAIResponsesProvider:
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self.settings.openai_model,
-            "reasoning": {"effort": self.settings.reasoning_effort},
+            "reasoning": {
+                "effort": request.reasoning_effort or self.settings.reasoning_effort,
+                "context": "all_turns",
+            },
             "instructions": request.instructions,
             "input": input_items,
             "store": self.settings.store_responses,
@@ -70,6 +72,10 @@ class OpenAIResponsesProvider:
             }
         if request.metadata:
             kwargs["metadata"] = request.metadata
+        kwargs["text"] = {
+            **kwargs.get("text", {}),
+            "verbosity": "high" if request.mode.value in {"strategy_chat", "planning", "midform_planning", "shortform_planning", "worksheet", "postmortem"} else "medium",
+        }
         return kwargs
 
     @staticmethod
@@ -97,11 +103,12 @@ class OpenAIResponsesProvider:
                 result = asdict(result)
             output = json.dumps(result, ensure_ascii=False, default=str)
         except Exception as exc:
+            safe_error = f"{type(exc).__name__}: {str(exc)[:240]}"
             output = json.dumps(
                 {
                     "data": None,
                     "source": f"tool:{getattr(call, 'name', 'unknown')}",
-                    "unavailable_reason": str(exc),
+                    "unavailable_reason": safe_error,
                 },
                 ensure_ascii=False,
             )

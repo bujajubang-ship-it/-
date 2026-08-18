@@ -37,6 +37,7 @@ class PhaseASecurityIntegrationTests(unittest.TestCase):
                 "CNMAKER_BASE": "",
                 "CNMAKER_SECRET": "",
                 "ANTHROPIC_API_KEY": "",
+                "OPENAI_API_KEY": "",
                 "DB_BACKEND": "sqlite",
                 "DB_PATH": str(Path(cls.temp_dir.name) / "phase-a.db"),
             },
@@ -210,12 +211,17 @@ class PhaseASecurityIntegrationTests(unittest.TestCase):
 
     def test_existing_claude_chat_sse_contract_reaches_route(self):
         client, _ = self.authenticated_client()
-        response = client.post(
-            "/api/chat", json={"message": "테스트", "history": [], "attachments": []}
-        )
+        async def fallback_stream(_service, message, history, attachments):
+            yield "anthropic", "fallback-ok"
+
+        with patch.object(self.main.StrategyChatService, "stream", fallback_stream):
+            response = client.post(
+                "/api/chat", json={"message": "테스트", "history": [], "attachments": []}
+            )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
-        self.assertIn("ANTHROPIC_API_KEY", response.text)
+        self.assertIn('"provider": "anthropic"', response.text)
+        self.assertIn('"token": "fallback-ok"', response.text)
 
     def test_authenticated_multipart_video_upload_reaches_stream_and_cleans_temp_file(self):
         client, _ = self.authenticated_client()

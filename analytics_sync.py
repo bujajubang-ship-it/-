@@ -62,6 +62,7 @@ class AnalyticsSyncCoordinator:
     ):
         self.service = service
         self.repository = repository
+        self.last_persisted_count = 0
 
     def _require_service(self) -> AnalyticsService:
         if self.service is None:
@@ -100,7 +101,7 @@ class AnalyticsSyncCoordinator:
                 )
             # Persist metadata and snapshots only after the complete API result succeeds.
             self.repository.upsert_videos(records, collected_at=collected)
-            self.repository.save_metric_snapshots(
+            self.last_persisted_count = self.repository.save_metric_snapshots(
                 results, sync_run_id=run_id, collected_at=collected
             )
             data_through_values = [
@@ -199,7 +200,7 @@ class AnalyticsSyncCoordinator:
                 result.get("points") or [], record.get("duration_seconds")
             )
             self.repository.upsert_videos(records, collected_at=collected)
-            self.repository.save_retention_snapshot(
+            snapshot_id = self.repository.save_retention_snapshot(
                 result,
                 duration_seconds=record.get("duration_seconds"),
                 estimate=estimate,
@@ -216,6 +217,7 @@ class AnalyticsSyncCoordinator:
             )
             result["retention_30s_estimate"] = estimate
             result["retention_30s_metadata"] = metadata
+            result["persisted"] = snapshot_id is not None
             return result
         except Exception as exc:
             self.repository.finish_sync_run(

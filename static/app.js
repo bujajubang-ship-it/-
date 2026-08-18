@@ -2191,9 +2191,25 @@ function startChannelAnalyze() {
 
 function renderChannelReport(r) {
   const ci = r.channel_info || {};
+  const metadata = r.analytics_metadata || {};
+  let freshness = '';
+  if (metadata.data_through) {
+    const through = new Date(`${metadata.data_through}T00:00:00Z`);
+    const lagDays = Number.isNaN(through.getTime()) ? null
+      : Math.max(0, Math.floor((Date.now() - through.getTime()) / 86400000));
+    freshness = ` · Analytics 기준 ${metadata.data_through}`
+      + (lagDays === null ? '' : ` (${lagDays}일 지연)`);
+  } else {
+    freshness = ' · Analytics 데이터 없음';
+  }
+  const reachStatus = metadata.thumbnail_reach_sample_size > 0
+    ? ` · 공식 CTR 표본 ${metadata.thumbnail_reach_sample_size}건`
+    : ' · 공식 CTR 수집 대기';
   document.getElementById('channel-report-title').textContent = ci.title ? `${ci.title} 채널 분석` : '채널 분석 결과';
   document.getElementById('channel-report-subtitle').textContent =
-    ci.subscriber_count ? `구독자 ${ci.subscriber_count.toLocaleString()}명 · 영상 ${r.total_analyzed || 0}개 분석` : '';
+    ci.subscriber_count
+      ? `구독자 ${ci.subscriber_count.toLocaleString()}명 · 영상 ${r.total_analyzed || 0}개 분석${freshness}${reachStatus}`
+      : `영상 ${r.total_analyzed || 0}개 분석${freshness}${reachStatus}`;
 
   const summary = document.getElementById('channel-summary');
   summary.textContent = r.channel_summary || '';
@@ -2433,13 +2449,13 @@ async function saveCurrentChat() {
 const CHAT_WELCOME = `<div class="chat-bubble assistant">
   <div class="chat-bubble-inner">
     안녕하세요! 부자주방 채널 전담 콘텐츠 전략 파트너입니다. 👋<br><br>
-    미드폼·숏폼 기획, 제목·썸네일 전략, 업로드 타이밍, 채널 성장까지 궁금한 것은 무엇이든 물어보세요.<br><br>
-    채널 목표(CTR 10%+, 30초 이탈률 40% 미만)와 풀링·키 콘텐츠 전략을 기반으로 구체적으로 답변드립니다.
+    실제 채널 성과, retention, 과거 기획, 지식과 파이프라인을 질문에 맞게 직접 찾아 연결해서 답합니다.<br><br>
+    데이터와 생각이 다르면 반박하고, 주제부터 촬영 워크시트와 업로드 KPI까지 한 전략으로 제안합니다.
     <div class="chat-suggestion-chips">
-      <span class="chat-chip" onclick="sendChatChip(this)">릴스 훅 잡는 법</span>
-      <span class="chat-chip" onclick="sendChatChip(this)">조회수 오르는 제목 공식</span>
-      <span class="chat-chip" onclick="sendChatChip(this)">풀링 vs 키 콘텐츠 차이</span>
-      <span class="chat-chip" onclick="sendChatChip(this)">업로드 최적 요일·시간</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">다음 영상 뭐 찍을까?</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">요즘 채널 방향이 맞아?</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">최근 실패 패턴 먼저 알려줘</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">촬영 워크시트까지 기획해줘</span>
     </div>
   </div>
 </div>`;
@@ -2642,6 +2658,12 @@ async function sendChat() {
         if (!line.startsWith('data: ')) continue;
         try {
           const data = JSON.parse(line.slice(6));
+          if (data.provider) {
+            const status = document.getElementById('chat-provider-status');
+            if (status) status.textContent = data.provider === 'openai'
+              ? 'GPT-5.6 Sol · 채널 데이터 도구 연결됨'
+              : 'Claude fallback · GPT 연결 오류 시 자동 전환';
+          }
           if (data.token) {
             if (!started) { inner.innerHTML = ''; started = true; }
             fullText += data.token;
