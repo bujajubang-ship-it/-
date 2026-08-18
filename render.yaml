@@ -32,6 +32,16 @@ services:
         value: "20"
       - key: YT_REPORTING_AUTO_CREATE
         value: "true"
+      - key: EDIT_STORAGE_BACKEND
+        value: local
+      - key: EDIT_DISK_RESERVE_MB
+        value: "128"
+      - key: EDIT_SOURCE_RETENTION_HOURS
+        value: "72"
+      - key: EDIT_OUTPUT_RETENTION_HOURS
+        value: "720"
+      - key: EDIT_CLEANUP_INTERVAL_SECONDS
+        value: "3600"
       - key: NAVER_CLIENT_ID
         sync: false
       - key: NAVER_CLIENT_SECRET

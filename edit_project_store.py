@@ -167,6 +167,18 @@ class EditProjectStore:
                 output.append(item)
         return output
 
+    def all_rows(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        """Return full edit-project rows for storage accounting and lifecycle work."""
+
+        safe_limit = max(1, min(int(limit), 2000))
+        with closing(self._connect()) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT * FROM history WHERE type=? ORDER BY id DESC LIMIT ?",
+                (PROJECT_TYPE, safe_limit),
+            ).fetchall()
+        return [self._decode(row) for row in rows]
+
     def resolve_media_path(self, project: dict[str, Any], key: str) -> Path:
         project_uuid = str(project.get("project_uuid") or "")
         directory = self.project_dir(project_uuid)

@@ -325,6 +325,11 @@ class EditDirectorRenderTests(unittest.TestCase):
             self.assertTrue((root / outputs["short"]["storage_name"]).exists())
             self.assertTrue((root / outputs["decision"]["storage_name"]).exists())
             self.assertTrue(log)
+            reused, _ = EditRenderService().render_project(
+                source=source, directory=root, plan=prepared, media=media, version=1
+            )
+            self.assertTrue(reused["full"]["reused"])
+            self.assertTrue(reused["short"]["reused"])
             short = self._sample(root, duration=1.0)
             with self.assertRaises(MediaValidationError):
                 MediaIngestService.probe(short)
@@ -336,6 +341,7 @@ class EditDirectorRenderTests(unittest.TestCase):
                     duration=media["duration"],
                     has_audio=True,
                 )
+            self.assertFalse((root / ".failed.part.mp4").exists())
 
 
 class FakeIngest(MediaIngestService):
