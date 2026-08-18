@@ -14,12 +14,17 @@ from typing import Any
 import httpx
 
 from edit_project_store import EditProjectStore
+from edit_storage import EditStoragePolicy, EditStorageService
 
 
 ALLOWED_VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
 
 
 class MediaValidationError(RuntimeError):
+    pass
+
+
+class StorageCapacityError(MediaValidationError):
     pass
 
 
@@ -31,22 +36,66 @@ class MediaIngestService:
     def __init__(self, store: EditProjectStore | None = None) -> None:
         self.store = store or EditProjectStore()
         self.max_upload_bytes = int(os.getenv("EDIT_MAX_UPLOAD_MB", "2048")) * 1024 * 1024
-        self.reserve_bytes = int(os.getenv("EDIT_DISK_RESERVE_MB", "512")) * 1024 * 1024
+        self.policy = EditStoragePolicy.from_env()
+        self.reserve_bytes = self.policy.reserve_bytes
 
-    async def persist_upload(self, upload: Any, project_uuid: str) -> tuple[Path, int, str]:
+    def validate_capacity(
+        self, expected_size: int, *, target_format: str = "mid_form"
+    ) -> dict[str, Any]:
+        size = max(0, int(expected_size or 0))
+        if size > self.max_upload_bytes:
+            raise MediaValidationError(
+                f"영상이 업로드 한도({self.max_upload_bytes // 1024 // 1024}MB)를 넘었습니다."
+            )
+        estimate = EditStorageService(self.store, policy=self.policy).estimate_upload(
+            size, target_format=target_format
+        )
+        if size and not estimate["enough"]:
+            required_mb = max(1, (estimate["required_bytes"] + 1024 * 1024 - 1) // (1024 * 1024))
+            free_mb = estimate["free_bytes"] // (1024 * 1024)
+            raise StorageCapacityError(
+                f"이 영상의 안전한 편집에는 약 {required_mb}MB가 필요하지만 현재 {free_mb}MB만 남았습니다. "
+                "오래된 편집 결과를 정리하거나 외부 저장소를 연결해주세요."
+            )
+        return estimate
+
+    async def persist_upload(
+        self, upload: Any, project_uuid: str, *, target_format: str = "mid_form"
+    ) -> tuple[Path, int, str]:
         filename = str(getattr(upload, "filename", "") or "video.mp4")
+        expected_size = int(getattr(upload, "size", 0) or 0)
+        self.validate_capacity(expected_size, target_format=target_format)
+        return await self.persist_stream(
+            self._upload_chunks(upload), filename, project_uuid,
+            expected_size=expected_size, target_format=target_format,
+        )
+
+    @staticmethod
+    async def _upload_chunks(upload: Any):
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                return
+            yield chunk
+
+    async def persist_stream(
+        self, chunks: Any, filename: str, project_uuid: str, *,
+        expected_size: int = 0, target_format: str = "mid_form",
+    ) -> tuple[Path, int, str]:
+        filename = str(filename or "video.mp4")
         suffix = Path(filename).suffix.lower()
         if suffix not in ALLOWED_VIDEO_SUFFIXES:
             raise MediaValidationError("mp4, mov, m4v, avi, mkv, webm 동영상만 지원합니다.")
+        if expected_size:
+            self.validate_capacity(expected_size, target_format=target_format)
         directory = self.store.project_dir(project_uuid, create=True)
         destination = directory / f"source{suffix}"
         total = 0
         try:
             with open(destination, "wb") as target:
-                while True:
-                    chunk = await upload.read(1024 * 1024)
+                async for chunk in chunks:
                     if not chunk:
-                        break
+                        continue
                     total += len(chunk)
                     if total > self.max_upload_bytes:
                         raise MediaValidationError(
@@ -54,7 +103,9 @@ class MediaIngestService:
                         )
                     free = shutil.disk_usage(directory).free
                     if free - len(chunk) < self.reserve_bytes:
-                        raise MediaValidationError("편집 저장소 여유 공간이 부족합니다.")
+                        raise StorageCapacityError(
+                            "업로드 중 다른 작업이 저장공간을 사용했습니다. 현재 작업을 보존한 채 업로드를 중단했습니다."
+                        )
                     target.write(chunk)
         except Exception:
             destination.unlink(missing_ok=True)

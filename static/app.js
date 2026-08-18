@@ -138,6 +138,14 @@ async function delVfRecord(id) {
 let edSelectedFile = null;
 let edCurrentProject = null;
 let edBusy = false;
+let edCapacityOkay = false;
+
+function edFormatBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)}GB`;
+}
 
 function edIsJsonContentType(value) {
   return String(value || '').toLowerCase().includes('json');
@@ -210,15 +218,85 @@ function edFileSelected(event) {
   if (!edSelectedFile) {
     name.textContent = '파일을 선택하세요';
     button.disabled = true;
+    edCapacityOkay = false;
     return;
   }
   const mb = (edSelectedFile.size / 1024 / 1024).toFixed(1);
   name.textContent = `${edSelectedFile.name} · ${mb}MB`;
-  button.disabled = false;
+  button.disabled = true;
+  edCheckSelectedCapacity();
 }
 
 async function edInit() {
-  await Promise.allSettled([edLoadProjects(), edLoadStrategies()]);
+  await Promise.allSettled([edLoadProjects(), edLoadStrategies(), edLoadStorage()]);
+}
+
+async function edLoadStorage() {
+  const summary = document.getElementById('ed-storage-summary');
+  const policy = document.getElementById('ed-storage-policy');
+  try {
+    const data = await edFetchJson('/api/edit-storage', undefined, '저장공간 정보를 불러오지 못했습니다.');
+    if (summary) summary.textContent = `사용 ${edFormatBytes(data.used_bytes)} / ${edFormatBytes(data.total_bytes)} · 남음 ${edFormatBytes(data.free_bytes)} · 편집 파일 ${edFormatBytes(data.managed_bytes)}`;
+    if (policy) policy.textContent = `원본 ${Math.round(Number(data.policy?.source_retention_hours || 0) / 24)}일 · 결과 ${Math.round(Number(data.policy?.output_retention_hours || 0) / 24)}일 보존`;
+    return data;
+  } catch (error) {
+    if (summary) summary.textContent = error.message;
+    return null;
+  }
+}
+
+async function edCheckSelectedCapacity() {
+  const button = document.getElementById('ed-analyze-btn');
+  const warning = document.getElementById('ed-space-warning');
+  edCapacityOkay = false;
+  if (!edSelectedFile) {
+    if (button) button.disabled = true;
+    if (warning) warning.classList.add('hidden');
+    return false;
+  }
+  if (button) button.disabled = true;
+  if (warning) {
+    warning.classList.remove('hidden', 'ok');
+    warning.textContent = '원본과 예상 편집본에 필요한 공간을 확인하고 있습니다…';
+  }
+  try {
+    const data = await edFetchJson('/api/edit-storage/preflight', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({file_size: edSelectedFile.size, target_format: document.getElementById('ed-target-format').value})
+    }, '저장공간 사전 검사를 완료하지 못했습니다.');
+    edCapacityOkay = Boolean(data.enough);
+    if (warning) {
+      warning.textContent = data.enough
+        ? `안전하게 작업할 수 있습니다. 예상 추가 공간 ${edFormatBytes(data.required_bytes)} · 현재 남음 ${edFormatBytes(data.free_bytes)}`
+        : `⚠️ 이 영상에는 약 ${edFormatBytes(data.required_bytes)}가 필요하지만 현재 ${edFormatBytes(data.free_bytes)}만 남았습니다. 부족한 공간 ${edFormatBytes(data.shortfall_bytes)}.`;
+      warning.classList.toggle('ok', data.enough);
+    }
+    if (button) button.disabled = !edCapacityOkay;
+    return edCapacityOkay;
+  } catch (error) {
+    if (warning) warning.textContent = error.message;
+    return false;
+  }
+}
+
+async function edCleanupStorage() {
+  const button = document.getElementById('ed-storage-cleanup-btn');
+  if (button) button.disabled = true;
+  try {
+    const result = await edFetchJson('/api/edit-storage/cleanup', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({dry_run: false})
+    }, '저장공간을 정리하지 못했습니다.');
+    const message = result.deleted_bytes
+      ? `${edFormatBytes(result.deleted_bytes)}를 안전하게 정리했습니다. 작업 중인 프로젝트는 제외했습니다.`
+      : '정리할 만료 파일이 없습니다. 작업 중인 프로젝트는 보호되고 있습니다.';
+    edSetProgress('done', message, 100);
+    await edLoadStorage();
+    if (edSelectedFile) await edCheckSelectedCapacity();
+  } catch (error) {
+    edSetProgress('error', error.message, 100);
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 async function edLoadStrategies() {
@@ -282,6 +360,7 @@ function edHandleSseText(state, text, onEvent) {
 
 async function edAnalyze() {
   if (!edSelectedFile || edBusy) return;
+  if (!edCapacityOkay && !(await edCheckSelectedCapacity())) return;
   edBusy = true;
   const button = document.getElementById('ed-analyze-btn');
   button.disabled = true;
@@ -325,6 +404,7 @@ async function edAnalyze() {
           if (data.step === 'done' && data.project) {
             edRenderProject(data.project);
             edLoadProjects();
+            edLoadStorage();
             finish();
           } else if (data.step === 'error') {
             finish();
@@ -450,14 +530,16 @@ function edRenderProject(project) {
   ).join('');
 
   const rendering = project.status === 'rendering';
+  const interruptedRender = rendering && project.runtime_rendering === false;
+  const runtimeRendering = rendering && !interruptedRender;
   const approved = Number(project.approved_version || 0) === Number(latest.version || -1);
   const approve = document.getElementById('ed-approve-btn');
-  approve.disabled = rendering || !latest.version || approved;
+  approve.disabled = runtimeRendering || !latest.version || approved;
   approve.textContent = approved ? `v${latest.version} 승인 완료` : '이 편집안 승인';
-  document.getElementById('ed-revise-btn').disabled = rendering || !latest.version;
+  document.getElementById('ed-revise-btn').disabled = runtimeRendering || !latest.version;
   const render = document.getElementById('ed-render-btn');
-  render.disabled = !approved || rendering;
-  render.textContent = rendering ? '편집 실행 중...' : '승인안으로 편집 실행';
+  render.disabled = !approved || runtimeRendering;
+  render.textContent = runtimeRendering ? '편집 실행 중...' : (interruptedRender ? '중단된 편집 안전하게 다시 실행' : '승인안으로 편집 실행');
 
   const outputs = project.outputs || {};
   const outputCard = document.getElementById('ed-output-card');
@@ -563,6 +645,7 @@ async function edRender() {
         renderCompleted = true;
         edRenderProject(data.project);
         edLoadProjects();
+        edLoadStorage();
       }
       if (data.step === 'error') throw new Error(data.message);
     });
@@ -573,6 +656,22 @@ async function edRender() {
     // The final SSE event already contains the complete project. Avoid a redundant
     // request exactly when Render may recycle the instance after a long render.
     if (edCurrentProject && !renderCompleted) await edOpenProject(edCurrentProject.id);
+  }
+}
+
+async function edDeleteProjectFiles(scope) {
+  if (!edCurrentProject || edBusy) return;
+  const label = scope === 'source' ? '원본 파일' : '원본과 모든 편집 결과';
+  if (!confirm(`${label}을 삭제할까요? DB의 편집 결정과 로그는 보존됩니다.`)) return;
+  try {
+    const result = await edFetchJson(`/api/edit-projects/${edCurrentProject.id}/files?scope=${encodeURIComponent(scope)}`, {
+      method: 'DELETE'
+    }, '프로젝트 파일을 정리하지 못했습니다.');
+    edRenderProject(result.project);
+    edSetProgress('done', `${edFormatBytes(result.deleted_bytes)}를 정리했습니다. 편집 기록은 보존했습니다.`, 100);
+    await Promise.allSettled([edLoadStorage(), edLoadProjects()]);
+  } catch (error) {
+    edSetProgress('error', error.message, 100);
   }
 }
 

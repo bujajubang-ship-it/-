@@ -39,10 +39,11 @@ from strategy_repository import (
 from strategy_context import generate_strategy_context
 from strategy_memory import init_strategy_memory_schema, remember_interaction
 from edit_project_store import EditProjectStore, public_project, utc_now
-from media_ingest import MediaIngestService, MediaValidationError
+from media_ingest import MediaIngestService, MediaValidationError, StorageCapacityError
 from edit_analysis_service import EditAnalysisService
 from edit_plan_service import prepare_plan, plan_diff
 from edit_render_service import EditRenderService
+from edit_storage import EditStorageService
 from edit_learning_service import (
     EditFeedbackService,
     record_approved_edit_memory,
@@ -93,14 +94,26 @@ def _vf_backup():
 COLLECTION_SCHEDULER = YouTubeCollectionScheduler()
 EDIT_RENDERING: set[int] = set()
 EDIT_RENDERING_LOCK = threading.Lock()
+EDIT_RENDER_TASKS: dict[int, asyncio.Task] = {}
 
 
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
     COLLECTION_SCHEDULER.start()
+    cleanup_task = asyncio.create_task(_edit_storage_cleanup_loop())
     try:
         yield
     finally:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        render_tasks = list(EDIT_RENDER_TASKS.values())
+        for task in render_tasks:
+            task.cancel()
+        if render_tasks:
+            await asyncio.gather(*render_tasks, return_exceptions=True)
         await COLLECTION_SCHEDULER.stop()
 
 
@@ -1741,6 +1754,63 @@ EDIT_TARGET_FORMATS = {"short_reel", "mid_form", "long_form", "custom"}
 EDIT_PURPOSES = {"조회수형", "상담유도형", "제품판매형", "현장기록형", "브랜드신뢰형", ""}
 
 
+async def _edit_storage_cleanup_loop():
+    interval = max(300, int(os.getenv("EDIT_CLEANUP_INTERVAL_SECONDS", "3600")))
+    while True:
+        try:
+            with EDIT_RENDERING_LOCK:
+                active = set(EDIT_RENDERING)
+            result = await asyncio.to_thread(
+                EditStorageService().cleanup, in_memory_active=active
+            )
+            if result.get("deleted_bytes"):
+                print(
+                    f"[edit-storage] cleanup bytes={result['deleted_bytes']} files={result['deleted_files']}",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"[edit-storage] cleanup failed type={type(exc).__name__}", flush=True)
+        await asyncio.sleep(interval)
+
+
+class EditStoragePreflightRequest(BaseModel):
+    file_size: int = Field(ge=0, le=20 * 1024 * 1024 * 1024)
+    target_format: str = "mid_form"
+
+
+class EditStorageCleanupRequest(BaseModel):
+    dry_run: bool = False
+
+
+@app.get("/api/edit-storage")
+async def edit_storage_status():
+    return await asyncio.to_thread(EditStorageService().snapshot)
+
+
+@app.post("/api/edit-storage/preflight")
+async def edit_storage_preflight(req: EditStoragePreflightRequest):
+    if req.target_format not in EDIT_TARGET_FORMATS:
+        return JSONResponse({"error": "목표 결과 형식이 올바르지 않습니다."}, status_code=400)
+    return await asyncio.to_thread(
+        EditStorageService().estimate_upload,
+        req.file_size,
+        target_format=req.target_format,
+    )
+
+
+@app.post("/api/edit-storage/cleanup")
+async def edit_storage_cleanup(req: EditStorageCleanupRequest):
+    with EDIT_RENDERING_LOCK:
+        active = set(EDIT_RENDERING)
+    result = await asyncio.to_thread(
+        EditStorageService().cleanup,
+        dry_run=req.dry_run,
+        in_memory_active=active,
+    )
+    result["storage"] = await asyncio.to_thread(EditStorageService().snapshot)
+    return result
+
+
 def _edit_row(project_id: int) -> dict:
     row = EditProjectStore().get(project_id)
     if not row:
@@ -1756,7 +1826,10 @@ async def edit_projects_list(limit: int = 30):
 @app.get("/api/edit-projects/{project_id}")
 async def edit_projects_get(project_id: int):
     try:
-        return public_project(_edit_row(project_id))
+        project = public_project(_edit_row(project_id))
+        with EDIT_RENDERING_LOCK:
+            project["runtime_rendering"] = project_id in EDIT_RENDERING
+        return project
     except KeyError as exc:
         return JSONResponse({"error": str(exc)}, status_code=404)
 
@@ -1786,7 +1859,11 @@ async def edit_projects_analyze(
     ingest = MediaIngestService(store)
     project_uuid = uuid.uuid4().hex
     try:
-        source_path, size_bytes, original_filename = await ingest.persist_upload(file, project_uuid)
+        source_path, size_bytes, original_filename = await ingest.persist_upload(
+            file, project_uuid, target_format=target_format
+        )
+    except StorageCapacityError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=507)
     except MediaValidationError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except Exception:
@@ -2074,6 +2151,66 @@ async def edit_projects_approve(project_id: int, req: EditPlanApprovalRequest):
     return {"ok": True, "project": public_project(EditProjectStore().get(project_id))}
 
 
+async def _run_edit_render_job(
+    project_id: int, project: dict, version_row: dict, approved_version: int
+) -> None:
+    """Keep ffmpeg alive even when the browser's SSE connection closes."""
+
+    started = time.perf_counter()
+    store = EditProjectStore()
+    renderer = EditRenderService()
+    try:
+        source = store.resolve_media_path(project, "source")
+        directory = store.project_dir(str(project["project_uuid"]))
+        render_future = asyncio.create_task(
+            asyncio.to_thread(
+                renderer.render_project,
+                source=source,
+                directory=directory,
+                plan=version_row["plan"],
+                media=(project.get("source") or {}).get("media") or {},
+                version=int(approved_version),
+            )
+        )
+        while not render_future.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(render_future), timeout=15)
+            except TimeoutError:
+                project.setdefault("storage_state", {})["render_heartbeat_at"] = utc_now()
+                store.save(project_id, project)
+        outputs, edit_log = render_future.result()
+        project["outputs"] = outputs
+        project["applied_edit_log"] = edit_log
+        project["advisory_edit_log"] = renderer.advisory_log(version_row["plan"])
+        project["render_runs"] = (project.get("render_runs") or []) + [
+            {
+                "version": int(approved_version), "created_at": utc_now(),
+                "outputs": outputs, "edit_log": edit_log,
+            }
+        ]
+        project["status"] = "completed"
+        project["error"] = None
+        project.setdefault("timings", {})["render_seconds"] = round(
+            time.perf_counter() - started, 3
+        )
+        project.setdefault("storage_state", {})["render_completed_at"] = utc_now()
+        project["storage_state"].pop("render_heartbeat_at", None)
+        store.save(project_id, project)
+    except asyncio.CancelledError:
+        project["status"] = "render_failed"
+        project["error"] = "RenderInterrupted: 서비스 재시작으로 렌더링이 중단됐습니다. 원본은 보존되었습니다."
+        store.save(project_id, project)
+        raise
+    except Exception as exc:
+        project["status"] = "render_failed"
+        project["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        store.save(project_id, project)
+    finally:
+        with EDIT_RENDERING_LOCK:
+            EDIT_RENDERING.discard(project_id)
+        EDIT_RENDER_TASKS.pop(project_id, None)
+
+
 @app.post("/api/edit-projects/{project_id}/render")
 async def edit_projects_render(project_id: int):
     try:
@@ -2089,79 +2226,113 @@ async def edit_projects_render(project_id: int):
     )
     if not approved_version or not version_row:
         return JSONResponse({"error": "편집안을 먼저 승인해야 합니다."}, status_code=409)
+    with EDIT_RENDERING_LOCK:
+        runtime_active = project_id in EDIT_RENDERING
+    if project.get("status") == "rendering" and not runtime_active:
+        # A previous process cannot still own work after a new process starts.
+        # Recovery is only performed when the owner explicitly requests render.
+        project["status"] = "render_failed"
+        project["error"] = "이전 렌더링 연결이 중단됐습니다. 원본을 사용해 안전하게 다시 시작합니다."
+        EditProjectStore().save(project_id, project)
+        await asyncio.to_thread(
+            EditStorageService().cleanup, in_memory_active=set()
+        )
     if project.get("status") not in {"approved", "render_failed", "completed"}:
         return JSONResponse({"error": "현재 상태에서는 렌더링할 수 없습니다."}, status_code=409)
+    store = EditProjectStore()
+    try:
+        store.resolve_media_path(project, "source")
+    except FileNotFoundError:
+        return JSONResponse(
+            {"error": "원본 보존 기간이 끝났거나 원본 파일이 없습니다. 다시 업로드해주세요."},
+            status_code=410,
+        )
+    required_kinds = {"full", "decision"}
+    if version_row["plan"].get("create_short_highlight"):
+        required_kinds.add("short")
+    existing_complete = True
+    for kind in required_kinds:
+        try:
+            store.resolve_media_path(project, kind)
+        except FileNotFoundError:
+            existing_complete = False
+            break
+    if not existing_complete:
+        capacity = await asyncio.to_thread(
+            EditStorageService(store).estimate_render, project, version_row["plan"]
+        )
+        if not capacity["enough"]:
+            needed_mb = max(1, (capacity["required_bytes"] + 1024 * 1024 - 1) // (1024 * 1024))
+            free_mb = capacity["free_bytes"] // (1024 * 1024)
+            return JSONResponse(
+                {
+                    "error": f"렌더링에는 약 {needed_mb}MB가 필요하지만 현재 {free_mb}MB만 남았습니다. 오래된 결과를 먼저 정리해주세요.",
+                    "storage": capacity,
+                },
+                status_code=507,
+            )
     with EDIT_RENDERING_LOCK:
         if project_id in EDIT_RENDERING:
             return JSONResponse({"error": "이미 렌더링 중입니다."}, status_code=409)
         EDIT_RENDERING.add(project_id)
     project["status"] = "rendering"
     project["error"] = None
+    project.setdefault("storage_state", {})["render_started_at"] = utc_now()
     EditProjectStore().save(project_id, project)
+    task = asyncio.create_task(
+        _run_edit_render_job(project_id, project, version_row, int(approved_version))
+    )
+    EDIT_RENDER_TASKS[project_id] = task
 
     async def stream():
         started = time.perf_counter()
-        try:
-            yield sse({"step": "rendering", "percent": 3, "message": "승인된 타임라인을 검증합니다."})
-            store = EditProjectStore()
-            source = store.resolve_media_path(project, "source")
-            directory = store.project_dir(str(project["project_uuid"]))
-            renderer = EditRenderService()
-            task = asyncio.create_task(
-                asyncio.to_thread(
-                    renderer.render_project,
-                    source=source,
-                    directory=directory,
-                    plan=version_row["plan"],
-                    media=(project.get("source") or {}).get("media") or {},
-                    version=int(approved_version),
-                )
-            )
-            while not task.done():
-                try:
-                    await asyncio.wait_for(asyncio.shield(task), timeout=2)
-                except TimeoutError:
-                    elapsed = time.perf_counter() - started
-                    percent = min(92, 8 + int(elapsed / 3))
-                    yield sse({
-                        "step": "rendering",
-                        "percent": percent,
-                        "message": f"ffmpeg가 승인된 컷을 렌더링하고 있습니다. ({int(elapsed)}초)",
-                    })
-            outputs, edit_log = task.result()
-            project["outputs"] = outputs
-            project["applied_edit_log"] = edit_log
-            project["advisory_edit_log"] = renderer.advisory_log(
-                version_row["plan"]
-            )
-            project["render_runs"] = (project.get("render_runs") or []) + [
-                {
-                    "version": int(approved_version),
-                    "created_at": utc_now(),
-                    "outputs": outputs,
-                    "edit_log": edit_log,
-                }
-            ]
-            project["status"] = "completed"
-            project["error"] = None
-            project.setdefault("timings", {})["render_seconds"] = round(
-                time.perf_counter() - started, 3
-            )
-            store.save(project_id, project)
-            yield sse({"step": "done", "percent": 100, "message": "승인된 편집본을 만들었습니다.", "project": public_project(store.get(project_id))})
-        except Exception as exc:
-            project["status"] = "render_failed"
-            project["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
-            EditProjectStore().save(project_id, project)
-            yield sse({"step": "error", "message": str(exc)[:300] or "렌더링에 실패했습니다."})
-        finally:
-            with EDIT_RENDERING_LOCK:
-                EDIT_RENDERING.discard(project_id)
+        yield sse({"step": "rendering", "percent": 3, "message": "승인된 타임라인을 검증합니다."})
+        while not task.done():
+            await asyncio.sleep(2)
+            elapsed = time.perf_counter() - started
+            yield sse({
+                "step": "rendering", "percent": min(92, 8 + int(elapsed / 3)),
+                "message": f"ffmpeg가 승인된 컷을 렌더링하고 있습니다. ({int(elapsed)}초)",
+            })
+        row = store.get(project_id)
+        final_project = (row or {}).get("report") or {}
+        if final_project.get("status") == "completed":
+            yield sse({
+                "step": "done", "percent": 100,
+                "message": "승인된 편집본을 만들었습니다.",
+                "project": public_project(row),
+            })
+        else:
+            yield sse({
+                "step": "error", "percent": 100,
+                "message": str(final_project.get("error") or "렌더링에 실패했습니다.")[:300],
+            })
 
     return StreamingResponse(
         stream(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.delete("/api/edit-projects/{project_id}/files")
+async def edit_projects_delete_files(project_id: int, scope: str = "all"):
+    with EDIT_RENDERING_LOCK:
+        active = set(EDIT_RENDERING)
+    try:
+        result = await asyncio.to_thread(
+            EditStorageService().delete_project_files,
+            project_id,
+            scope=scope,
+            in_memory_active=active,
+        )
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except ValueError:
+        return JSONResponse({"error": "정리 범위가 올바르지 않습니다."}, status_code=400)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    result["project"] = public_project(_edit_row(project_id))
+    return result
 
 
 @app.get("/api/edit-projects/{project_id}/outputs/{kind}")

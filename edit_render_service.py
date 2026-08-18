@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -81,7 +82,22 @@ class EditRenderService:
             raise EditRenderError("ffmpeg가 설치되어 있지 않습니다.")
         validate_approved_timeline(timeline, duration)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.unlink(missing_ok=True)
+        output_duration = sum(
+            float(item["source_end"]) - float(item["source_start"])
+            for item in timeline
+        )
+        if self._valid_existing_output(output):
+            return {
+                "storage_name": output.name,
+                "filename": output.name,
+                "duration": round(output_duration, 3),
+                "size_bytes": output.stat().st_size,
+                "created_at": utc_now(),
+                "codec": "h264+aac" if has_audio else "h264",
+                "reused": True,
+            }
+        part = output.with_name(f".{output.stem}.part{output.suffix}")
+        part.unlink(missing_ok=True)
         filter_complex = self._filter(timeline, has_audio=has_audio)
         command = [
             self.ffmpeg,
@@ -101,11 +117,7 @@ class EditRenderService:
         )
         if has_audio:
             command.extend(["-c:a", "aac", "-b:a", "160k"])
-        command.extend(["-movflags", "+faststart", str(output), "-y"])
-        output_duration = sum(
-            float(item["source_end"]) - float(item["source_start"])
-            for item in timeline
-        )
+        command.extend(["-movflags", "+faststart", str(part), "-y"])
         timeout = max(300, min(7200, int(output_duration * 6) + 180))
         try:
             result = subprocess.run(
@@ -115,15 +127,16 @@ class EditRenderService:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired as exc:
-            output.unlink(missing_ok=True)
+            part.unlink(missing_ok=True)
             raise EditRenderError("편집 렌더링 시간이 초과됐습니다.") from exc
         except OSError as exc:
-            output.unlink(missing_ok=True)
+            part.unlink(missing_ok=True)
             raise EditRenderError("ffmpeg 실행 파일을 시작하지 못했습니다.") from exc
-        if result.returncode != 0 or not output.exists() or output.stat().st_size == 0:
-            output.unlink(missing_ok=True)
+        if result.returncode != 0 or not part.exists() or part.stat().st_size == 0:
+            part.unlink(missing_ok=True)
             detail = (result.stderr or "ffmpeg render failed")[-600:]
             raise EditRenderError(f"편집본을 만들지 못했습니다: {detail}")
+        os.replace(part, output)
         return {
             "storage_name": output.name,
             "filename": output.name,
@@ -132,6 +145,22 @@ class EditRenderService:
             "created_at": utc_now(),
             "codec": "h264+aac" if has_audio else "h264",
         }
+
+    @staticmethod
+    def _valid_existing_output(path: Path) -> bool:
+        if not path.is_file() or path.stat().st_size <= 0:
+            return False
+        ffprobe = shutil.which("ffprobe")
+        if not ffprobe:
+            return False
+        try:
+            result = subprocess.run(
+                [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
+                capture_output=True, text=True, timeout=30,
+            )
+            return result.returncode == 0 and float(result.stdout.strip() or 0) > 0
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return False
 
     def render_project(
         self,
@@ -188,6 +217,7 @@ class EditRenderService:
                 )
         decision_name = f"edit-decision-v{version}.json"
         decision_path = directory / decision_name
+        decision_part = directory / f".{decision_name}.part"
         decision_payload = {
             "version": version,
             "approved_plan": plan,
@@ -198,9 +228,13 @@ class EditRenderService:
                 for key, value in outputs.items()
             },
         }
-        decision_path.write_text(
-            json.dumps(decision_payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        try:
+            decision_part.write_text(
+                json.dumps(decision_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            os.replace(decision_part, decision_path)
+        finally:
+            decision_part.unlink(missing_ok=True)
         outputs["decision"] = {
             "storage_name": decision_name,
             "filename": decision_name,

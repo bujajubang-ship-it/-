@@ -2025,6 +2025,13 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ed-page { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
 .ed-title-row, .ed-section-head, .ed-workspace-head, .ed-action-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .ed-safety-badge { padding: 8px 12px; border-radius: 999px; background: #ede9fe; color: #6d28d9; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.ed-storage-card { display: flex; justify-content: space-between; gap: 14px; align-items: center; margin: 16px 0; padding: 13px 15px; border: 1px solid #dbeafe; border-radius: 12px; background: #f8fbff; color: #334155; }
+.ed-storage-card b { display: block; margin-bottom: 4px; color: #1e293b; }
+.ed-storage-card small { display: block; margin-top: 3px; color: #64748b; }
+.ed-storage-card button, .ed-file-actions button { border: 1px solid #c4b5fd; background: #fff; color: #5b21b6; border-radius: 8px; padding: 8px 11px; cursor: pointer; font-weight: 700; }
+.ed-storage-card button:disabled { opacity: .45; cursor: not-allowed; }
+.ed-space-warning { margin: 10px 0 14px; padding: 12px 14px; border-radius: 10px; background: #fff7ed; border: 1px solid #fdba74; color: #9a3412; font-size: 13px; line-height: 1.55; }
+.ed-space-warning.ok { background: #f0fdf4; border-color: #86efac; color: #166534; }
 .ed-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin: 16px 0; }
 .ed-form-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 700; color: #374151; }
 .ed-form-grid label span { color: #9ca3af; font-weight: 500; }
@@ -2085,6 +2092,9 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ed-output-video { width: 100%; max-height: 520px; margin: 14px 0; background: #111; border-radius: 12px; }
 .ed-output-links { display: flex; gap: 9px; flex-wrap: wrap; margin-bottom: 14px; }
 .ed-output-links a { padding: 9px 12px; border-radius: 8px; background: #111827; color: #fff; text-decoration: none; font-size: 13px; font-weight: 700; }
+.ed-file-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 14px 0; padding: 11px 12px; border: 1px solid #e5e7eb; border-radius: 10px; color: #64748b; font-size: 12px; }
+.ed-file-actions span { margin-right: auto; }
+.ed-file-actions button.danger { border-color: #fecaca; color: #b91c1c; }
 .ed-edit-log { max-height: 280px; overflow: auto; margin-top: 10px; }
 .ed-log-row { padding: 8px 0; border-bottom: 1px solid #e5e7eb; font-size: 12px; color: #475569; }
 .ed-feedback-loop { margin-top: 18px; padding: 15px; border: 1px solid #dbeafe; border-radius: 12px; background: #f8fbff; }
