@@ -93,6 +93,8 @@ class PhaseASecurityIntegrationTests(unittest.TestCase):
             ("POST", "/api/shortform"),
             ("POST", "/api/channel-analyze"),
             ("POST", "/api/video-feedback"),
+            ("GET", "/api/edit-projects"),
+            ("POST", "/api/edit-projects/analyze"),
         ]
         for method, path in protected:
             response = client.request(method, path)

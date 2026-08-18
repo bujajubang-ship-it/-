@@ -86,6 +86,7 @@ MODE_REGISTRY: dict[StrategyMode, ModeSpec] = {
     StrategyMode.UPLOAD_DECISION: ModeSpec(StrategyMode.UPLOAD_DECISION, "후보 콘텐츠의 업로드 순서와 리스크를 판단한다.", PERFORMANCE_TOOLS + CONTENT_TOOLS + MARKET_TOOLS),
     StrategyMode.EDIT_FEEDBACK: ModeSpec(StrategyMode.EDIT_FEEDBACK, "대본과 시장 약속을 비교해 편집 결정을 제안한다.", CONTENT_TOOLS + KNOWLEDGE_TOOLS + PERFORMANCE_TOOLS),
     StrategyMode.VIDEO_FEEDBACK: ModeSpec(StrategyMode.VIDEO_FEEDBACK, "타임라인 기준으로 편집자가 실행할 피드백을 만든다.", CONTENT_TOOLS + KNOWLEDGE_TOOLS + PERFORMANCE_TOOLS),
+    StrategyMode.EDIT_DIRECTOR: ModeSpec(StrategyMode.EDIT_DIRECTOR, "영상 진단을 승인 가능한 편집 결정 목록으로 만든다.", CONTENT_TOOLS + KNOWLEDGE_TOOLS + PERFORMANCE_TOOLS, reasoning_effort="high"),
     StrategyMode.WORKSHEET: ModeSpec(StrategyMode.WORKSHEET, "승인된 전략을 촬영 가능한 워크시트로 변환한다.", CONTENT_TOOLS + KNOWLEDGE_TOOLS + MARKET_TOOLS),
     StrategyMode.JJACHI: ModeSpec(StrategyMode.JJACHI, "사용자가 제공한 현실을 조작 없이 인간적인 기획으로 정리한다.", KNOWLEDGE_TOOLS + MARKET_TOOLS),
     StrategyMode.SNS_CONVERSION: ModeSpec(StrategyMode.SNS_CONVERSION, "원 콘텐츠의 전략을 유지하며 채널별 형식으로 변환한다.", CONTENT_TOOLS + KNOWLEDGE_TOOLS, reasoning_effort="high"),
