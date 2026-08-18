@@ -1,4 +1,6 @@
 import json
+import asyncio
+import time
 import os
 import unittest
 from types import SimpleNamespace
@@ -177,6 +179,66 @@ class OpenAIProviderTests(unittest.IsolatedAsyncioTestCase):
         tool_output = next(x for x in second_input if x.get("type") == "function_call_output")
         decoded = json.loads(tool_output["output"])
         self.assertEqual(decoded["source"], "youtube_analytics")
+
+    async def test_parallel_function_calls_execute_concurrently(self):
+        calls = [
+            SimpleNamespace(
+                type="function_call",
+                name=name,
+                arguments="{}",
+                call_id=f"call_{index}",
+                model_dump=lambda exclude_none=True, name=name, index=index: {
+                    "type": "function_call",
+                    "name": name,
+                    "arguments": "{}",
+                    "call_id": f"call_{index}",
+                },
+            )
+            for index, name in enumerate(("one", "two"), start=1)
+        ]
+        client = FakeClient([
+            SimpleNamespace(id="r1", output=calls, output_text="", usage={}),
+            SimpleNamespace(id="r2", output=[], output_text="done", usage={}),
+        ])
+        registry = ReadOnlyToolRegistry()
+
+        async def slow(_args):
+            await asyncio.sleep(0.05)
+            return EvidenceEnvelope(data=True, source="test")
+
+        for name in ("one", "two"):
+            registry.register(
+                ToolDefinition(
+                    name=name,
+                    description=name,
+                    parameters={
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": False,
+                    },
+                    handler=slow,
+                )
+            )
+        provider = OpenAIResponsesProvider(
+            settings=BrainSettings(provider="openai"), client=client
+        )
+        request = SimpleNamespace(
+            mode=StrategyMode.STRATEGY_CHAT,
+            reasoning_effort="high",
+            instructions="test",
+            input="test",
+            tools=[],
+            output_schema=None,
+            output_schema_name=None,
+            metadata={},
+        )
+        started = time.perf_counter()
+        result = await provider.generate(request, registry.execute)
+        elapsed = time.perf_counter() - started
+
+        self.assertEqual(result.text, "done")
+        self.assertLess(elapsed, 0.09)
 
 
 if __name__ == "__main__":

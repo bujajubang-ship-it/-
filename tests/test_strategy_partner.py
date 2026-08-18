@@ -10,6 +10,7 @@ from unittest.mock import patch
 from analytics_repository import AnalyticsRepository
 from analytics_service import ANALYTICS_METRICS, ANALYTICS_SOURCE, STATUS_AVAILABLE, metric_value
 from strategy_brain import BrainSettings, StrategyBrain, StrategyMode
+from strategy_brain.contracts import BrainRequest
 from strategy_brain.chat_service import StrategyChatService, build_openai_input
 from strategy_brain.providers import OpenAIResponsesProvider
 from strategy_brain.retrieval import StrategyRetrieval, build_strategy_tool_registry
@@ -356,6 +357,52 @@ class ProviderFallbackTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test"}):
             output = [item async for item in service.stream("질문", [], [])]
         self.assertEqual(output, [("openai", "gpt-ok")])
+
+    async def test_intent_prefetch_disables_redundant_model_tool_rounds(self):
+        class CapturingBrain:
+            def __init__(self):
+                self.request = None
+
+            def build_request(self, *args, **kwargs):
+                return BrainRequest(
+                    mode=StrategyMode.STRATEGY_CHAT,
+                    instructions="test",
+                    input="test",
+                    tools=[
+                        {"name": "get_recent_channel_performance"},
+                        {"name": "get_recent_trends"},
+                    ],
+                    reasoning_effort="high",
+                )
+
+            async def stream(self, request):
+                self.request = request
+                yield "gpt-ok"
+
+        brain = CapturingBrain()
+        intent = SimpleNamespace(name="next_video", query="")
+        evidence = {"get_channel_strategy_snapshot": {"data": []}}
+
+        async def fake_prefetch(*_args, **_kwargs):
+            return intent, evidence
+
+        service = StrategyChatService(
+            settings=BrainSettings(provider="openai"),
+            openai_brain=brain,
+            tool_registry=SimpleNamespace(trace=[]),
+            enable_prefetch=True,
+        )
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test"}),
+            patch(
+                "strategy_brain.chat_service.prefetch_strategy_evidence",
+                side_effect=fake_prefetch,
+            ),
+        ):
+            output = [item async for item in service.stream("다음 영상 뭐 찍을까?", [], [])]
+
+        self.assertEqual(output, [("openai", "gpt-ok")])
+        self.assertEqual(brain.request.tools, [])
 
     def test_multimodal_input_keeps_history_and_attachments(self):
         items = build_openai_input("현재 질문", [{"role": "user", "content": "이전 질문"}, {"role": "assistant", "content": "이전 답"}], [{"media_type": "image/jpeg", "data": "YWJj", "name": "a.jpg"}])
