@@ -78,7 +78,9 @@ class OpenAIResponsesProvider:
             # strict report schema while preventing an unexpectedly long answer.
             kwargs["max_output_tokens"] = 8000
         elif request.mode.value == "strategy_chat":
-            kwargs["max_output_tokens"] = 6000
+            # Reasoning tokens count toward this limit.  A rich evidence bundle
+            # can otherwise consume the full budget before visible text starts.
+            kwargs["max_output_tokens"] = 12000
         kwargs["text"] = {
             **kwargs.get("text", {}),
             "verbosity": "high" if request.mode.value in {"planning", "midform_planning", "shortform_planning", "worksheet", "postmortem"} else "medium",
@@ -178,17 +180,34 @@ class OpenAIResponsesProvider:
                 **self._request_kwargs(request, input_items), stream=True
             )
             completed = None
+            visible_parts: list[str] = []
             async for event in stream:
                 event_type = getattr(event, "type", "")
                 if event_type == "response.output_text.delta":
                     delta = getattr(event, "delta", "")
                     if delta:
+                        visible_parts.append(delta)
                         yield delta
-                elif event_type == "response.completed":
+                elif event_type in {
+                    "response.completed",
+                    "response.incomplete",
+                    "response.failed",
+                }:
                     completed = getattr(event, "response", None)
 
             if completed is None:
                 raise RuntimeError("OpenAI stream ended without response.completed.")
+            status = getattr(completed, "status", None)
+            if status not in (None, "completed"):
+                details = getattr(completed, "incomplete_details", None)
+                reason = getattr(details, "reason", None) or status
+                raise RuntimeError(f"OpenAI response did not complete: {reason}")
+            # Some transports may coalesce the terminal response without delta
+            # events. Preserve streaming semantics while avoiding a blank answer.
+            if not visible_parts:
+                final_text = getattr(completed, "output_text", "") or ""
+                if final_text:
+                    yield final_text
             calls = self._function_calls(completed)
             if not calls:
                 return

@@ -240,6 +240,24 @@ class OpenAIProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.text, "done")
         self.assertLess(elapsed, 0.09)
 
+    async def test_strategy_chat_reserves_reasoning_and_visible_output_budget(self):
+        provider = OpenAIResponsesProvider(
+            settings=BrainSettings(provider="openai"),
+            client=SimpleNamespace(responses=SimpleNamespace()),
+        )
+        request = SimpleNamespace(
+            mode=StrategyMode.STRATEGY_CHAT,
+            reasoning_effort="medium",
+            instructions="test",
+            tools=[],
+            output_schema=None,
+            output_schema_name=None,
+            metadata={},
+        )
+        kwargs = provider._request_kwargs(request, "test")
+        self.assertEqual(kwargs["reasoning"]["effort"], "medium")
+        self.assertEqual(kwargs["max_output_tokens"], 12000)
+
 
 if __name__ == "__main__":
     unittest.main()
