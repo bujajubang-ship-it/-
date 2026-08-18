@@ -1,16 +1,22 @@
 import sqlite3
-import os
 
-DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "history.db"))
+from db_safety import load_database_runtime
+
+
+_DB_RUNTIME = load_database_runtime()
+DB_PATH = str(_DB_RUNTIME.path)
+PRODUCTION_SQLITE = _DB_RUNTIME.production
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = _DB_RUNTIME.connect()
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
+    if PRODUCTION_SQLITE:
+        return
     conn = get_db()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS history (
@@ -28,12 +34,18 @@ def init_db():
 def save_history(type_: str, keyword: str, report: dict):
     import json
     conn = get_db()
-    conn.execute(
-        "INSERT INTO history (type, keyword, report) VALUES (?, ?, ?)",
-        (type_, keyword, json.dumps(report, ensure_ascii=False)),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO history (type, keyword, report) VALUES (?, ?, ?)",
+            (type_, keyword, json.dumps(report, ensure_ascii=False)),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def list_history(type_: str = "", limit: int = 50):
@@ -76,20 +88,21 @@ def delete_history(id_: int):
 
 def init_pipeline():
     conn = get_db()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS pipeline (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            stage TEXT NOT NULL DEFAULT 'filming',
-            content_type TEXT DEFAULT '미드폼',
-            editor TEXT DEFAULT '',
-            planned_date TEXT DEFAULT '',
-            notes TEXT DEFAULT '',
-            sort_order INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+    if not PRODUCTION_SQLITE:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                stage TEXT NOT NULL DEFAULT 'filming',
+                content_type TEXT DEFAULT '미드폼',
+                editor TEXT DEFAULT '',
+                planned_date TEXT DEFAULT '',
+                notes TEXT DEFAULT '',
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
     conn.execute("UPDATE pipeline SET content_type='숏폼' WHERE content_type='쇼츠'")
     # 구 스테이지 키 마이그레이션
     conn.execute("UPDATE pipeline SET stage='filming' WHERE stage='filming'")  # 촬영 완료 → 촬영 (key 동일)
@@ -143,6 +156,8 @@ def delete_pipeline_item(id_: int):
 # ── 기존 영상 최적화 체크리스트 ──────────────────────────────────────
 
 def _ensure_optimize_table(conn):
+    if PRODUCTION_SQLITE:
+        return
     conn.execute("""
         CREATE TABLE IF NOT EXISTS optimize_videos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,6 +222,8 @@ def delete_optimize(id_: int):
 
 # ── 기획 워크시트 (스프레드시트형 작업공간) ──────────────────────────
 def _ensure_worksheet(conn):
+    if PRODUCTION_SQLITE:
+        return
     conn.execute("""
         CREATE TABLE IF NOT EXISTS worksheet_rows (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -241,6 +258,8 @@ def delete_worksheet_row(id_: int):
 
 # ── AI 상담 대화 세션 (클로드처럼 지난 대화 저장·이어가기) ─────────────
 def _ensure_chat(conn):
+    if PRODUCTION_SQLITE:
+        return
     conn.execute("""
         CREATE TABLE IF NOT EXISTS chat_session (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -285,6 +304,8 @@ def delete_chat_session(id_: int):
 
 # ── 키 컨텐츠 지식 저장소 (강의 받아쓰기·요약) ───────────────────────
 def _ensure_knowledge(conn):
+    if PRODUCTION_SQLITE:
+        return
     conn.execute("""
         CREATE TABLE IF NOT EXISTS knowledge (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -331,3 +352,32 @@ def delete_knowledge(id_: int):
     conn = get_db(); _ensure_knowledge(conn)
     conn.execute("DELETE FROM knowledge WHERE id=?", (id_,))
     conn.commit(); conn.close()
+
+
+def restore_video_feedback_rows(rows: list[dict]) -> int:
+    """Insert validated legacy KV rows only when the manual recovery tool calls it."""
+
+    import json
+
+    conn = get_db()
+    try:
+        for item in rows:
+            report = item.get("report")
+            if not isinstance(report, str):
+                report = json.dumps(report or {}, ensure_ascii=False)
+            conn.execute(
+                "INSERT INTO history (type, keyword, report, created_at) VALUES (?,?,?,?)",
+                (
+                    "video_feedback",
+                    item.get("keyword") or "기록",
+                    report,
+                    item.get("created_at") or None,
+                ),
+            )
+        conn.commit()
+        return len(rows)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

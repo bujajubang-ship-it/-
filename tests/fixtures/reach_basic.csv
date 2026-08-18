@@ -1,0 +1,3 @@
+date,channel_id,video_id,video_thumbnail_impressions,video_thumbnail_impressions_ctr
+2026-08-14,UC_TEST,video-a,1000,5.0
+2026-08-14,UC_TEST,video-b,0,0.0

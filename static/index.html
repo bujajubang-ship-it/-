@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260806a" />
+  <link rel="stylesheet" href="style.css?v=20260818-strategy2" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -15,6 +15,7 @@
         <span class="logo-text">콘텐츠 리서처</span>
       </div>
       <div id="api-status" class="api-status"></div>
+      <button type="button" onclick="ownerLogout()" style="border:1px solid #d6deea;background:#fff;color:#526078;border-radius:8px;padding:7px 11px;font-weight:700;cursor:pointer">로그아웃</button>
     </div>
     <div class="tab-bar-wrap">
       <div class="tab-nav">
@@ -30,6 +31,7 @@
         <button class="tab-btn" id="tab-video-feedback" onclick="switchTab('video-feedback')">🎬 영상 피드백</button>
         <button class="tab-btn" id="tab-autocut" onclick="switchTab('autocut')">✂️ 자동 컷편집</button>
         <button class="tab-btn tab-btn-chat" id="tab-chat" onclick="switchTab('chat')">💬 AI 상담</button>
+        <button class="tab-btn tab-btn-chat" id="tab-strategy" onclick="switchTab('strategy')">🎯 전략 보관함</button>
         <button class="tab-btn" id="tab-history" onclick="switchTab('history')">히스토리</button>
         <button class="tab-btn tab-btn-pipeline" id="tab-pipeline" onclick="switchTab('pipeline')">📋 파이프라인</button>
         <button class="tab-btn tab-btn-pipeline" id="tab-worksheet" onclick="switchTab('worksheet')">📝 기획 워크시트</button>
@@ -71,6 +73,7 @@
             <p class="report-subtitle">원클릭 영상 기획 완성본</p>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
+            <button class="pdf-btn hidden" id="midform-strategy-btn">🎯 공통 전략 열기</button>
             <button class="pdf-btn" onclick="downloadPdf('midform-report-section','부자주방_미드폼기획')">⬇ PDF 저장</button>
             <button class="reset-btn" onclick="resetToMidform()">← 새 기획</button>
           </div>
@@ -220,6 +223,7 @@
             <p class="report-subtitle">인스타그램 릴스 기획안</p>
           </div>
           <div class="report-header-actions">
+            <button class="action-btn hidden" id="shortform-strategy-btn">🎯 공통 전략 열기</button>
             <button class="action-btn copy-btn" onclick="copyShortformCaption()">📋 캡션 복사</button>
             <button class="pdf-btn" onclick="downloadPdf('shortform-report-section','부자주방_숏폼기획')">⬇ PDF 저장</button>
             <button class="reset-btn" onclick="resetToShortform()">← 새 기획</button>
@@ -891,7 +895,7 @@
             <div class="chat-ai-avatar">AI</div>
             <div>
               <div class="chat-ai-name">부자주방 콘텐츠 전략가</div>
-              <div class="chat-ai-desc">미드폼·숏폼·제목·썸네일·업로드 전략 전담 AI 파트너</div>
+              <div class="chat-ai-desc" id="chat-provider-status">GPT-5.6 Sol · 채널 성과·기획·지식·피드백을 직접 조회</div>
             </div>
           </div>
           <button class="chat-clear-btn" onclick="newChat()">＋ 새 대화</button>
@@ -900,13 +904,13 @@
           <div class="chat-bubble assistant">
             <div class="chat-bubble-inner">
               안녕하세요! 부자주방 채널 전담 콘텐츠 전략 파트너입니다. 👋<br><br>
-              미드폼·숏폼 기획, 제목·썸네일 전략, 업로드 타이밍, 채널 성장까지 궁금한 것은 무엇이든 물어보세요.<br><br>
-              채널 목표(CTR 10%+, 30초 이탈률 40% 미만)와 풀링·키 콘텐츠 전략을 기반으로 구체적으로 답변드립니다.
+              질문에 맞는 실제 채널 성과, retention, 과거 기획, 지식과 파이프라인을 직접 찾아 연결해서 답합니다.<br><br>
+              데이터와 생각이 다르면 반박하고, 주제부터 촬영 워크시트와 업로드 KPI까지 한 전략으로 제안합니다.
               <div class="chat-suggestion-chips">
-                <span class="chat-chip" onclick="sendChatChip(this)">릴스 훅 잡는 법</span>
-                <span class="chat-chip" onclick="sendChatChip(this)">조회수 오르는 제목 공식</span>
-                <span class="chat-chip" onclick="sendChatChip(this)">풀링 vs 키 콘텐츠 차이</span>
-                <span class="chat-chip" onclick="sendChatChip(this)">업로드 최적 요일·시간</span>
+                <span class="chat-chip" onclick="sendChatChip(this)">다음 영상 뭐 찍을까?</span>
+                <span class="chat-chip" onclick="sendChatChip(this)">요즘 채널 방향이 맞아?</span>
+                <span class="chat-chip" onclick="sendChatChip(this)">최근 실패 패턴 먼저 알려줘</span>
+                <span class="chat-chip" onclick="sendChatChip(this)">촬영 워크시트까지 기획해줘</span>
               </div>
             </div>
           </div>
@@ -922,6 +926,39 @@
         </div>
       </div>
      </div>
+    </div>
+
+    <!-- ===== 🎯 공통 전략 보관함 ===== -->
+    <div id="pane-strategy" class="hidden">
+      <div class="strategy-page">
+        <div class="strategy-topbar">
+          <div>
+            <h1>🎯 공통 전략 보관함</h1>
+            <p>주제부터 촬영 워크시트·업로드 KPI·실제 성과까지 하나의 전략으로 관리합니다.</p>
+          </div>
+          <button class="strategy-secondary" onclick="loadStrategies()">새로고침</button>
+        </div>
+        <div class="strategy-layout">
+          <aside class="strategy-sidebar">
+            <div class="strategy-create-card">
+              <label for="strategy-content-type">콘텐츠 형식</label>
+              <select id="strategy-content-type">
+                <option>미드폼</option>
+                <option>숏폼</option>
+              </select>
+              <label for="strategy-prompt">전략 요청</label>
+              <textarea id="strategy-prompt" rows="6" placeholder="예: 다음 영상 뭐 찍을까? 실제 채널 성과와 비즈니스PT 지식을 보고 촬영 워크시트까지 완성해줘."></textarea>
+              <button id="strategy-generate-btn" class="strategy-primary" onclick="generateStrategy()">데이터로 통합 기획 생성</button>
+              <div id="strategy-generate-status" class="strategy-status"></div>
+            </div>
+            <div class="strategy-list-title">저장된 전략</div>
+            <div id="strategy-list" class="strategy-list"></div>
+          </aside>
+          <section id="strategy-detail" class="strategy-detail">
+            <div class="strategy-empty">왼쪽에서 전략을 선택하거나 새 전략을 생성하세요.</div>
+          </section>
+        </div>
+      </div>
     </div>
 
     <!-- ===== 📚 히스토리 탭 ===== -->
@@ -1318,13 +1355,14 @@
 
   </main>
 
-  <script src="app.js?v=20260806a"></script>
+  <script src="app.js?v=20260818-strategy2"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');
       const items = [
         { key: 'youtube', label: 'YouTube API' },
         { key: 'anthropic', label: 'Claude AI' },
+        { key: 'openai', label: 'GPT 전략가' },
         { key: 'naver', label: '네이버 카페' },
         { key: 'analytics', label: 'Analytics' },
       ];

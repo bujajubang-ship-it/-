@@ -1,20 +1,361 @@
-import httpx
+"""Read-only YouTube Analytics API client with explicit missing-data semantics."""
+
+from __future__ import annotations
+
+import math
 import os
 from datetime import date
-from typing import Dict, List
+from typing import Any, Dict, Iterable, List, Sequence
+
+import httpx
 
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 ANALYTICS_URL = "https://youtubeanalytics.googleapis.com/v2/reports"
+YOUTUBE_CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
+
+STATUS_AVAILABLE = "available"
+STATUS_PENDING = "pending"
+STATUS_UNAVAILABLE = "unavailable"
+STATUS_NOT_REPORTED = "not_reported"
+STATUS_ERROR = "error"
+VALID_STATUSES = frozenset(
+    {
+        STATUS_AVAILABLE,
+        STATUS_PENDING,
+        STATUS_UNAVAILABLE,
+        STATUS_NOT_REPORTED,
+        STATUS_ERROR,
+    }
+)
+
+ANALYTICS_SOURCE = "youtube_analytics_api_v2"
+ANALYTICS_METRICS = (
+    "views",
+    "likes",
+    "comments",
+    "shares",
+    "subscribersGained",
+    "subscribersLost",
+    "estimatedMinutesWatched",
+    "averageViewDuration",
+    "averageViewPercentage",
+)
+COUNT_METRICS = frozenset(
+    {
+        "views",
+        "likes",
+        "comments",
+        "shares",
+        "subscribersGained",
+        "subscribersLost",
+    }
+)
+FLOAT_METRICS = frozenset(
+    {
+        "estimatedMinutesWatched",
+        "averageViewDuration",
+        "averageViewPercentage",
+    }
+)
+FLAT_NAMES = {
+    "views": "views",
+    "likes": "likes",
+    "comments": "comments",
+    "shares": "shares",
+    "subscribersGained": "subscribers_gained",
+    "subscribersLost": "subscribers_lost",
+    "estimatedMinutesWatched": "watch_minutes",
+    "averageViewDuration": "avg_view_duration_sec",
+    "averageViewPercentage": "avg_view_percentage",
+}
+
+
+class AnalyticsApiError(RuntimeError):
+    """Sanitized Analytics failure that never includes tokens or response bodies."""
+
+
+def metric_value(
+    value: int | float | None,
+    status: str,
+    *,
+    source: str = ANALYTICS_SOURCE,
+    data_through: str | None = None,
+) -> Dict[str, Any]:
+    if status not in VALID_STATUSES:
+        raise ValueError(f"Invalid metric status: {status}")
+    if status == STATUS_AVAILABLE and value is None:
+        raise ValueError("An available metric must contain a value")
+    if status != STATUS_AVAILABLE:
+        value = None
+    return {
+        "value": value,
+        "status": status,
+        "source": source,
+        "data_through": data_through,
+    }
+
+
+def _coerce_metric(name: str, raw: Any) -> int | float | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        number = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    if name in COUNT_METRICS:
+        return int(number)
+    if name in FLOAT_METRICS:
+        return float(number)
+    return number
+
+
+def _headers(payload: Dict[str, Any]) -> List[str]:
+    return [str(item.get("name", "")) for item in payload.get("columnHeaders", [])]
+
+
+def response_rows(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Map response rows by declared headers without inventing absent values."""
+
+    headers = _headers(payload)
+    if len(headers) != len(set(headers)):
+        raise ValueError("Analytics response contains duplicate column headers")
+    rows: List[Dict[str, Any]] = []
+    for raw_row in payload.get("rows") or []:
+        if len(raw_row) != len(headers):
+            raise ValueError("Analytics response row length does not match headers")
+        rows.append(dict(zip(headers, raw_row)))
+    return rows
+
+
+def _unique_rows(
+    rows: Sequence[Dict[str, Any]], key_names: Sequence[str], *, label: str
+) -> Dict[tuple[str, ...], Dict[str, Any]]:
+    indexed: Dict[tuple[str, ...], Dict[str, Any]] = {}
+    for row in rows:
+        key = tuple(str(row.get(name)) for name in key_names)
+        if key in indexed:
+            raise ValueError(f"Duplicate {label} row in Analytics response")
+        indexed[key] = row
+    return indexed
+
+
+def _metric_status_for_row(
+    metric: str,
+    row: Dict[str, Any] | None,
+    response_headers: set[str],
+    *,
+    missing_row_status: str,
+    data_through: str | None,
+) -> Dict[str, Any]:
+    if metric not in response_headers:
+        return metric_value(None, STATUS_UNAVAILABLE, data_through=data_through)
+    if row is None:
+        return metric_value(None, missing_row_status, data_through=data_through)
+    value = _coerce_metric(metric, row.get(metric))
+    if value is None:
+        return metric_value(None, STATUS_NOT_REPORTED, data_through=data_through)
+    return metric_value(value, STATUS_AVAILABLE, data_through=data_through)
+
+
+def parse_video_aggregate_response(
+    payload: Dict[str, Any],
+    requested_video_ids: Sequence[str],
+    *,
+    period_start: str,
+    period_end: str,
+    data_through: str | None,
+) -> List[Dict[str, Any]]:
+    headers = set(_headers(payload))
+    indexed = _unique_rows(response_rows(payload), ["video"], label="video")
+    by_video = {key[0]: row for key, row in indexed.items()}
+    missing_status = STATUS_NOT_REPORTED if data_through else STATUS_PENDING
+    results: List[Dict[str, Any]] = []
+
+    for video_id in requested_video_ids:
+        row = by_video.get(video_id)
+        metrics = {
+            metric: _metric_status_for_row(
+                metric,
+                row,
+                headers,
+                missing_row_status=missing_status,
+                data_through=data_through,
+            )
+            for metric in ANALYTICS_METRICS
+        }
+        result: Dict[str, Any] = {
+            "video_id": video_id,
+            "metrics": metrics,
+            "period_start": period_start,
+            "period_end": period_end,
+            "data_through": data_through,
+            "source": ANALYTICS_SOURCE,
+            "sample_size": 1 if row is not None else 0,
+        }
+        for api_name, flat_name in FLAT_NAMES.items():
+            result[flat_name] = metrics[api_name]["value"]
+            result[f"{flat_name}_status"] = metrics[api_name]["status"]
+        results.append(result)
+    return results
+
+
+def parse_daily_response(
+    payload: Dict[str, Any],
+    requested_video_ids: Sequence[str],
+    requested_dates: Sequence[str],
+) -> List[Dict[str, Any]]:
+    """Return an explicit video/date matrix with pending vs not-reported states."""
+
+    headers = set(_headers(payload))
+    rows = response_rows(payload)
+    indexed = _unique_rows(rows, ["video", "day"], label="video/date")
+    by_key = {(key[0], key[1]): row for key, row in indexed.items()}
+    returned_dates = sorted({str(row.get("day")) for row in rows if row.get("day")})
+    data_through = returned_dates[-1] if returned_dates else None
+    parsed: List[Dict[str, Any]] = []
+
+    for video_id in requested_video_ids:
+        for metric_date in requested_dates:
+            row = by_key.get((video_id, metric_date))
+            missing_status = (
+                STATUS_PENDING
+                if data_through is None or metric_date > data_through
+                else STATUS_NOT_REPORTED
+            )
+            metrics = {
+                metric: _metric_status_for_row(
+                    metric,
+                    row,
+                    headers,
+                    missing_row_status=missing_status,
+                    data_through=data_through,
+                )
+                for metric in ANALYTICS_METRICS
+            }
+            parsed.append(
+                {
+                    "video_id": video_id,
+                    "metric_date": metric_date,
+                    "metrics": metrics,
+                    "row_status": STATUS_AVAILABLE if row is not None else missing_status,
+                    "data_through": data_through,
+                    "source": ANALYTICS_SOURCE,
+                }
+            )
+    return parsed
+
+
+def parse_retention_response(payload: Dict[str, Any]) -> List[Dict[str, float | None]]:
+    headers = set(_headers(payload))
+    required = {"elapsedVideoTimeRatio", "audienceWatchRatio"}
+    if not required.issubset(headers):
+        return []
+    points: List[Dict[str, float | None]] = []
+    for row in response_rows(payload):
+        elapsed = _coerce_metric("elapsedVideoTimeRatio", row.get("elapsedVideoTimeRatio"))
+        audience = _coerce_metric("audienceWatchRatio", row.get("audienceWatchRatio"))
+        relative = _coerce_metric(
+            "relativeRetentionPerformance", row.get("relativeRetentionPerformance")
+        )
+        if elapsed is None or audience is None:
+            continue
+        points.append(
+            {
+                "elapsed_video_time_ratio": float(elapsed),
+                "audience_watch_ratio": float(audience),
+                "relative_retention_performance": (
+                    float(relative) if relative is not None else None
+                ),
+            }
+        )
+    points.sort(key=lambda item: float(item["elapsed_video_time_ratio"] or 0))
+    return points
+
+
+def retention_30s_estimate(
+    points: Sequence[Dict[str, float | None]], duration_seconds: int | None
+) -> tuple[float | None, Dict[str, Any]]:
+    """Linearly interpolate the retention curve at 30 seconds.
+
+    This is a derived estimate, not a YouTube Studio metric.
+    """
+
+    metadata: Dict[str, Any] = {
+        "name": "retention_30s_estimate",
+        "method": "linear_interpolation_audience_watch_ratio",
+        "source_metric": "audienceWatchRatio",
+        "source_dimension": "elapsedVideoTimeRatio",
+        "target_seconds": 30,
+    }
+    if duration_seconds is None or duration_seconds <= 30:
+        metadata["status"] = STATUS_UNAVAILABLE
+        metadata["reason"] = "video_duration_not_over_30_seconds"
+        return None, metadata
+    if len(points) < 2:
+        metadata["status"] = STATUS_UNAVAILABLE
+        metadata["reason"] = "insufficient_curve_points"
+        return None, metadata
+
+    target = 30.0 / float(duration_seconds)
+    metadata["target_elapsed_video_time_ratio"] = target
+    normalized = [
+        point
+        for point in points
+        if point.get("elapsed_video_time_ratio") is not None
+        and point.get("audience_watch_ratio") is not None
+    ]
+    normalized.sort(key=lambda item: float(item["elapsed_video_time_ratio"] or 0))
+    if len(normalized) < 2:
+        metadata["status"] = STATUS_UNAVAILABLE
+        metadata["reason"] = "insufficient_curve_points"
+        return None, metadata
+
+    for point in normalized:
+        x = float(point["elapsed_video_time_ratio"] or 0)
+        if math.isclose(x, target, rel_tol=0, abs_tol=1e-12):
+            value = float(point["audience_watch_ratio"] or 0)
+            metadata.update({"status": STATUS_AVAILABLE, "exact_point": True})
+            return value, metadata
+
+    for left, right in zip(normalized, normalized[1:]):
+        left_x = float(left["elapsed_video_time_ratio"] or 0)
+        right_x = float(right["elapsed_video_time_ratio"] or 0)
+        if left_x < target < right_x and right_x > left_x:
+            left_y = float(left["audience_watch_ratio"] or 0)
+            right_y = float(right["audience_watch_ratio"] or 0)
+            weight = (target - left_x) / (right_x - left_x)
+            value = left_y + (right_y - left_y) * weight
+            metadata.update(
+                {
+                    "status": STATUS_AVAILABLE,
+                    "exact_point": False,
+                    "left_ratio": left_x,
+                    "right_ratio": right_x,
+                }
+            )
+            return value, metadata
+
+    metadata["status"] = STATUS_UNAVAILABLE
+    metadata["reason"] = "target_outside_curve_range"
+    return None, metadata
+
+
+def chunked(values: Sequence[str], size: int) -> Iterable[Sequence[str]]:
+    for index in range(0, len(values), size):
+        yield values[index : index + size]
 
 
 class AnalyticsService:
-    def __init__(self):
+    def __init__(self, *, http: httpx.AsyncClient | None = None):
         self.client_id = os.getenv("OAUTH_CLIENT_ID", "")
         self.client_secret = os.getenv("OAUTH_CLIENT_SECRET", "")
         self.refresh_token = os.getenv("OAUTH_REFRESH_TOKEN", "")
         self._access_token = ""
-        self.http = httpx.AsyncClient(timeout=30.0)
+        self.http = http or httpx.AsyncClient(timeout=30.0)
+        self._owns_http = http is None
 
     def is_configured(self) -> bool:
         return bool(self.client_id and self.client_secret and self.refresh_token)
@@ -22,68 +363,239 @@ class AnalyticsService:
     async def _get_access_token(self) -> str:
         if self._access_token:
             return self._access_token
-        resp = await self.http.post(TOKEN_URL, data={
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "refresh_token": self.refresh_token,
-            "grant_type": "refresh_token",
-        })
-        resp.raise_for_status()
-        self._access_token = resp.json()["access_token"]
+        try:
+            response = await self.http.post(
+                TOKEN_URL,
+                data={
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                    "refresh_token": self.refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+            response.raise_for_status()
+            token = response.json().get("access_token")
+        except (httpx.HTTPError, ValueError) as exc:
+            raise AnalyticsApiError("OAuth access token request failed") from exc
+        if not token:
+            raise AnalyticsApiError("OAuth response did not contain an access token")
+        self._access_token = str(token)
         return self._access_token
 
-    async def get_video_analytics(self, start_date: str = "2020-01-01") -> List[Dict]:
-        """영상별 CTR, 시청 시간, 평균 시청 유지율 가져오기"""
+    async def get_access_token(self) -> str:
+        """Return a valid OAuth access token for sibling Google API clients."""
+
+        return await self._get_access_token()
+
+    async def _query(self, params: Dict[str, Any]) -> Dict[str, Any]:
         token = await self._get_access_token()
-        end_date = date.today().isoformat()
+        try:
+            response = await self.http.get(
+                ANALYTICS_URL,
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise AnalyticsApiError(
+                f"YouTube Analytics query failed with HTTP {exc.response.status_code}"
+            ) from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise AnalyticsApiError("YouTube Analytics query failed") from exc
+        if not isinstance(payload, dict):
+            raise AnalyticsApiError("YouTube Analytics returned an invalid response")
+        return payload
 
-        resp = await self.http.get(ANALYTICS_URL, params={
-            "ids": "channel==MINE",
-            "startDate": start_date,
-            "endDate": end_date,
-            "metrics": "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,subscribersGained",
-            "dimensions": "video",
-            "sort": "-views",
-            "maxResults": 200,
-        }, headers={"Authorization": f"Bearer {token}"})
-        resp.raise_for_status()
+    async def get_authenticated_channel_id(self) -> str:
+        """Resolve the OAuth owner's channel using the existing youtube.readonly scope."""
 
-        data = resp.json()
-        headers = [h["name"] for h in data.get("columnHeaders", [])]
-        rows = data.get("rows", [])
+        token = await self._get_access_token()
+        try:
+            response = await self.http.get(
+                YOUTUBE_CHANNELS_URL,
+                params={"part": "id", "mine": "true", "maxResults": 1},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            items = response.json().get("items") or []
+        except httpx.HTTPStatusError as exc:
+            raise AnalyticsApiError(
+                f"YouTube owner channel lookup failed with HTTP {exc.response.status_code}"
+            ) from exc
+        except (httpx.HTTPError, ValueError, AttributeError) as exc:
+            raise AnalyticsApiError("YouTube owner channel lookup failed") from exc
+        if not items or not items[0].get("id"):
+            raise AnalyticsApiError("OAuth account did not return an owned YouTube channel")
+        return str(items[0]["id"])
 
-        results = []
-        for row in rows:
-            item = dict(zip(headers, row))
-            results.append({
-                "video_id": item.get("video", ""),
-                "views": int(item.get("views", 0)),
-                "watch_minutes": round(float(item.get("estimatedMinutesWatched", 0))),
-                "avg_view_duration_sec": round(float(item.get("averageViewDuration", 0))),
-                "avg_view_percentage": round(float(item.get("averageViewPercentage", 0)), 1),
-                "impressions": int(item.get("impressions", 0)),
-                "ctr": None,
-                "likes": int(item.get("likes", 0)),
-                "comments": int(item.get("comments", 0)),
-                "subscribers_gained": int(item.get("subscribersGained", 0)),
-            })
+    async def _query_all_rows(
+        self, params: Dict[str, Any], *, page_size: int = 200
+    ) -> Dict[str, Any]:
+        """Collect all rows using the API's 1-based startIndex pagination."""
+
+        combined_rows: List[List[Any]] = []
+        headers: List[Dict[str, Any]] | None = None
+        start_index = 1
+        while True:
+            page_params = dict(params)
+            page_params["startIndex"] = start_index
+            page_params["maxResults"] = page_size
+            payload = await self._query(page_params)
+            page_headers = list(payload.get("columnHeaders") or [])
+            if headers is None:
+                headers = page_headers
+            elif page_headers != headers:
+                raise AnalyticsApiError("Analytics pagination returned inconsistent headers")
+            page_rows = list(payload.get("rows") or [])
+            combined_rows.extend(page_rows)
+            if len(page_rows) < page_size:
+                break
+            start_index += len(page_rows)
+            if start_index > 1_000_000:
+                raise AnalyticsApiError("Analytics pagination exceeded the safety limit")
+        return {"columnHeaders": headers or [], "rows": combined_rows}
+
+    async def _data_through(
+        self, video_ids: Sequence[str], start_date: str, end_date: str
+    ) -> str | None:
+        if not video_ids:
+            return None
+        payload = await self._query_all_rows(
+            {
+                "ids": "channel==MINE",
+                "startDate": start_date,
+                "endDate": end_date,
+                "metrics": ",".join(ANALYTICS_METRICS),
+                "dimensions": "day",
+                "filters": f"video=={','.join(video_ids)}",
+                "sort": "day",
+            }
+        )
+        days = [str(row.get("day")) for row in response_rows(payload) if row.get("day")]
+        return max(days) if days else None
+
+    async def get_video_analytics(
+        self,
+        start_date: str = "2020-01-01",
+        *,
+        end_date: str | None = None,
+        video_ids: Sequence[str] | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Aggregate metrics for an explicit cohort, including low-view recent videos."""
+
+        if not video_ids:
+            raise ValueError("video_ids are required; implicit top-200 selection is disabled")
+        unique_ids = list(dict.fromkeys(video_id for video_id in video_ids if video_id))
+        requested_end = end_date or date.today().isoformat()
+        data_through = await self._data_through(unique_ids, start_date, requested_end)
+        results: List[Dict[str, Any]] = []
+        for batch in chunked(unique_ids, 200):
+            payload = await self._query_all_rows(
+                {
+                    "ids": "channel==MINE",
+                    "startDate": start_date,
+                    "endDate": requested_end,
+                    "metrics": ",".join(ANALYTICS_METRICS),
+                    "dimensions": "video",
+                    "filters": f"video=={','.join(batch)}",
+                    "sort": "-views",
+                },
+                page_size=min(200, len(batch)),
+            )
+            results.extend(
+                parse_video_aggregate_response(
+                    payload,
+                    batch,
+                    period_start=start_date,
+                    period_end=requested_end,
+                    data_through=data_through,
+                )
+            )
         return results
 
-    async def get_channel_overview(self) -> Dict:
-        """채널 전체 최근 30일 요약"""
-        token = await self._get_access_token()
-        end_date = date.today().isoformat()
+    async def get_daily_video_metrics(
+        self,
+        video_ids: Sequence[str],
+        requested_dates: Sequence[str],
+    ) -> List[Dict[str, Any]]:
+        if not video_ids or not requested_dates:
+            return []
+        unique_ids = list(dict.fromkeys(video_id for video_id in video_ids if video_id))
+        dates = sorted(set(requested_dates))
+        results: List[Dict[str, Any]] = []
+        for batch in chunked(unique_ids, 200):
+            payload = await self._query_all_rows(
+                {
+                    "ids": "channel==MINE",
+                    "startDate": dates[0],
+                    "endDate": dates[-1],
+                    "metrics": ",".join(ANALYTICS_METRICS),
+                    "dimensions": "day,video",
+                    "filters": f"video=={','.join(batch)}",
+                    "sort": "day",
+                },
+                page_size=200,
+            )
+            results.extend(parse_daily_response(payload, batch, dates))
+        return results
 
-        resp = await self.http.get(ANALYTICS_URL, params={
-            "ids": "channel==MINE",
-            "startDate": "2025-01-01",
-            "endDate": end_date,
-            "metrics": "views,estimatedMinutesWatched,averageViewDuration,impressionClickThroughRate,subscribersGained,subscribersLost",
-            "dimensions": "month",
-            "sort": "month",
-        }, headers={"Authorization": f"Bearer {token}"})
-        resp.raise_for_status()
-        return resp.json()
+    async def get_video_retention(
+        self,
+        video_id: str,
+        *,
+        start_date: str,
+        end_date: str | None = None,
+    ) -> Dict[str, Any]:
+        requested_end = end_date or date.today().isoformat()
+        data_through = await self._data_through([video_id], start_date, requested_end)
+        payload = await self._query(
+            {
+                "ids": "channel==MINE",
+                "startDate": start_date,
+                "endDate": requested_end,
+                "metrics": "audienceWatchRatio,relativeRetentionPerformance",
+                "dimensions": "elapsedVideoTimeRatio",
+                "filters": f"video=={video_id}",
+            }
+        )
+        points = parse_retention_response(payload)
+        if points:
+            status = STATUS_AVAILABLE
+        elif data_through is None or data_through < requested_end:
+            status = STATUS_PENDING
+        else:
+            status = STATUS_NOT_REPORTED
+        return {
+            "video_id": video_id,
+            "period_start": start_date,
+            "period_end": requested_end,
+            "data_through": data_through,
+            "status": status,
+            "points": points,
+            "source": ANALYTICS_SOURCE,
+        }
 
-    async def close(self):
-        await self.http.aclose()
+    async def get_channel_overview(
+        self, *, start_date: str = "2025-01-01", end_date: str | None = None
+    ) -> Dict[str, Any]:
+        """Valid channel metrics only; thumbnail reach is deliberately excluded."""
+
+        return await self._query(
+            {
+                "ids": "channel==MINE",
+                "startDate": start_date,
+                "endDate": end_date or date.today().isoformat(),
+                "metrics": (
+                    "views,estimatedMinutesWatched,averageViewDuration,"
+                    "averageViewPercentage,likes,comments,shares,"
+                    "subscribersGained,subscribersLost"
+                ),
+                "dimensions": "month",
+                "sort": "month",
+            }
+        )
+
+    async def close(self) -> None:
+        if self._owns_http:
+            await self.http.aclose()

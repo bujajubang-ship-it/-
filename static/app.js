@@ -1,3 +1,26 @@
+// Same-origin API 세션이 만료되면 모든 fetch 호출을 로그인 화면으로 보낸다.
+// localhost 자동 컷편집기 같은 외부 origin 응답에는 관여하지 않는다.
+const nativeFetch = window.fetch.bind(window);
+function redirectToOwnerLogin() {
+  if (location.pathname === '/login') return;
+  const next = location.pathname + location.search + location.hash;
+  location.assign('/login?next=' + encodeURIComponent(next));
+}
+window.fetch = async function ownerAuthenticatedFetch(input, init) {
+  const response = await nativeFetch(input, init);
+  const rawUrl = input instanceof Request ? input.url : String(input);
+  const requestUrl = new URL(rawUrl, location.href);
+  if (requestUrl.origin === location.origin && response.status === 401) {
+    redirectToOwnerLogin();
+  }
+  return response;
+};
+
+async function ownerLogout() {
+  await nativeFetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
+  location.replace('/login');
+}
+
 let midformAnalyzing = false;
 let shortformAnalyzing = false;
 let editAnalyzing = false;
@@ -10,7 +33,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'ytsearch', 'topic', 'jjachi', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'autocut', 'chat', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'ytsearch', 'topic', 'jjachi', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'autocut', 'chat', 'strategy', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -24,10 +47,16 @@ function switchTab(tab) {
   if (tab === 'worksheet') loadWorksheetTab();
   if (tab === 'knowledge') loadKnowledge();
   if (tab === 'chat') loadChatSessions();
+  if (tab === 'strategy') loadStrategies();
   if (tab === 'ytsearch') ysInit();
   if (tab === 'autocut') acInit();
   if (tab === 'video-feedback') loadVfHistory();
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+  const requestedTab = new URLSearchParams(location.search).get('tab');
+  if (requestedTab && ALL_TABS.includes(requestedTab)) switchTab(requestedTab);
+});
 
 // ===== 영상 피드백 기록 (주제별) =====
 // 주제를 적어 저장해두면 나중에 "그때 뭐라고 했더라"를 바로 찾아본다.
@@ -325,20 +354,47 @@ function makeProgressStepper(stepsElId) {
   };
 }
 
-async function streamSSE(url, body, addStep, onDone, onError) {
+async function streamSSE(url, body, addStep, onDone, onError, options = {}) {
   let buffer = '';
+  const overallTimeoutMs = options.overallTimeoutMs || 600000;
+  const idleTimeoutMs = options.idleTimeoutMs || 90000;
+  const controller = new AbortController();
+  let overallTimedOut = false;
+  const overallTimer = setTimeout(() => {
+    overallTimedOut = true;
+    controller.abort();
+  }, overallTimeoutMs);
   try {
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
-    if (!resp.ok) throw new Error(`서버 오류: ${resp.status}`);
+    if (!resp.ok) {
+      throw new Error(`서버 오류: ${resp.status}`);
+    }
+    const contentType = resp.headers.get('content-type') || '';
+    if (!contentType.includes('text/event-stream')) {
+      throw new Error('로그인 세션 또는 서버 스트리밍 설정을 확인해주세요.');
+    }
+    if (!resp.body) throw new Error('서버가 스트리밍 응답을 시작하지 못했습니다.');
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) { onError('서버 연결이 끊어졌습니다. 다시 시도해주세요.'); return; }
+      let idleTimer;
+      const idleTimeout = new Promise((_, reject) => {
+        idleTimer = setTimeout(() => reject(new Error(
+          `서버 응답이 ${Math.round(idleTimeoutMs / 1000)}초 이상 멈췄습니다. 다시 시도해주세요.`
+        )), idleTimeoutMs);
+      });
+      const { done, value } = await Promise.race([reader.read(), idleTimeout]);
+      clearTimeout(idleTimer);
+      if (done) {
+        buffer += decoder.decode();
+        onError('서버가 완료 신호 없이 연결을 종료했습니다. 다시 시도해주세요.');
+        return;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop();
@@ -350,11 +406,19 @@ async function streamSSE(url, body, addStep, onDone, onError) {
           if (data.step === 'done') { onDone(data); return; }
           if (data.step === 'ping') continue;
           if (data.message) addStep(data.message, 'active');
-        } catch (e) {}
+        } catch (e) {
+          throw new Error('서버 응답을 해석하지 못했습니다. 다시 시도해주세요.');
+        }
       }
     }
   } catch (err) {
-    onError(err.message);
+    controller.abort();
+    const message = overallTimedOut
+      ? `요청이 ${Math.round(overallTimeoutMs / 60000)}분 제한 시간을 초과했습니다. 다시 시도해주세요.`
+      : (err.message || '서버 연결 중 오류가 발생했습니다.');
+    onError(message);
+  } finally {
+    clearTimeout(overallTimer);
   }
 }
 
@@ -520,6 +584,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function resetToMidform() {
+  bindStrategyResultButton('midform-strategy-btn', null);
   document.getElementById('midform-report-section').classList.add('hidden');
   document.getElementById('midform-progress-section').classList.add('hidden');
   document.getElementById('midform-input-section').classList.remove('hidden');
@@ -551,6 +616,7 @@ async function runMidform(keyword, product_desc, product_url = '') {
     '/api/midform', { keyword, product_desc, product_url },
     addStep,
     (data) => {
+      bindStrategyResultButton('midform-strategy-btn', data.strategy_id);
       document.getElementById('midform-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
         s.className = 'progress-step done';
         s.querySelector('.step-icon').textContent = '✅';
@@ -817,6 +883,7 @@ function selectDuration(btn) {
 }
 
 function resetToShortform() {
+  bindStrategyResultButton('shortform-strategy-btn', null);
   document.getElementById('shortform-report-section').classList.add('hidden');
   document.getElementById('shortform-progress-section').classList.add('hidden');
   document.getElementById('shortform-input-section').classList.remove('hidden');
@@ -847,6 +914,7 @@ async function runShortform(keyword, product_desc, duration) {
     '/api/shortform', { keyword, product_desc, duration },
     addStep,
     (data) => {
+      bindStrategyResultButton('shortform-strategy-btn', data.strategy_id);
       document.getElementById('shortform-progress-steps').querySelectorAll('.progress-step.active').forEach(s => {
         s.className = 'progress-step done';
         s.querySelector('.step-icon').textContent = '✅';
@@ -2162,15 +2230,32 @@ function startChannelAnalyze() {
       document.getElementById('channel-btn').disabled = false;
       document.getElementById('channel-input-section').classList.remove('hidden');
       document.getElementById('channel-progress-section').classList.add('hidden');
-    }
+    },
+    { overallTimeoutMs: 300000, idleTimeoutMs: 45000 }
   );
 }
 
 function renderChannelReport(r) {
   const ci = r.channel_info || {};
+  const metadata = r.analytics_metadata || {};
+  let freshness = '';
+  if (metadata.data_through) {
+    const through = new Date(`${metadata.data_through}T00:00:00Z`);
+    const lagDays = Number.isNaN(through.getTime()) ? null
+      : Math.max(0, Math.floor((Date.now() - through.getTime()) / 86400000));
+    freshness = ` · Analytics 기준 ${metadata.data_through}`
+      + (lagDays === null ? '' : ` (${lagDays}일 지연)`);
+  } else {
+    freshness = ' · Analytics 데이터 없음';
+  }
+  const reachStatus = metadata.thumbnail_reach_sample_size > 0
+    ? ` · 공식 CTR 표본 ${metadata.thumbnail_reach_sample_size}건`
+    : ' · 공식 CTR 수집 대기';
   document.getElementById('channel-report-title').textContent = ci.title ? `${ci.title} 채널 분석` : '채널 분석 결과';
   document.getElementById('channel-report-subtitle').textContent =
-    ci.subscriber_count ? `구독자 ${ci.subscriber_count.toLocaleString()}명 · 영상 ${r.total_analyzed || 0}개 분석` : '';
+    ci.subscriber_count
+      ? `구독자 ${ci.subscriber_count.toLocaleString()}명 · 영상 ${r.total_analyzed || 0}개 분석${freshness}${reachStatus}`
+      : `영상 ${r.total_analyzed || 0}개 분석${freshness}${reachStatus}`;
 
   const summary = document.getElementById('channel-summary');
   summary.textContent = r.channel_summary || '';
@@ -2244,6 +2329,260 @@ function renderChannelReport(r) {
 
   // 다음 영상 전략
   document.getElementById('channel-next-strategy').textContent = r.next_video_strategy || '';
+}
+
+// ===== 🎯 공통 전략 보관함 =====
+
+let strategyItems = [];
+let currentStrategyId = null;
+let strategyGenerating = false;
+
+const STRATEGY_LABELS = {
+  section: '구간', purpose: '목적', content: '내용', scene: '장면', goal: '목표',
+  talking_points: '말할 내용', b_roll: 'B-roll', props_and_checks: '소품·확인',
+  checkpoint: '시점', metric: '지표', target: '목표', decision_rule: '판단 규칙',
+  text: '문구', composition: '구도', shooting_direction: '촬영 지시',
+  claim: '근거', source: '출처', as_of: '기준일', interpretation: '해석',
+};
+
+function bindStrategyResultButton(elementId, strategyId) {
+  const button = document.getElementById(elementId);
+  if (!button) return;
+  if (!strategyId) {
+    button.classList.add('hidden');
+    button.onclick = null;
+    return;
+  }
+  button.classList.remove('hidden');
+  button.onclick = () => openStrategy(strategyId);
+}
+
+function strategyRenderValue(value) {
+  if (value === null || value === undefined || value === '') return '<span style="color:#94a3b8">데이터 없음</span>';
+  if (Array.isArray(value)) {
+    if (!value.length) return '<span style="color:#94a3b8">항목 없음</span>';
+    return `<ul>${value.map(item => `<li>${strategyRenderValue(item)}</li>`).join('')}</ul>`;
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value);
+    if (!entries.length) return '<span style="color:#94a3b8">항목 없음</span>';
+    return `<div class="strategy-kv">${entries.map(([key, item]) => `
+      <div class="strategy-kv-key">${escHtml(STRATEGY_LABELS[key] || key)}</div>
+      <div>${strategyRenderValue(item)}</div>`).join('')}</div>`;
+  }
+  return escHtml(String(value)).replace(/\n/g, '<br>');
+}
+
+function strategySection(title, value, wide = false) {
+  return `<div class="strategy-section${wide ? ' wide' : ''}">
+    <h3>${title}</h3><div class="strategy-section-body">${strategyRenderValue(value)}</div>
+  </div>`;
+}
+
+async function loadStrategies(selectId = null) {
+  const list = document.getElementById('strategy-list');
+  if (!list) return;
+  list.innerHTML = '<div class="strategy-status">불러오는 중…</div>';
+  try {
+    const response = await fetch('/api/strategies?limit=100');
+    if (!response.ok) throw new Error(`전략 목록 오류 ${response.status}`);
+    strategyItems = await response.json();
+    renderStrategyList();
+    const target = selectId || currentStrategyId || strategyItems[0]?.id;
+    if (target) await selectStrategy(Number(target));
+    else document.getElementById('strategy-detail').innerHTML = '<div class="strategy-empty">저장된 전략이 없습니다. 실제 데이터를 조회하는 첫 통합 기획을 생성하세요.</div>';
+  } catch (error) {
+    list.innerHTML = `<div class="strategy-status" style="color:#dc2626">${escHtml(error.message)}</div>`;
+  }
+}
+
+function renderStrategyList() {
+  const list = document.getElementById('strategy-list');
+  if (!strategyItems.length) {
+    list.innerHTML = '<div class="strategy-status">아직 저장된 전략이 없습니다.</div>';
+    return;
+  }
+  list.innerHTML = strategyItems.map(item => `
+    <button class="strategy-list-item${Number(item.id) === Number(currentStrategyId) ? ' active' : ''}" onclick="selectStrategy(${Number(item.id)})">
+      <div class="strategy-list-topic">${escHtml(item.topic || '제목 없음')}</div>
+      <div class="strategy-list-meta">#${Number(item.id)} · ${escHtml(item.content_type || '')} · ${escHtml(item.status || 'draft')} · ${escHtml(String(item.updated_at || '').slice(0, 16))}</div>
+    </button>`).join('');
+}
+
+async function openStrategy(strategyId) {
+  switchTab('strategy');
+  await loadStrategies(Number(strategyId));
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function selectStrategy(strategyId) {
+  currentStrategyId = Number(strategyId);
+  renderStrategyList();
+  const detail = document.getElementById('strategy-detail');
+  detail.innerHTML = '<div class="strategy-empty">전략과 실제 성과를 불러오는 중…</div>';
+  try {
+    const response = await fetch(`/api/strategies/${currentStrategyId}`);
+    const item = await response.json();
+    if (!response.ok) throw new Error(item.error || `전략 오류 ${response.status}`);
+    renderStrategyDetail(item);
+  } catch (error) {
+    detail.innerHTML = `<div class="strategy-empty" style="color:#dc2626">${escHtml(error.message)}</div>`;
+  }
+}
+
+function renderStrategyEvidence(evidence) {
+  if (!Array.isArray(evidence) || !evidence.length) return strategyRenderValue(evidence);
+  return evidence.map(item => {
+    if (typeof item !== 'object' || item === null) return `<div class="strategy-evidence">${strategyRenderValue(item)}</div>`;
+    return `<div class="strategy-evidence">
+      <div><b>${escHtml(item.claim || item.type || '근거')}</b>${item.interpretation ? ` — ${escHtml(item.interpretation)}` : ''}</div>
+      <div class="strategy-evidence-source">${escHtml(item.source || 'source 미표시')}${item.as_of ? ` · ${escHtml(item.as_of)}` : ''}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderStrategyDetail(item) {
+  const s = item.strategy || {};
+  const checkpoints = item.checkpoints || [];
+  const videos = item.videos || [];
+  const active = item.status === 'active';
+  document.getElementById('strategy-detail').innerHTML = `
+    <div class="strategy-detail-head">
+      <div>
+        <h2>${escHtml(s.recommended_title || item.topic || '공통 전략')}</h2>
+        <div class="strategy-badges">
+          <span class="strategy-badge">#${Number(item.id)}</span>
+          <span class="strategy-badge">${escHtml(item.content_type || '')}</span>
+          <span class="strategy-badge${active ? ' active' : ''}">${escHtml(item.status || 'draft')}</span>
+          ${item.pipeline_id ? `<span class="strategy-badge">파이프라인 #${Number(item.pipeline_id)}</span>` : ''}
+          ${item.worksheet_id ? `<span class="strategy-badge">워크시트 #${Number(item.worksheet_id)}</span>` : ''}
+        </div>
+      </div>
+      <div class="strategy-actions">
+        <button class="strategy-secondary" onclick="activateStrategy()">파이프라인·워크시트에 보내기</button>
+        ${item.worksheet_id ? '<button class="strategy-secondary" onclick="switchTab(\'worksheet\')">워크시트 열기</button>' : ''}
+        ${item.pipeline_id ? '<button class="strategy-secondary" onclick="switchTab(\'pipeline\')">파이프라인 열기</button>' : ''}
+      </div>
+    </div>
+    <div class="strategy-grid">
+      ${strategySection('1. 영상 주제', s.topic || item.topic)}
+      ${strategySection('2. 타깃 시청자', s.target_audience)}
+      ${strategySection('3. 왜 지금 해야 하는지', s.why_now)}
+      ${strategySection('4. 핵심 메시지', s.core_message)}
+      ${strategySection('5. 제목 후보', s.title_candidates)}
+      ${strategySection('6. 최종 추천 제목', s.recommended_title)}
+      ${strategySection('7. 썸네일 문구·구도', s.thumbnail, true)}
+      ${strategySection('8. 첫 5~15초 훅', s.hook_5_15s, true)}
+      ${strategySection('9. 전체 영상 구조', s.structure, true)}
+      ${strategySection('10. 필요한 촬영 컷', s.shots, true)}
+      ${strategySection('11. 촬영 워크시트', s.worksheet, true)}
+      ${strategySection('12. 업로드 후 KPI', s.kpis, true)}
+      ${strategySection('반대 근거·리스크', s.counterargument_and_risks, true)}
+      <div class="strategy-section wide"><h3>판단 근거</h3><div class="strategy-section-body">${renderStrategyEvidence(item.evidence?.length ? item.evidence : s.evidence)}</div></div>
+      ${strategySection('연결된 업로드 영상', videos, true)}
+      ${strategySection('1일/3일/7일/장기 실제 성과', checkpoints, true)}
+    </div>
+    <div class="strategy-workflow">
+      <h3>전략 개선</h3>
+      <div class="strategy-refine">
+        <textarea id="strategy-refine-prompt" placeholder="예: 제목은 유지하고 retention 초반 이탈을 반영해 훅과 촬영 컷을 개선해줘."></textarea>
+        <button class="strategy-primary" onclick="refineStrategy()">같은 context로 개선</button>
+      </div>
+    </div>
+    <div class="strategy-workflow">
+      <h3>업로드 영상 연결 → 실제 성과 feedback loop</h3>
+      <div class="strategy-link-grid">
+        <input id="strategy-video-id" placeholder="YouTube video ID 또는 URL" />
+        <input id="strategy-upload-title" placeholder="실제 업로드 제목" />
+        <input id="strategy-thumbnail-text" placeholder="실제 썸네일 문구" />
+        <button class="strategy-primary" onclick="linkStrategyVideo()">연결</button>
+      </div>
+      <div id="strategy-workflow-status" class="strategy-status"></div>
+    </div>`;
+}
+
+async function generateStrategy(existingStrategyId = null, promptOverride = null) {
+  if (strategyGenerating) return;
+  const prompt = (promptOverride ?? document.getElementById('strategy-prompt')?.value ?? '').trim();
+  const status = document.getElementById('strategy-generate-status');
+  if (!prompt) {
+    if (status) status.textContent = '전략 요청을 입력해주세요.';
+    return;
+  }
+  strategyGenerating = true;
+  const button = document.getElementById('strategy-generate-btn');
+  if (button) button.disabled = true;
+  if (status) status.textContent = '최근 성과·비슷한 영상·retention·지식·파이프라인을 조회해 판단 중…';
+  try {
+    const response = await fetch('/api/strategies/generate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        prompt,
+        content_type: document.getElementById('strategy-content-type')?.value || '미드폼',
+        existing_strategy_id: existingStrategyId,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `전략 생성 오류 ${response.status}`);
+    if (status) status.textContent = '전략이 저장됐습니다.';
+    await loadStrategies(data.id);
+  } catch (error) {
+    if (status) status.textContent = `생성 실패: ${error.message}`;
+  } finally {
+    strategyGenerating = false;
+    if (button) button.disabled = false;
+  }
+}
+
+async function refineStrategy() {
+  const input = document.getElementById('strategy-refine-prompt');
+  const prompt = (input?.value || '').trim();
+  if (!prompt || !currentStrategyId) return;
+  if (document.getElementById('strategy-prompt')) document.getElementById('strategy-prompt').value = prompt;
+  await generateStrategy(currentStrategyId, prompt);
+}
+
+async function activateStrategy() {
+  if (!currentStrategyId) return;
+  const status = document.getElementById('strategy-workflow-status');
+  if (status) status.textContent = '파이프라인과 워크시트에 연결 중…';
+  try {
+    const response = await fetch(`/api/strategies/${currentStrategyId}/activate`, {method: 'POST'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `연결 오류 ${response.status}`);
+    await selectStrategy(currentStrategyId);
+  } catch (error) {
+    if (status) status.textContent = error.message;
+  }
+}
+
+function normalizedVideoId(raw) {
+  const value = String(raw || '').trim();
+  const match = value.match(/(?:v=|youtu\.be\/|shorts\/)([A-Za-z0-9_-]{6,})/);
+  return match ? match[1] : value;
+}
+
+async function linkStrategyVideo() {
+  if (!currentStrategyId) return;
+  const status = document.getElementById('strategy-workflow-status');
+  const videoId = normalizedVideoId(document.getElementById('strategy-video-id')?.value);
+  if (!videoId) { if (status) status.textContent = 'YouTube video ID 또는 URL을 입력해주세요.'; return; }
+  if (status) status.textContent = '업로드 영상과 전략을 연결 중…';
+  try {
+    const response = await fetch(`/api/strategies/${currentStrategyId}/link-video`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        video_id: videoId,
+        title_at_upload: document.getElementById('strategy-upload-title')?.value || '',
+        thumbnail_text: document.getElementById('strategy-thumbnail-text')?.value || '',
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `영상 연결 오류 ${response.status}`);
+    await selectStrategy(currentStrategyId);
+  } catch (error) {
+    if (status) status.textContent = error.message;
+  }
 }
 
 // ===== 💬 AI 상담 =====
@@ -2410,13 +2749,13 @@ async function saveCurrentChat() {
 const CHAT_WELCOME = `<div class="chat-bubble assistant">
   <div class="chat-bubble-inner">
     안녕하세요! 부자주방 채널 전담 콘텐츠 전략 파트너입니다. 👋<br><br>
-    미드폼·숏폼 기획, 제목·썸네일 전략, 업로드 타이밍, 채널 성장까지 궁금한 것은 무엇이든 물어보세요.<br><br>
-    채널 목표(CTR 10%+, 30초 이탈률 40% 미만)와 풀링·키 콘텐츠 전략을 기반으로 구체적으로 답변드립니다.
+    실제 채널 성과, retention, 과거 기획, 지식과 파이프라인을 질문에 맞게 직접 찾아 연결해서 답합니다.<br><br>
+    데이터와 생각이 다르면 반박하고, 주제부터 촬영 워크시트와 업로드 KPI까지 한 전략으로 제안합니다.
     <div class="chat-suggestion-chips">
-      <span class="chat-chip" onclick="sendChatChip(this)">릴스 훅 잡는 법</span>
-      <span class="chat-chip" onclick="sendChatChip(this)">조회수 오르는 제목 공식</span>
-      <span class="chat-chip" onclick="sendChatChip(this)">풀링 vs 키 콘텐츠 차이</span>
-      <span class="chat-chip" onclick="sendChatChip(this)">업로드 최적 요일·시간</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">다음 영상 뭐 찍을까?</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">요즘 채널 방향이 맞아?</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">최근 실패 패턴 먼저 알려줘</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">촬영 워크시트까지 기획해줘</span>
     </div>
   </div>
 </div>`;
@@ -2619,6 +2958,12 @@ async function sendChat() {
         if (!line.startsWith('data: ')) continue;
         try {
           const data = JSON.parse(line.slice(6));
+          if (data.provider) {
+            const status = document.getElementById('chat-provider-status');
+            if (status) status.textContent = data.provider === 'openai'
+              ? 'GPT-5.6 Sol · 채널 데이터 도구 연결됨'
+              : 'Claude fallback · GPT 연결 오류 시 자동 전환';
+          }
           if (data.token) {
             if (!started) { inner.innerHTML = ''; started = true; }
             fullText += data.token;
@@ -3575,6 +3920,11 @@ async function analyzeVideo() {
     // 응답 스트림 처리
     let buf = '';
     xhr.onreadystatechange = () => {
+      if (xhr.readyState === 4 && xhr.status === 401) {
+        redirectToOwnerLogin();
+        done();
+        return;
+      }
       if (xhr.readyState < 3) return;
       const newText = xhr.responseText.slice(buf.length);
       if (newText) resetStallTimer();

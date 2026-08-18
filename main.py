@@ -3,16 +3,18 @@ import datetime
 import json
 import os
 import re
+import secrets
+import time
 import uuid
 import subprocess
+from contextlib import asynccontextmanager
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -20,21 +22,35 @@ from analyzer import Analyzer
 from naver_service import NaverService
 from youtube_service import YouTubeService
 from analytics_service import AnalyticsService
+from analytics_repository import AnalyticsRepository, init_analytics_schema
+from analytics_sync import AnalyticsSyncCoordinator
+from channel_analysis import analyze_channel_with_fallback, fetch_retention_sample
+from collection_service import YouTubeCollectionScheduler, YouTubeCollectionService
+from strategy_brain.chat_service import StrategyChatService
+from strategy_repository import (
+    StrategyRepository,
+    capture_legacy_strategy,
+    init_strategy_schema,
+)
+from strategy_context import generate_strategy_context
 from viewtrap_service import ViewTrapService
 from heatmap_service import fetch_heatmap, summarize_for_prompt
+from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
 from database import (init_db, save_history, list_history, get_history, delete_history,
                        init_pipeline, list_pipeline, create_pipeline_item,
                        update_pipeline_item, delete_pipeline_item)
 
 init_db()
 init_pipeline()
+init_analytics_schema()
+init_strategy_schema()
 
-# ===== 영상 피드백 기록 영구 보관 =====
-# 이 사이트는 Render 무료플랜이라 재배포·재시작 때 history.db 가 통째로 지워진다.
-# 나중에 다시 보려고 남기는 기록이 사라지면 의미가 없어서, 항상 켜져 있는
-# Lightsail(cnmaker) 의 KV 에 복사해 두고 DB 가 비어 있으면 되살린다.
-_KV_BASE = os.environ.get("CNMAKER_BASE", "http://43.200.232.189")
-_KV_SECRET = os.environ.get("CNMAKER_SECRET", "bj-cnmaker-2026")
+# ===== 영상 피드백 legacy 보조 사본 =====
+# 운영 source of truth는 Render Starter의 /data Persistent Disk에 있는
+# /data/history.db다. Lightsail KV에는 신규 피드백의 보조 사본만 남기며,
+# 의도적으로 삭제한 기록이 되살아나지 않도록 앱 시작 시 자동복원하지 않는다.
+_KV_BASE = os.environ.get("CNMAKER_BASE", "").rstrip("/")
+_KV_SECRET = os.environ.get("CNMAKER_SECRET", "")
 _VF_KEY = "yt_video_feedback"
 
 
@@ -50,6 +66,8 @@ def _vf_rows():
 
 
 def _vf_backup():
+    if not _KV_BASE or not _KV_SECRET:
+        return
     try:
         httpx.post(f"{_KV_BASE}/kv/{_VF_KEY}", json={"rows": _vf_rows()},
                    headers={"x-secret": _KV_SECRET}, timeout=8)
@@ -57,39 +75,24 @@ def _vf_backup():
         pass
 
 
-def _vf_restore_if_empty():
-    """재배포 직후처럼 기록이 비어 있으면 백업본에서 되살린다."""
+COLLECTION_SCHEDULER = YouTubeCollectionScheduler()
+
+
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    COLLECTION_SCHEDULER.start()
     try:
-        if list_history("video_feedback", limit=1):
-            return
-        r = httpx.get(f"{_KV_BASE}/kv/{_VF_KEY}", headers={"x-secret": _KV_SECRET}, timeout=8)
-        if r.status_code != 200:
-            return
-        rows = ((r.json() or {}).get("data") or {}).get("rows") or []
-        if not rows:
-            return
-        # 원래 날짜를 그대로 살려야 '언제 받은 피드백인지'가 맞다 → 직접 넣는다
-        from database import get_db
-        conn = get_db()
-        for x in rows:
-            rep = x.get("report")
-            if not isinstance(rep, str):
-                rep = json.dumps(rep or {}, ensure_ascii=False)
-            conn.execute(
-                "INSERT INTO history (type, keyword, report, created_at) VALUES (?,?,?,?)",
-                ("video_feedback", x.get("keyword") or "기록", rep,
-                 x.get("created_at") or None))
-        conn.commit()
-        conn.close()
-        print(f"[영상피드백] 백업본에서 기록 {len(rows)}건 복원")
-    except Exception as e:
-        print("[영상피드백] 복원 건너뜀:", e)
+        yield
+    finally:
+        await COLLECTION_SCHEDULER.stop()
 
 
-_vf_restore_if_empty()
+app = FastAPI(title="YouTube Content Researcher", lifespan=app_lifespan)
+OWNER_AUTH = OwnerAuthenticator(OwnerAuthSettings.from_env())
+app.add_middleware(OwnerAuthMiddleware, authenticator=OWNER_AUTH)
 
-app = FastAPI(title="YouTube Content Researcher")
-
+if OWNER_AUTH.settings.production and not os.getenv("PIPELINE_REMIND_SECRET", "").strip():
+    raise RuntimeError("PIPELINE_REMIND_SECRET is required in production.")
 
 async def fetch_product_info(url: str) -> str:
     """스마트스토어 상품 페이지에서 제품 정보 추출"""
@@ -142,7 +145,6 @@ async def fetch_product_info(url: str) -> str:
         return "\n".join(parts) if parts else ""
     except Exception:
         return ""
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 class AnalyzeRequest(BaseModel):
@@ -226,8 +228,111 @@ class BlogRequest(BaseModel):
     photos: list = []  # [{"media_type": "image/jpeg", "data": "base64..."}]
 
 
+class OwnerLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class StrategyGenerateRequest(BaseModel):
+    prompt: str
+    content_type: str = "미드폼"
+    existing_strategy_id: int | None = None
+
+
+class StrategyCreateRequest(BaseModel):
+    topic: str
+    content_type: str = "미드폼"
+    strategy: dict
+    evidence: list = Field(default_factory=list)
+    status: str = "draft"
+    source_history_id: int | None = None
+    pipeline_id: int | None = None
+    worksheet_id: int | None = None
+
+
+class StrategyVideoLinkRequest(BaseModel):
+    video_id: str
+    title_at_upload: str = ""
+    thumbnail_text: str = ""
+
+
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.get("/healthz")
+async def healthz():
+    """Public liveness check without configuration or channel details."""
+    return {"ok": True}
+
+
+@app.get("/login")
+async def owner_login_page(request: Request):
+    if OWNER_AUTH.settings.enabled and OWNER_AUTH.request_session(request):
+        return RedirectResponse("/", status_code=303)
+    return FileResponse("static/login.html", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/auth/login")
+async def owner_login(request: Request, credentials: OwnerLoginRequest):
+    if not OWNER_AUTH.settings.enabled:
+        return JSONResponse(
+            {"error": "Owner authentication is disabled."}, status_code=404
+        )
+
+    client_key = request.client.host if request.client else "unknown"
+    retry_after = OWNER_AUTH.rate_limiter.retry_after(client_key)
+    if retry_after:
+        return JSONResponse(
+            {"error": "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요."},
+            status_code=429,
+            headers={"Retry-After": str(retry_after), "Cache-Control": "no-store"},
+        )
+
+    if not OWNER_AUTH.verify_credentials(credentials.username, credentials.password):
+        OWNER_AUTH.rate_limiter.record_failure(client_key)
+        retry_after = OWNER_AUTH.rate_limiter.retry_after(client_key)
+        headers = {"Cache-Control": "no-store"}
+        if retry_after:
+            headers["Retry-After"] = str(retry_after)
+        return JSONResponse(
+            {"error": "아이디 또는 비밀번호가 맞지 않습니다."},
+            status_code=401,
+            headers=headers,
+        )
+
+    OWNER_AUTH.rate_limiter.clear(client_key)
+    response = JSONResponse(
+        {"ok": True}, headers={"Cache-Control": "no-store"}
+    )
+    response.set_cookie(
+        OWNER_AUTH.settings.cookie_name,
+        OWNER_AUTH.issue_session(),
+        max_age=OWNER_AUTH.settings.session_ttl_seconds,
+        httponly=True,
+        secure=OWNER_AUTH.settings.secure_cookie,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+async def owner_logout():
+    response = JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+    response.delete_cookie(
+        OWNER_AUTH.settings.cookie_name,
+        path="/",
+        secure=OWNER_AUTH.settings.secure_cookie,
+        httponly=True,
+        samesite="strict",
+    )
+    return response
+
+
+@app.get("/api/auth/me")
+async def owner_me(request: Request):
+    return {"username": request.state.owner}
 
 
 @app.get("/api/health")
@@ -235,10 +340,14 @@ async def health():
     return {
         "youtube": bool(os.getenv("YOUTUBE_API_KEY")),
         "anthropic": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "openai": bool(os.getenv("OPENAI_API_KEY")),
+        "strategy_provider": os.getenv("STRATEGY_BRAIN_PROVIDER", "openai"),
         "naver": bool(os.getenv("NAVER_CLIENT_ID")),
         "analytics": bool(os.getenv("OAUTH_REFRESH_TOKEN")),
         "viewtrap": bool(os.getenv("VIEWTRAP_TOKEN")),
         "my_channel_id": os.getenv("MY_CHANNEL_ID", ""),
+        "collection": AnalyticsRepository().get_collection_status(),
+        "revision": os.getenv("RENDER_GIT_COMMIT", "local")[:12],
     }
 
 
@@ -253,6 +362,135 @@ async def viewtrap_ref():
         svc.get_hot_videos(),
     )
     return {"top_videos": top[:20], "hot_videos": hot[:20]}
+
+
+@app.get("/api/analytics/status")
+async def analytics_collection_status():
+    status = AnalyticsRepository().get_collection_status()
+    data_through = status.get("data_through")
+    lag_days = None
+    if data_through:
+        try:
+            lag_days = (datetime.date.today() - datetime.date.fromisoformat(data_through[:10])).days
+        except ValueError:
+            pass
+    status["data_lag_days"] = lag_days
+    status["is_stale"] = lag_days is None or lag_days > 7
+    status["scheduler_enabled"] = COLLECTION_SCHEDULER.enabled
+    return status
+
+
+@app.post("/api/analytics/refresh")
+async def analytics_manual_refresh():
+    async def stream():
+        yield sse({"step": "starting", "message": "YouTube 전체 성과 snapshot 수집을 시작합니다."})
+        try:
+            result = await YouTubeCollectionService().run_once(trigger="manual")
+            yield sse({"step": "done", **result.public_dict()})
+        except Exception as exc:
+            yield sse({"step": "error", "message": str(exc)[:300]})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/strategies/generate")
+async def strategy_generate(req: StrategyGenerateRequest):
+    if not req.prompt.strip():
+        return JSONResponse({"error": "기획 요청을 입력해주세요."}, status_code=400)
+    repository = StrategyRepository()
+    existing = None
+    if req.existing_strategy_id is not None:
+        existing_row = repository.get(req.existing_strategy_id)
+        if not existing_row:
+            return JSONResponse({"error": "기존 전략을 찾지 못했습니다."}, status_code=404)
+        existing = existing_row.get("strategy")
+    try:
+        strategy = await generate_strategy_context(
+            req.prompt, content_type=req.content_type, existing=existing
+        )
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:300]}, status_code=503)
+    evidence = strategy.get("evidence") or []
+    if req.existing_strategy_id is not None:
+        repository.update(
+            req.existing_strategy_id,
+            {"topic": strategy.get("topic") or req.prompt, "strategy": strategy, "evidence": evidence},
+        )
+        strategy_id = req.existing_strategy_id
+    else:
+        strategy_id = repository.create(
+            topic=strategy.get("topic") or req.prompt,
+            content_type=req.content_type,
+            strategy=strategy,
+            evidence=evidence,
+        )
+    return {"id": strategy_id, "strategy": strategy}
+
+
+@app.get("/api/strategies")
+async def strategies_list(q: str = "", limit: int = 50):
+    return StrategyRepository().list(limit=max(1, min(limit, 100)), query=q)
+
+
+@app.post("/api/strategies")
+async def strategies_create(req: StrategyCreateRequest):
+    strategy_id = StrategyRepository().create(
+        topic=req.topic,
+        content_type=req.content_type,
+        strategy=req.strategy,
+        evidence=req.evidence,
+        status=req.status,
+        source_history_id=req.source_history_id,
+        pipeline_id=req.pipeline_id,
+        worksheet_id=req.worksheet_id,
+    )
+    return {"id": strategy_id}
+
+
+@app.get("/api/strategies/{strategy_id}")
+async def strategies_get(strategy_id: int):
+    item = StrategyRepository().get(strategy_id)
+    if not item:
+        return JSONResponse({"error": "전략을 찾지 못했습니다."}, status_code=404)
+    return item
+
+
+@app.put("/api/strategies/{strategy_id}")
+async def strategies_update(strategy_id: int, request: Request):
+    fields = await request.json()
+    if not StrategyRepository().update(strategy_id, fields):
+        return JSONResponse({"error": "수정할 전략을 찾지 못했거나 필드가 없습니다."}, status_code=404)
+    return {"ok": True}
+
+
+@app.post("/api/strategies/{strategy_id}/link-video")
+async def strategy_link_video(strategy_id: int, req: StrategyVideoLinkRequest):
+    repository = StrategyRepository()
+    if not repository.get(strategy_id):
+        return JSONResponse({"error": "전략을 찾지 못했습니다."}, status_code=404)
+    if not req.video_id.strip():
+        return JSONResponse({"error": "YouTube video ID를 입력해주세요."}, status_code=400)
+    repository.link_video(
+        strategy_id,
+        req.video_id.strip(),
+        title_at_upload=req.title_at_upload,
+        thumbnail_text=req.thumbnail_text,
+    )
+    repository.refresh_performance_checkpoints()
+    return {"ok": True}
+
+
+@app.post("/api/strategies/{strategy_id}/activate")
+async def strategy_activate(strategy_id: int):
+    try:
+        links = StrategyRepository().activate(strategy_id)
+    except KeyError:
+        return JSONResponse({"error": "전략을 찾지 못했습니다."}, status_code=404)
+    return {"ok": True, **links}
 
 
 @app.post("/api/analyze")
@@ -458,8 +696,11 @@ async def planning(req: PlanningRequest):
             yield sse({"step": "analyzing", "message": "AI가 문제 정의 + 제목 + 썸네일 기획 중... (30초 내외)"})
             analyzer = Analyzer()
             report = await analyzer.analyze_planning(req.keyword, req.product_desc, req.market_insights)
-            save_history("planning", req.keyword, report)
-            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+            history_id = save_history("planning", req.keyword, report)
+            strategy_id = capture_legacy_strategy(
+                "기획", req.keyword, report, source_history_id=history_id
+            )
+            yield sse({"step": "done", "report": report, "keyword": req.keyword, "strategy_id": strategy_id})
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
 
@@ -581,8 +822,11 @@ async def shortform(req: ShortformRequest):
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)
             report = _task.result()
-            save_history("shortform", req.keyword, report)
-            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+            history_id = save_history("shortform", req.keyword, report)
+            strategy_id = capture_legacy_strategy(
+                "숏폼", req.keyword, report, source_history_id=history_id
+            )
+            yield sse({"step": "done", "report": report, "keyword": req.keyword, "strategy_id": strategy_id})
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
         finally:
@@ -680,8 +924,11 @@ async def midform(req: MidformRequest):
             if viewtrap_refs:
                 report["viewtrap_top"] = viewtrap_refs.get("top_videos", [])[:10]
                 report["viewtrap_hot"] = viewtrap_refs.get("hot_videos", [])[:10]
-            save_history("midform", req.keyword, report)
-            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+            history_id = save_history("midform", req.keyword, report)
+            strategy_id = capture_legacy_strategy(
+                "미드폼", req.keyword, report, source_history_id=history_id
+            )
+            yield sse({"step": "done", "report": report, "keyword": req.keyword, "strategy_id": strategy_id})
 
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
@@ -917,11 +1164,28 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
     youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
 
     async def stream():
+        request_id = uuid.uuid4().hex[:10]
+        started_at = time.monotonic()
+        stage = "validation"
+
+        def elapsed() -> float:
+            return round(time.monotonic() - started_at, 2)
+
+        def log_stage(name: str, **fields):
+            details = " ".join(f"{key}={value}" for key, value in fields.items())
+            print(
+                f"[channel-analyze:{request_id}] stage={name} elapsed={elapsed()}s {details}".rstrip(),
+                flush=True,
+            )
+
         if not youtube_key:
-            yield sse({"step": "error", "message": ".env 파일에 YOUTUBE_API_KEY를 설정해주세요."})
+            yield sse({"step": "error", "message": "YouTube Data API 설정을 확인해주세요."})
             return
-        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-            yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
+        if not (
+            os.getenv("OPENAI_API_KEY", "").strip()
+            or os.getenv("ANTHROPIC_API_KEY", "").strip()
+        ):
+            yield sse({"step": "error", "message": "AI 분석 API 설정을 확인해주세요."})
             return
         if not req.channel_id.strip():
             yield sse({"step": "error", "message": "채널 ID를 입력해주세요."})
@@ -929,43 +1193,220 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
 
         yt = YouTubeService(youtube_key)
         analytics = AnalyticsService()
+        analytics_repository = AnalyticsRepository()
         try:
+            log_stage("started")
+            stage = "youtube_data"
             yield sse({"step": "channel_info", "message": "채널 정보 불러오는 중..."})
-            channel_info, videos = await yt.get_channel_videos(req.channel_id.strip(), max_videos=100)
+            channel_info, videos = await asyncio.wait_for(
+                yt.get_channel_videos(req.channel_id.strip(), max_videos=100),
+                timeout=45,
+            )
+            log_stage("youtube_data_done", videos=len(videos))
             yield sse({"step": "videos_loaded", "message": f"영상 {len(videos)}개 데이터 수집 완료!"})
 
             analytics_data = []
+            retention_data = []
+            retention_failed = 0
             if analytics.is_configured():
-                yield sse({"step": "analytics", "message": "Analytics 데이터 수집 중 (CTR, 시청 유지율)..."})
+                stage = "youtube_analytics"
+                yield sse({
+                    "step": "analytics",
+                    "message": "Analytics와 retention 데이터를 병렬 수집 중...",
+                })
                 try:
-                    analytics_data = await analytics.get_video_analytics()
+                    analytics_channel_id = await asyncio.wait_for(
+                        analytics.get_authenticated_channel_id(), timeout=30
+                    )
+                    if analytics_channel_id != channel_info.get("id"):
+                        yield sse({
+                            "step": "analytics_warn",
+                            "message": "내 채널이 아닌 분석 대상에는 OAuth Analytics를 결합하지 않습니다.",
+                        })
+                    else:
+                        coordinator = AnalyticsSyncCoordinator(analytics, analytics_repository)
+                        period_end = datetime.date.today().isoformat()
+                        metrics_task = asyncio.create_task(
+                            coordinator.sync_video_snapshots(
+                                videos,
+                                period_start="2020-01-01",
+                                period_end=period_end,
+                            )
+                        )
+                        retention_task = asyncio.create_task(
+                            fetch_retention_sample(
+                                analytics,
+                                videos,
+                                period_start="2020-01-01",
+                                period_end=period_end,
+                            )
+                        )
+                        analytics_data, retention_result = await asyncio.wait_for(
+                            asyncio.gather(metrics_task, retention_task), timeout=55
+                        )
+                        retention_data, retention_failed = retention_result
                     # video_id 기준으로 videos에 병합
                     analytics_map = {a["video_id"]: a for a in analytics_data}
                     for v in videos:
                         a = analytics_map.get(v["id"], {})
-                        v["ctr"] = a.get("ctr", None)
+                        v["analytics_metric_statuses"] = {
+                            name: metric.get("status")
+                            for name, metric in (a.get("metrics") or {}).items()
+                        }
                         v["avg_view_percentage"] = a.get("avg_view_percentage", None)
+                        v["avg_view_percentage_status"] = a.get(
+                            "avg_view_percentage_status", "unavailable"
+                        )
                         v["watch_minutes"] = a.get("watch_minutes", None)
+                        v["watch_minutes_status"] = a.get(
+                            "watch_minutes_status", "unavailable"
+                        )
+                        v["shares"] = a.get("shares", None)
+                        v["shares_status"] = a.get("shares_status", "unavailable")
                         v["subscribers_gained"] = a.get("subscribers_gained", None)
-                    yield sse({"step": "analytics_done", "message": f"Analytics {len(analytics_data)}개 영상 데이터 수집 완료!"})
+                        v["subscribers_gained_status"] = a.get(
+                            "subscribers_gained_status", "unavailable"
+                        )
+                        v["subscribers_lost"] = a.get("subscribers_lost", None)
+                        v["subscribers_lost_status"] = a.get(
+                            "subscribers_lost_status", "unavailable"
+                        )
+                        v["analytics_data_through"] = a.get("data_through")
+                        v["analytics_sample_size"] = a.get("sample_size", 0)
+                    log_stage(
+                        "youtube_analytics_done",
+                        metrics=len(analytics_data),
+                        retention=len(retention_data),
+                        retention_failed=retention_failed,
+                    )
+                    yield sse({
+                        "step": "analytics_done",
+                        "message": (
+                            f"Analytics {len(analytics_data)}개 · retention "
+                            f"{len(retention_data)}개 수집 완료!"
+                        ),
+                    })
                 except Exception as ae:
-                    yield sse({"step": "analytics_warn", "message": f"Analytics 데이터 수집 실패 (공개 데이터로 진행): {ae}"})
+                    log_stage("youtube_analytics_partial", error=type(ae).__name__)
+                    yield sse({
+                        "step": "analytics_warn",
+                        "message": "Analytics 일부를 가져오지 못해 공개 데이터로 계속 진행합니다.",
+                    })
 
-            yield sse({"step": "analyzing", "message": "AI 분석 중... (30~60초 소요)"})
-            analyzer = Analyzer()
-            _task = asyncio.create_task(analyzer.analyze_channel(channel_info, videos))
+            # Thumbnail reach is only loaded from previously imported official
+            # channel_reach_basic_a1 reports. A user click never creates or waits
+            # for a Reporting API job; that belongs to scheduled collection.
+            stage = "reporting_cache"
+            try:
+                reach_map = analytics_repository.get_reach_for_videos(
+                    [v["id"] for v in videos]
+                )
+            except Exception as reach_error:
+                reach_map = {}
+                log_stage("reporting_cache_skipped", error=type(reach_error).__name__)
+                yield sse({
+                    "step": "reporting_warn",
+                    "message": "공식 Reach 캐시는 건너뛰고 Analytics 데이터로 계속 진행합니다.",
+                })
+            for v in videos:
+                reach = reach_map.get(v["id"])
+                if reach:
+                    ctr = reach["thumbnail_ctr"]
+                    v["impressions"] = reach.get("thumbnail_impressions")
+                    v["impressions_status"] = reach.get(
+                        "thumbnail_impressions_status", "not_reported"
+                    )
+                    v["ctr"] = ctr.get("value")
+                    v["ctr_status"] = ctr.get("status")
+                    v["ctr_source"] = reach.get("source")
+                    v["ctr_period_start"] = reach.get("period_start")
+                    v["ctr_period_end"] = reach.get("period_end")
+                    v["ctr_sample_size"] = ctr.get("sample_size", 0)
+                else:
+                    v["impressions"] = None
+                    v["impressions_status"] = "unavailable"
+                    v["ctr"] = None
+                    v["ctr_status"] = "unavailable"
+                    v["ctr_source"] = "youtube_reporting_api:channel_reach_basic_a1"
+                    v["ctr_sample_size"] = 0
+
+            log_stage("reporting_cache_done", reach_rows=len(reach_map))
+            stage = "ai_analysis"
+            yield sse({
+                "step": "analyzing",
+                "message": "GPT-5.6 Sol이 채널 전략을 생성 중...",
+            })
+            _task = asyncio.create_task(
+                analyze_channel_with_fallback(channel_info, videos, retention_data)
+            )
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(3)
-            report = _task.result()
+            report, ai_provider, openai_error = _task.result()
+            log_stage(
+                "ai_analysis_done",
+                provider=ai_provider,
+                openai_fallback_reason=openai_error or "none",
+            )
             report["channel_info"] = channel_info
             report["total_analyzed"] = len(videos)
             report["has_analytics"] = bool(analytics_data)
-            save_history("channel", channel_info.get("title", req.channel_id), report)
-            yield sse({"step": "done", "report": report})
+            data_through_values = [
+                item.get("data_through") for item in analytics_data if item.get("data_through")
+            ]
+            report["analytics_metadata"] = {
+                "source": "youtube_analytics_api_v2",
+                "data_through": max(data_through_values) if data_through_values else None,
+                "sample_size": sum(item.get("sample_size", 0) for item in analytics_data),
+                "thumbnail_reach_source": "youtube_reporting_api:channel_reach_basic_a1",
+                "thumbnail_reach_sample_size": sum(
+                    video.get("ctr_sample_size", 0) for video in videos
+                ),
+                "reporting_mode": "cached_async_collection_only",
+                "retention_source": "youtube_analytics_api_v2",
+                "retention_requested": len(retention_data) + retention_failed,
+                "retention_sample_size": len(retention_data),
+                "retention_failed": retention_failed,
+                "ai_provider": ai_provider,
+                "openai_fallback_reason": openai_error,
+            }
+            stage = "history_save"
+            history_id = await asyncio.wait_for(
+                asyncio.to_thread(
+                    save_history,
+                    "channel",
+                    channel_info.get("title", req.channel_id),
+                    report,
+                ),
+                timeout=35,
+            )
+            report["analysis_metadata"] = {
+                "request_id": request_id,
+                "elapsed_seconds": elapsed(),
+                "history_id": history_id,
+            }
+            log_stage("done", history_id=history_id)
+            yield sse({
+                "step": "done",
+                "report": report,
+                "elapsed_seconds": elapsed(),
+                "history_id": history_id,
+            })
 
         except Exception as e:
-            yield sse({"step": "error", "message": str(e)})
+            log_stage("failed", failed_stage=stage, error=type(e).__name__)
+            messages = {
+                "youtube_data": "YouTube 채널 데이터를 가져오지 못했습니다.",
+                "youtube_analytics": "YouTube Analytics 조회가 완료되지 않았습니다.",
+                "ai_analysis": "AI 분석이 제한 시간 안에 완료되지 않았습니다.",
+                "history_save": "분석 결과 저장이 완료되지 않았습니다.",
+            }
+            yield sse({
+                "step": "error",
+                "message": messages.get(stage, "채널 분석을 완료하지 못했습니다."),
+                "failed_stage": stage,
+                "request_id": request_id,
+            })
         finally:
             await yt.close()
             await analytics.close()
@@ -1082,6 +1523,14 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
     audio_path = f"/tmp/vf_{uid}.mp3"
     filename = file.filename or "영상 피드백"
 
+    def cleanup_temp_files():
+        for path in (video_path, audio_path):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
     with open(video_path, "wb") as f_out:
         while True:
             chunk = await file.read(1024 * 1024)  # 1MB씩 읽기
@@ -1092,6 +1541,7 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
     async def stream():
         if not os.getenv("ANTHROPIC_API_KEY", "").strip():
             yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
+            cleanup_temp_files()
             return
 
         try:
@@ -1144,12 +1594,14 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
                 raise RuntimeError(f"오디오가 너무 큽니다 ({sz//1024//1024}MB). 약 60분 이내로 나눠서 올려주세요.")
             # cnmaker(Lightsail)의 OpenAI 키로 받아쓰기 — 키를 Render로 옮기지 않고 Lightsail이 대신 호출
             async def _transcribe():
+                if not _KV_BASE or not _KV_SECRET:
+                    raise RuntimeError("CNMAKER_BASE 또는 CNMAKER_SECRET이 설정되지 않았습니다.")
                 with open(audio_path, "rb") as af:
                     data = af.read()
                 async with httpx.AsyncClient(timeout=600) as c:
                     return await c.post(
-                        "http://43.200.232.189/transcribe",
-                        headers={"x-secret": "bj-cnmaker-2026", "Content-Type": "application/octet-stream"},
+                        f"{_KV_BASE}/transcribe",
+                        headers={"x-secret": _KV_SECRET, "Content-Type": "application/octet-stream"},
                         content=data,
                     )
             _tt = asyncio.create_task(_transcribe())
@@ -1189,18 +1641,13 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
             save_history("video_feedback", _topic or filename,
                          {"transcript": transcript, "feedback": feedback,
                           "주제": _topic, "파일명": filename})
-            _vf_backup()   # Render 무료플랜은 재배포 때 DB가 지워진다 → 항상 켜진 서버에 복사해 둔다
+            _vf_backup()   # /data/history.db가 원본이며 KV는 승인된 수동 복구용 보조 사본이다.
             yield sse({"step": "done", "transcript": transcript, "feedback": feedback})
 
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
         finally:
-            for path in [video_path, audio_path]:
-                try:
-                    if os.path.exists(path):
-                        os.remove(path)
-                except Exception:
-                    pass
+            cleanup_temp_files()
 
     return StreamingResponse(
         stream(),
@@ -1212,20 +1659,23 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     async def stream():
-        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-            yield sse({"error": "ANTHROPIC_API_KEY가 설정되지 않았습니다."})
-            return
         if not req.message.strip():
             yield sse({"error": "메시지를 입력해주세요."})
             return
         try:
-            analyzer = Analyzer()
-            kb = list_knowledge(active_only=True)  # 지식탭 활성 지식 전체를 채팅에 주입
-            async for token in analyzer.chat_stream(req.message, req.history, req.attachments, kb):
-                yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            service = StrategyChatService()
+            active_provider = None
+            async for provider, token in service.stream(
+                req.message, req.history, req.attachments
+            ):
+                if provider != active_provider:
+                    active_provider = provider
+                    yield sse({"provider": provider})
+                yield sse({"token": token})
             yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+            message = str(e)[:300] or "AI 전략가 요청에 실패했습니다."
+            yield f"data: {json.dumps({'error': message}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         stream(),
@@ -1299,8 +1749,8 @@ PLAN_TRACK = {
     "planning": "기획",
 }
 SMS_PROXY = "https://bujajubang-analyzer.onrender.com/api/sms/send"
-REMIND_PHONE = os.getenv("PIPELINE_REMIND_PHONE", "010-3938-0779")
-REMIND_SECRET = os.getenv("PIPELINE_REMIND_SECRET", "bj-pipeline-2026")
+REMIND_PHONE = os.getenv("PIPELINE_REMIND_PHONE", "").strip()
+REMIND_SECRET = os.getenv("PIPELINE_REMIND_SECRET", "").strip()
 
 
 @app.post("/api/pipeline-remind")
@@ -1310,7 +1760,8 @@ async def pipeline_remind(request: Request, days: int = 7, test: int = 0):
     라이트세일 cron이 매일 아침 부른다. 해당 건이 없으면 아무것도 보내지 않는다.
     ?test=1 이면 조건과 상관없이 지금 상태를 문자로 한 번 보내본다(설치 확인용).
     """
-    if request.headers.get("x-secret") != REMIND_SECRET:
+    supplied_secret = request.headers.get("x-secret", "")
+    if not REMIND_SECRET or not secrets.compare_digest(supplied_secret, REMIND_SECRET):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
 
     today = datetime.date.today()
@@ -1348,6 +1799,12 @@ async def pipeline_remind(request: Request, days: int = 7, test: int = 0):
         msg = ("[부자주방 콘텐츠]\n설치 확인용 문자입니다.\n"
                "업로드 예정인데 기획이 안 끝난 건은 지금 없습니다.\n"
                "https://youtube-researcher.onrender.com/")
+
+    if not REMIND_PHONE:
+        return JSONResponse(
+            {"ok": False, "sent": False, "error": "PIPELINE_REMIND_PHONE 미설정"},
+            status_code=503,
+        )
 
     try:
         async with httpx.AsyncClient(timeout=30) as c:
@@ -1573,6 +2030,11 @@ async def jjachi(request: Request):
 @app.get("/api/transcript-debug")
 async def transcript_debug(request: Request):
     """쿠키/스크립트 수집 진단. ?url=<영상url> 주면 그 영상으로 실제 수집 시도."""
+    debug_enabled = os.getenv("ENABLE_TRANSCRIPT_DEBUG", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if OWNER_AUTH.settings.production or not debug_enabled:
+        return JSONResponse({"error": "not found"}, status_code=404)
     import transcript_service as ts
     resolved = ts._cookiefile()
     info = {
