@@ -18,6 +18,10 @@ COMMON_STRATEGY_POLICY = """당신은 부자주방 전담 콘텐츠 전략 파�
 - 한 번 주제가 결정되면 주제 → 타깃 시청자 → 왜 지금 → 핵심 메시지 → 제목 후보 → 최종 제목 → 썸네일 문구·구도 → 첫 5~15초 훅 → 전체 구조 → 촬영 컷 → 촬영 워크시트 → 업로드 후 KPI를 하나의 전략 가설로 끝까지 연결한다.
 - 워크시트는 촬영자가 그대로 실행할 수 있게 장면, 대사 목적, 소품, 앵글, 확인사항을 구체적으로 쓴다.
 - 과거 기획과 업로드 영상이 연결되어 있으면 "당시 판단"과 "실제 결과"를 비교해 다음 기획에 반영한다.
+- 답변 기본 순서는 1) 결론 2) 데이터 근거 3) 놓쳤을 가능성 4) 추천 전략 5) 바로 실행할 다음 행동이다. 근거가 충분하면 애매하게 말하지 말고 하나를 1순위로 확정한다.
+- 비즈니스PT 지식은 장식용 인용이 아니다. 관련 원칙만 골라 topic→제목→썸네일→훅→구조에 같은 논리로 적용하고, 필요할 때 '적용한 지식'과 '왜 적용했는지'를 짧게 밝힌다.
+- 다음 영상 추천은 최대 3개이며 반드시 '내 추천은 이것'으로 1순위를 고른다. 각 후보에 지금 해야 하는 이유, 과거 근거, 타깃, 제목·썸네일·훅, 기대 KPI, 위험을 포함한다.
+- 제목·썸네일 요청은 후보를 3~5개로 제한하고 과거 제목 구조·CTR/조회수/시청률·반복 표현을 비교한 뒤 1순위 제목과 1순위 썸네일을 각각 확정한다.
 
 도구 선택 원칙:
 - "다음 영상 뭐 찍을까?"라면 최근 채널 성과 → 비슷한 과거 영상 → retention → 관련 저장 지식/비즈니스PT → 현재 pipeline 순으로 확인하고, 외부 트렌드는 실제로 필요할 때만 본다.
@@ -38,10 +42,12 @@ class ModeSpec:
 
 
 PERFORMANCE_TOOLS = (
+    "get_channel_strategy_snapshot",
     "get_recent_channel_performance",
     "compare_similar_videos",
     "get_video_performance",
     "get_retention_patterns",
+    "analyze_title_thumbnail_patterns",
 )
 CONTENT_TOOLS = (
     "search_previous_plans",
@@ -53,6 +59,7 @@ KNOWLEDGE_TOOLS = (
     "search_knowledge",
     "search_business_pt_knowledge",
     "search_chat_memory",
+    "search_long_term_memory",
 )
 MARKET_TOOLS = (
     "get_recent_trends",
@@ -77,7 +84,7 @@ MODE_REGISTRY: dict[StrategyMode, ModeSpec] = {
     StrategyMode.SNS_CONVERSION: ModeSpec(StrategyMode.SNS_CONVERSION, "원 콘텐츠의 전략을 유지하며 채널별 형식으로 변환한다.", CONTENT_TOOLS + KNOWLEDGE_TOOLS, reasoning_effort="high"),
     StrategyMode.DETAIL_PAGE: ModeSpec(StrategyMode.DETAIL_PAGE, "시청자 문제와 제품 근거를 연결한 상세페이지를 기획한다.", KNOWLEDGE_TOOLS + MARKET_TOOLS),
     StrategyMode.BLOG: ModeSpec(StrategyMode.BLOG, "입력 자료를 근거로 검색·전환 목적의 글을 만든다.", CONTENT_TOOLS + KNOWLEDGE_TOOLS + MARKET_TOOLS, reasoning_effort="high"),
-    StrategyMode.STRATEGY_CHAT: ModeSpec(StrategyMode.STRATEGY_CHAT, "사용자와 장기 콘텐츠 방향을 함께 판단한다.", PERFORMANCE_TOOLS + CONTENT_TOOLS + KNOWLEDGE_TOOLS + MARKET_TOOLS, structured_output=False, streaming=True),
+    StrategyMode.STRATEGY_CHAT: ModeSpec(StrategyMode.STRATEGY_CHAT, "사용자와 장기 콘텐츠 방향을 함께 판단한다.", PERFORMANCE_TOOLS + CONTENT_TOOLS + KNOWLEDGE_TOOLS + MARKET_TOOLS, structured_output=False, streaming=True, reasoning_effort="high"),
     StrategyMode.POSTMORTEM: ModeSpec(StrategyMode.POSTMORTEM, "기획 가설과 실제 성과를 비교해 재사용할 교훈을 만든다.", PERFORMANCE_TOOLS + CONTENT_TOOLS + KNOWLEDGE_TOOLS),
 }
 

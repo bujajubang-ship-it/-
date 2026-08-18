@@ -128,7 +128,9 @@ def _worksheet_from_strategy(
         elif item:
             kpi_lines.append(str(item))
     title_candidates = strategy.get("title_candidates") or []
-    recommended = str(strategy.get("recommended_title") or topic).strip()
+    recommended = str(
+        strategy.get("selected_title") or strategy.get("recommended_title") or topic
+    ).strip()
     return {
         "name": recommended or topic,
         "keyword": str(strategy.get("topic") or topic),
@@ -136,6 +138,8 @@ def _worksheet_from_strategy(
             value
             for value in (
                 f"타깃: {strategy.get('target_audience')}" if strategy.get("target_audience") else "",
+                f"핵심 문제: {strategy.get('core_problem')}" if strategy.get("core_problem") else "",
+                f"콘텐츠 약속: {strategy.get('content_promise')}" if strategy.get("content_promise") else "",
                 f"왜 지금: {strategy.get('why_now')}" if strategy.get("why_now") else "",
                 f"핵심 메시지: {strategy.get('core_message')}" if strategy.get("core_message") else "",
             )
@@ -154,7 +158,7 @@ def _worksheet_from_strategy(
             )
             if value
         ),
-        "introScript": str(strategy.get("hook_5_15s") or ""),
+        "introScript": str(strategy.get("hook") or strategy.get("hook_5_15s") or ""),
         "bodyScript": "\n\n".join(line for line in body_lines if line),
         "memo": "\n".join(
             [f"공통 전략 #{strategy_id}"]

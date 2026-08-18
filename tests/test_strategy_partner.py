@@ -14,6 +14,7 @@ from strategy_brain.chat_service import StrategyChatService, build_openai_input
 from strategy_brain.providers import OpenAIResponsesProvider
 from strategy_brain.retrieval import StrategyRetrieval, build_strategy_tool_registry
 from strategy_repository import StrategyRepository
+from strategy_memory import StrategyMemoryRepository
 
 
 def create_established_tables(connection):
@@ -72,6 +73,8 @@ class RepositoryFixture(unittest.TestCase):
         self.analytics.init_schema()
         self.strategies = StrategyRepository(connect)
         self.strategies.init_schema()
+        self.memories = StrategyMemoryRepository(connect)
+        self.memories.init_schema()
 
     def tearDown(self):
         self.temp.cleanup()
@@ -279,6 +282,26 @@ class RetrievalTests(RepositoryFixture):
         pipeline = self.retrieval.get_content_pipeline({"status": None, "limit": 10})
         self.assertEqual(pipeline.sample_size, 1)
 
+    def test_decision_ready_snapshot_and_title_patterns_separate_winners_and_risks(self):
+        snapshot = self.retrieval.get_channel_strategy_snapshot({"limit": 20})
+        self.assertEqual(snapshot.sample_size, 1)
+        self.assertEqual(snapshot.data["baseline"]["views_median"], 100.0)
+        self.assertEqual(snapshot.data["top_performers"][0]["video_id"], "video-a")
+        patterns = self.retrieval.analyze_title_thumbnail_patterns(
+            {"query": None, "limit": 100}
+        )
+        self.assertEqual(patterns.sample_size, 1)
+        names = {row["pattern"] for row in patterns.data["pattern_performance"]}
+        self.assertIn("problem_conflict", names)
+
+    def test_long_term_memory_retrieval_omits_superseded_decision(self):
+        old = self.memories.record(memory_type="decision", content="제품형을 우선한다")
+        new = self.memories.record(memory_type="decision", content="현장형을 우선한다")
+        self.memories.supersede(old, new)
+        result = self.retrieval.search_long_term_memory({"query": "우선", "limit": 5})
+        self.assertEqual(result.sample_size, 1)
+        self.assertEqual(result.data[0]["id"], new)
+
     def test_empty_and_missing_retention_are_explicit(self):
         empty = self.retrieval.get_retention_patterns({"video_id": None, "limit": 10})
         self.assertEqual(empty.data, [])
@@ -298,7 +321,7 @@ class RetrievalTests(RepositoryFixture):
         names = {tool["name"] for tool in tools}
         self.assertEqual(
             names,
-            {"get_recent_channel_performance", "get_video_performance", "compare_similar_videos", "get_retention_patterns", "search_knowledge", "search_business_pt_knowledge", "search_previous_plans", "search_previous_worksheets", "get_content_pipeline", "search_feedback_history", "search_chat_memory", "get_recent_trends"},
+            {"get_channel_strategy_snapshot", "get_recent_channel_performance", "get_video_performance", "compare_similar_videos", "get_retention_patterns", "analyze_title_thumbnail_patterns", "search_knowledge", "search_business_pt_knowledge", "search_previous_plans", "search_previous_worksheets", "get_content_pipeline", "search_feedback_history", "search_chat_memory", "search_long_term_memory", "get_recent_trends"},
         )
         self.assertTrue(all(tool["strict"] for tool in tools))
 
@@ -403,6 +426,8 @@ class StrategyUIContractTests(unittest.TestCase):
         self.assertIn("/api/strategies/generate", script)
         self.assertIn("/activate", script)
         self.assertIn("/link-video", script)
+        self.assertIn("promoteChatToStrategy", script)
+        self.assertIn("_renderChatTrace", script)
 
 
 if __name__ == "__main__":

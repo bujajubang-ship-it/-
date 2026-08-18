@@ -43,7 +43,7 @@ class OpenAIResponsesProvider:
                 raise RuntimeError(
                     "The OpenAI SDK is required to enable the OpenAI strategy provider."
                 ) from exc
-            client = AsyncOpenAI()
+            client = AsyncOpenAI(timeout=240.0, max_retries=1)
         self.client = client
 
     def _request_kwargs(
@@ -76,9 +76,11 @@ class OpenAIResponsesProvider:
             # The channel button is an interactive flow. This is ample for the
             # strict report schema while preventing an unexpectedly long answer.
             kwargs["max_output_tokens"] = 8000
+        elif request.mode.value == "strategy_chat":
+            kwargs["max_output_tokens"] = 6000
         kwargs["text"] = {
             **kwargs.get("text", {}),
-            "verbosity": "high" if request.mode.value in {"strategy_chat", "planning", "midform_planning", "shortform_planning", "worksheet", "postmortem"} else "medium",
+            "verbosity": "high" if request.mode.value in {"planning", "midform_planning", "shortform_planning", "worksheet", "postmortem"} else "medium",
         }
         return kwargs
 

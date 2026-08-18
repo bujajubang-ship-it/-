@@ -212,9 +212,11 @@ class PhaseASecurityIntegrationTests(unittest.TestCase):
     def test_existing_claude_chat_sse_contract_reaches_route(self):
         client, _ = self.authenticated_client()
         async def fallback_stream(_service, message, history, attachments):
-            yield "anthropic", "fallback-ok"
+            yield {"type": "provider", "provider": "anthropic"}
+            yield {"type": "token", "token": "fallback-ok"}
+            yield {"type": "trace", "sources": [], "duration_ms": 1}
 
-        with patch.object(self.main.StrategyChatService, "stream", fallback_stream):
+        with patch.object(self.main.StrategyChatService, "stream_events", fallback_stream):
             response = client.post(
                 "/api/chat", json={"message": "테스트", "history": [], "attachments": []}
             )

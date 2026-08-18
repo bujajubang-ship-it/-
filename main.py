@@ -33,6 +33,7 @@ from strategy_repository import (
     init_strategy_schema,
 )
 from strategy_context import generate_strategy_context
+from strategy_memory import init_strategy_memory_schema, remember_interaction
 from viewtrap_service import ViewTrapService
 from heatmap_service import fetch_heatmap, summarize_for_prompt
 from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
@@ -44,6 +45,7 @@ init_db()
 init_pipeline()
 init_analytics_schema()
 init_strategy_schema()
+init_strategy_memory_schema()
 
 # ===== 영상 피드백 legacy 보조 사본 =====
 # 운영 source of truth는 Render Starter의 /data Persistent Disk에 있는
@@ -209,8 +211,9 @@ class AttachmentItem(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    history: list = []
-    attachments: list = []  # List[AttachmentItem]
+    history: list = Field(default_factory=list)
+    attachments: list = Field(default_factory=list)  # List[AttachmentItem]
+    session_id: int | None = None
 
 
 class DetailPageRequest(BaseModel):
@@ -1664,14 +1667,58 @@ async def chat(req: ChatRequest):
             return
         try:
             service = StrategyChatService()
-            active_provider = None
-            async for provider, token in service.stream(
+            answer_parts: list[str] = []
+            trace: list[dict] = []
+            started = time.perf_counter()
+            event_stream = service.stream_events(
                 req.message, req.history, req.attachments
-            ):
-                if provider != active_provider:
-                    active_provider = provider
-                    yield sse({"provider": provider})
-                yield sse({"token": token})
+            ).__aiter__()
+            next_event = asyncio.create_task(anext(event_stream))
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        asyncio.shield(next_event), timeout=5
+                    )
+                except TimeoutError:
+                    yield sse(
+                        {
+                            "ping": True,
+                            "progress": "GPT가 확보한 근거를 비교해 답변을 구성하고 있습니다.",
+                        }
+                    )
+                    continue
+                except StopAsyncIteration:
+                    break
+                event_type = event.get("type")
+                if event_type == "provider":
+                    yield sse({"provider": event.get("provider")})
+                elif event_type == "progress":
+                    yield sse({"progress": event.get("message")})
+                elif event_type == "token":
+                    token = str(event.get("token") or "")
+                    answer_parts.append(token)
+                    yield sse({"token": token})
+                elif event_type == "trace":
+                    trace = list(event.get("sources") or [])
+                    yield sse(
+                        {
+                            "trace": trace,
+                            "intent": event.get("intent"),
+                            "duration_ms": event.get("duration_ms"),
+                        }
+                    )
+                next_event = asyncio.create_task(anext(event_stream))
+            await asyncio.to_thread(
+                remember_interaction,
+                req.message,
+                "".join(answer_parts),
+                trace=trace,
+                source_session_id=req.session_id,
+            )
+            print(
+                "[strategy-chat] done "
+                f"elapsed={time.perf_counter()-started:.2f}s sources={len(trace)}"
+            )
             yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
             message = str(e)[:300] or "AI 전략가 요청에 실패했습니다."

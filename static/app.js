@@ -2467,6 +2467,8 @@ function renderStrategyDetail(item) {
     <div class="strategy-grid">
       ${strategySection('1. 영상 주제', s.topic || item.topic)}
       ${strategySection('2. 타깃 시청자', s.target_audience)}
+      ${strategySection('고객의 핵심 문제', s.core_problem)}
+      ${strategySection('콘텐츠 약속', s.content_promise)}
       ${strategySection('3. 왜 지금 해야 하는지', s.why_now)}
       ${strategySection('4. 핵심 메시지', s.core_message)}
       ${strategySection('5. 제목 후보', s.title_candidates)}
@@ -2478,6 +2480,8 @@ function renderStrategyDetail(item) {
       ${strategySection('11. 촬영 워크시트', s.worksheet, true)}
       ${strategySection('12. 업로드 후 KPI', s.kpis, true)}
       ${strategySection('반대 근거·리스크', s.counterargument_and_risks, true)}
+      ${strategySection('과거 유사 영상', s.source_videos, true)}
+      ${strategySection('적용한 지식·적용 이유', s.source_knowledge, true)}
       <div class="strategy-section wide"><h3>판단 근거</h3><div class="strategy-section-body">${renderStrategyEvidence(item.evidence?.length ? item.evidence : s.evidence)}</div></div>
       ${strategySection('연결된 업로드 영상', videos, true)}
       ${strategySection('1일/3일/7일/장기 실제 성과', checkpoints, true)}
@@ -2633,7 +2637,8 @@ function renderChatMessages() {
     m.role === 'user'
       ? `<div class="chat-bubble user"><div class="chat-bubble-inner">${_escapeHtml(m.content || '')}</div></div>`
       : `<div class="chat-bubble assistant"><div class="chat-bubble-inner">${_formatChat(m.content || '')}</div>
-         <div class="chat-msg-actions"><button class="chat-pdf-btn" onclick="exportPlanPdfByIdx(${i})">📄 PDF · 출력</button></div></div>`
+         ${_renderChatTrace(m.trace, m.duration_ms)}
+         <div class="chat-msg-actions"><button class="chat-pdf-btn" onclick="exportPlanPdfByIdx(${i})">📄 PDF · 출력</button><button class="chat-pdf-btn" onclick="promoteChatToStrategy(${i})">🎯 공통 전략·워크시트로</button></div></div>`
   ).join('');
   el.scrollTop = el.scrollHeight;
 }
@@ -2713,6 +2718,17 @@ ${bodyHtml}
 </body></html>`);
   w.document.close();
 }
+
+function promoteChatToStrategy(i) {
+  const answer = chatHistory[i];
+  if (!answer || answer.role !== 'assistant') return;
+  const previous = [...chatHistory.slice(0, i)].reverse().find(item => item.role === 'user');
+  const prompt = `AI 상담에서 확정한 방향을 공통 전략 객체로 저장하고 촬영 워크시트까지 완성해줘.\n\n사용자 요청: ${previous?.content || ''}\n\n전략가 답변: ${answer.content || ''}`;
+  switchTab('strategy');
+  const input = document.getElementById('strategy-prompt');
+  if (input) input.value = prompt;
+  generateStrategy(null, prompt);
+}
 async function deleteChatSession(id) {
   if (!confirm('이 대화를 삭제할까요?')) return;
   try {
@@ -2754,8 +2770,10 @@ const CHAT_WELCOME = `<div class="chat-bubble assistant">
     <div class="chat-suggestion-chips">
       <span class="chat-chip" onclick="sendChatChip(this)">다음 영상 뭐 찍을까?</span>
       <span class="chat-chip" onclick="sendChatChip(this)">요즘 채널 방향이 맞아?</span>
-      <span class="chat-chip" onclick="sendChatChip(this)">최근 실패 패턴 먼저 알려줘</span>
-      <span class="chat-chip" onclick="sendChatChip(this)">촬영 워크시트까지 기획해줘</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">9평 베이커리 주방 동선 주제 평가</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">제목/썸네일 확정</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">최근 영상 성과 피드백</span>
+      <span class="chat-chip" onclick="sendChatChip(this)">워크시트 생성</span>
     </div>
   </div>
 </div>`;
@@ -2892,6 +2910,25 @@ function _formatChat(text) {
     .replace(/\n/g, '<br>');
 }
 
+function _renderChatTrace(trace, durationMs) {
+  if (!Array.isArray(trace) || !trace.length) return '';
+  const unique = [];
+  const seen = new Set();
+  trace.forEach(item => {
+    const key = item.source || item.tool || 'source';
+    if (!seen.has(key)) { seen.add(key); unique.push(item); }
+  });
+  const labels = unique.slice(0, 12).map(item => {
+    const source = item.source || item.tool || 'source';
+    const sample = item.sample_size == null ? '' : ` · n=${item.sample_size}`;
+    const fresh = item.freshness ? ` · ${item.freshness}` : '';
+    const unavailable = item.unavailable ? ' · 일부 데이터 없음' : '';
+    return `<li>${_escapeHtml(String(source))}${_escapeHtml(sample + fresh + unavailable)}</li>`;
+  }).join('');
+  const seconds = Number(durationMs) > 0 ? ` · ${(Number(durationMs) / 1000).toFixed(1)}초` : '';
+  return `<details class="chat-trace"><summary>사용한 데이터 ${unique.length}개${seconds}</summary><ul>${labels}</ul></details>`;
+}
+
 async function sendChat() {
   if (chatSending) return;
   const input = document.getElementById('chat-input');
@@ -2931,13 +2968,19 @@ async function sendChat() {
   messages.scrollTop = messages.scrollHeight;
 
   let fullText = '';
+  let responseTrace = [];
+  let responseDurationMs = null;
+  let responseIntent = null;
   const inner = aiBubble.querySelector('.chat-bubble-inner');
+  const chatAbort = new AbortController();
+  const chatOverallTimer = setTimeout(() => chatAbort.abort(), 6 * 60 * 1000);
 
   try {
     const resp = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, history: chatHistory, attachments: attachmentsToSend }),
+      signal: chatAbort.signal,
+      body: JSON.stringify({ message, history: chatHistory, attachments: attachmentsToSend, session_id: chatSessionId }),
     });
 
     // 서버가 오류를 돌려주면 아래 스트림 해석이 조용히 실패해 점만 깜빡인 채 멈춘다.
@@ -2964,22 +3007,32 @@ async function sendChat() {
               ? 'GPT-5.6 Sol · 채널 데이터 도구 연결됨'
               : 'Claude fallback · GPT 연결 오류 시 자동 전환';
           }
+          if (data.progress && !started) {
+            inner.innerHTML = `<div class="chat-progress"><span class="chat-progress-dot"></span>${_escapeHtml(data.progress)}</div>`;
+          }
           if (data.token) {
             if (!started) { inner.innerHTML = ''; started = true; }
             fullText += data.token;
             inner.innerHTML = _formatChat(fullText);
             messages.scrollTop = messages.scrollHeight;
           }
+          if (Array.isArray(data.trace)) {
+            responseTrace = data.trace;
+            responseDurationMs = data.duration_ms || null;
+            responseIntent = data.intent || null;
+          }
           if (data.done) {
             chatHistory.push({ role: 'user', content: message });
-            chatHistory.push({ role: 'assistant', content: fullText });
+            chatHistory.push({ role: 'assistant', content: fullText, trace: responseTrace, duration_ms: responseDurationMs, intent: responseIntent });
             saveCurrentChat();
             renderChatMessages();  // 완료된 답변에 PDF·출력 버튼 붙여 다시 렌더
           }
           if (data.error) {
             inner.innerHTML = `<span style="color:var(--red)">오류: ${_escapeHtml(data.error)}</span>`;
           }
-        } catch (e) {}
+        } catch (e) {
+          console.warn('[채팅] SSE event 해석 실패', e, line.slice(0, 160));
+        }
       }
     }
   } catch (err) {
@@ -2990,6 +3043,8 @@ async function sendChat() {
     inner.innerHTML = `<span style="color:var(--red)">보내지 못했어요 — ${_escapeHtml(why)}</span>`
       + (big > 8 ? `<div style="color:#94a3b8;font-size:12.5px;margin-top:6px">첨부가 ${big.toFixed(1)}MB 로 큽니다. 파일을 줄여 다시 시도해보세요.</div>` : '')
       + `<div style="color:#94a3b8;font-size:12.5px;margin-top:6px">잠시 뒤 다시 눌러주세요.</div>`;
+  } finally {
+    clearTimeout(chatOverallTimer);
   }
 
   chatSending = false;
