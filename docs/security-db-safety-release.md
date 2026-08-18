@@ -1,9 +1,9 @@
 # Security + DB safety production release checklist
 
-This release branch is based on `origin/main` commit `55cc94c`. It contains
-owner authentication and production SQLite safety only. It deliberately excludes
-the GPT Strategy Brain scaffold, OpenAI dependency, PostgreSQL adapter, migration
-CLI/schema, retrieval code, and PostgreSQL test dependencies.
+This document records the earlier security/DB-safety release. The safe production
+baseline is `9c61ca2`; never deploy or use `55cc94c` as a development or rollback
+target because its `/healthz` and `/login` behavior is unsafe. The current strategy
+partner feature is based on `9c61ca2` plus the verified analytics foundation.
 
 ## Exact environment formats
 
@@ -53,15 +53,13 @@ python -c 'import secrets; print(secrets.token_urlsafe(48))'
 4. Reconfirm all six required tables exist in `/data/history.db`.
 5. Enter and review all environment values without displaying them in logs.
 6. Confirm the Lightsail and Render `PIPELINE_REMIND_SECRET` values match.
-7. Deploy only after explicit approval.
+7. Deploy only after the current production backup/integrity gate has passed.
 8. Verify `/healthz`, unauthenticated rejection, login/logout, CRUD, Claude SSE,
    multipart video upload, and the machine reminder call.
 9. Compare database row counts before and after the smoke tests.
 
 ## Rollback
 
-The code rollback target is the current production main commit
-`55cc94cc23a4138739ef34e93313fd313a8e945d`. A rollback must not detach,
-recreate, overwrite, or restore `/data/history.db`. The old commit re-exposes the
-previous authentication and hardcoded-secret risks, so use it only as an
-emergency code rollback while preserving the new environment values.
+The code rollback target is safe baseline
+`9c61ca2`. A rollback must not detach, recreate, overwrite, or restore
+`/data/history.db`. Commit `55cc94c` is explicitly prohibited as a rollback target.
