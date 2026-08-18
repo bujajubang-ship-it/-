@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 from datetime import date
@@ -30,6 +31,10 @@ VALID_STATUSES = frozenset(
 )
 
 ANALYTICS_SOURCE = "youtube_analytics_api_v2"
+# The API intermittently fails on paginated day,video queries. Staying below
+# one 200-row page avoids the backend failure while preserving all requested
+# rows through more, smaller cohorts.
+DAILY_QUERY_ROW_BUDGET = 180
 ANALYTICS_METRICS = (
     "views",
     "likes",
@@ -389,20 +394,27 @@ class AnalyticsService:
 
     async def _query(self, params: Dict[str, Any]) -> Dict[str, Any]:
         token = await self._get_access_token()
-        try:
-            response = await self.http.get(
-                ANALYTICS_URL,
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except httpx.HTTPStatusError as exc:
-            raise AnalyticsApiError(
-                f"YouTube Analytics query failed with HTTP {exc.response.status_code}"
-            ) from exc
-        except (httpx.HTTPError, ValueError) as exc:
-            raise AnalyticsApiError("YouTube Analytics query failed") from exc
+        payload: Any = None
+        for attempt in range(3):
+            try:
+                response = await self.http.get(
+                    ANALYTICS_URL,
+                    params=params,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                break
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                if status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                    await asyncio.sleep(0.5 * (2**attempt))
+                    continue
+                raise AnalyticsApiError(
+                    f"YouTube Analytics query failed with HTTP {status_code}"
+                ) from exc
+            except (httpx.HTTPError, ValueError) as exc:
+                raise AnalyticsApiError("YouTube Analytics query failed") from exc
         if not isinstance(payload, dict):
             raise AnalyticsApiError("YouTube Analytics returned an invalid response")
         return payload
@@ -535,7 +547,10 @@ class AnalyticsService:
         unique_ids = list(dict.fromkeys(video_id for video_id in video_ids if video_id))
         dates = sorted(set(requested_dates))
         results: List[Dict[str, Any]] = []
-        for batch in chunked(unique_ids, 200):
+        # YouTube's backend consistently returns HTTP 500 while paging larger
+        # day,video result sets. Keep each request inside one measured page.
+        batch_size = max(1, min(200, DAILY_QUERY_ROW_BUDGET // len(dates)))
+        for batch in chunked(unique_ids, batch_size):
             payload = await self._query_all_rows(
                 {
                     "ids": "channel==MINE",
@@ -546,7 +561,7 @@ class AnalyticsService:
                     "filters": f"video=={','.join(batch)}",
                     "sort": "day",
                 },
-                page_size=200,
+                page_size=min(200, len(batch) * len(dates)),
             )
             results.extend(parse_daily_response(payload, batch, dates))
         return results

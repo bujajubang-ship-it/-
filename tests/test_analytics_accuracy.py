@@ -222,6 +222,26 @@ class CapturingAnalyticsService(AnalyticsService):
 
 
 class QueryConstructionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_transient_analytics_500_is_retried_without_exposing_body(self):
+        attempts = 0
+
+        async def handler(request):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return httpx.Response(500, json={"error": {"message": "temporary"}})
+            return httpx.Response(200, json={"columnHeaders": [], "rows": []})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        service = AnalyticsService(http=client)
+        service._access_token = "test-token"
+        try:
+            result = await service._query({"ids": "channel==MINE"})
+        finally:
+            await client.aclose()
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(attempts, 2)
+
     async def test_existing_youtube_readonly_scope_resolves_owner_channel(self):
         async def handler(request):
             self.assertEqual(request.url.params.get("mine"), "true")
@@ -270,6 +290,22 @@ class QueryConstructionTests(unittest.IsolatedAsyncioTestCase):
             for call in freshness_calls
         ]
         self.assertEqual(filter_sizes, [200, 200, 1])
+
+    async def test_daily_query_stays_under_backend_row_budget(self):
+        service = CapturingAnalyticsService()
+        video_ids = [f"video-{index}" for index in range(25)]
+        requested_dates = [f"2026-07-{day:02d}" for day in range(1, 32)] + [
+            f"2026-08-{day:02d}" for day in range(1, 15)
+        ]
+        await service.get_daily_video_metrics(video_ids, requested_dates)
+        daily_calls = [
+            call for call in service.calls if call["dimensions"] == "day,video"
+        ]
+        filter_sizes = [
+            len(call["filters"].removeprefix("video==").split(","))
+            for call in daily_calls
+        ]
+        self.assertEqual(filter_sizes, [4, 4, 4, 4, 4, 4, 1])
 
     async def test_retention_query_uses_single_video_filter(self):
         service = CapturingAnalyticsService()
