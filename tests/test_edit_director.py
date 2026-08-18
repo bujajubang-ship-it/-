@@ -343,6 +343,31 @@ class EditDirectorRenderTests(unittest.TestCase):
                 )
             self.assertFalse((root / ".failed.part.mp4").exists())
 
+    def test_render_uses_seek_bounded_inputs_and_bounded_threads(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._sample(root)
+            media = MediaIngestService.probe(source)
+            prepared = prepare_plan(sample_plan(short=False), media["duration"])
+            with patch.dict("os.environ", {"EDIT_FFMPEG_THREADS": "1"}):
+                output = EditRenderService().render_timeline(
+                    source=source,
+                    output=root / "bounded.mp4",
+                    timeline=prepared["render_timeline"],
+                    duration=media["duration"],
+                    has_audio=True,
+                )
+            self.assertGreater(output["size_bytes"], 0)
+            self.assertTrue((root / "bounded.mp4").exists())
+
+        expression = EditRenderService._filter(
+            prepared["render_timeline"], has_audio=True
+        )
+        self.assertNotIn("trim=", expression)
+        for index in range(len(prepared["render_timeline"])):
+            self.assertIn(f"[{index}:v]", expression)
+            self.assertIn(f"[{index}:a]", expression)
+
 
 class FakeIngest(MediaIngestService):
     async def inspect_and_transcribe(self, path, media):

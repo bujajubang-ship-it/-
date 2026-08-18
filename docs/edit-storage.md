@@ -13,6 +13,8 @@
 - `uploaded`부터 `rendering`까지의 active 프로젝트는 자동 cleanup에서 항상 제외한다.
 - 완료 원본은 기본 72시간, 최종 full/short/EDL은 기본 30일 보존한다.
 - ffmpeg는 숨김 `.part.mp4`에 쓰고 성공한 뒤 원자적으로 최종 파일과 교체한다.
+- 긴 영상은 타임라인 구간별 seek-bounded input과 제한된 ffmpeg thread를 사용해
+  뒤쪽 프레임이 메모리에 계속 쌓이지 않게 한다.
 - 분석 오디오는 transcription 종료 시, render part는 성공·실패 시 즉시 삭제한다.
 - 중단된 orphan temp는 1시간, DB가 없는 orphan project directory는 24시간 뒤 정리한다.
 - 수동 정리는 파일만 지우고 SQLite의 편집 결정, 대화, 성과 학습 audit row는 보존한다.
