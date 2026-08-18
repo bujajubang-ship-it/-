@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from dataclasses import replace
@@ -17,6 +18,9 @@ from .providers import OpenAIResponsesProvider
 from .context_builder import format_prefetched_evidence, prefetch_strategy_evidence
 from .retrieval import build_strategy_tool_registry
 from .tools import ReadOnlyToolRegistry
+
+
+logger = logging.getLogger(__name__)
 
 
 CHAT_TASK_INSTRUCTIONS = """사용자의 질문에 직접 답한다.
@@ -206,7 +210,13 @@ class StrategyChatService:
                 if prefetched_names:
                     request = replace(
                         request,
-                        tools=[
+                        # The intent-specific prefetch has already collected the
+                        # complete evidence contract in parallel.  A second,
+                        # model-directed retrieval loop made interactive answers
+                        # repeat searches and could add minutes without improving
+                        # the channel-specific evidence.  General questions keep
+                        # their optional tools for genuinely unforeseen lookups.
+                        tools=[] if intent_name != "general" else [
                             tool for tool in request.tools
                             if tool.get("name") not in prefetched_names
                         ],
@@ -222,7 +232,17 @@ class StrategyChatService:
                     "sources": list(self._registry.trace) if self._registry else [],
                 }
                 return
-            except Exception:
+            except Exception as exc:
+                # Do not log request bodies, credentials, or response payloads.
+                # Exception class/status/code is sufficient to diagnose provider
+                # routing safely in production.
+                logger.warning(
+                    "strategy OpenAI provider failed type=%s status=%s code=%s emitted=%s",
+                    type(exc).__name__,
+                    getattr(exc, "status_code", None),
+                    getattr(exc, "code", None),
+                    emitted,
+                )
                 if emitted or self.settings.fallback_provider != "anthropic":
                     raise
         fallback_message = message

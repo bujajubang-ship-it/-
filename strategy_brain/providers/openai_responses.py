@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict
 from typing import Any, AsyncIterator
@@ -156,8 +157,11 @@ class OpenAIResponsesProvider:
 
             total_tool_calls += len(calls)
             input_items.extend(_dump_output_item(item) for item in response.output)
-            for call in calls:
-                input_items.append(await self._tool_output(call, tool_executor))
+            input_items.extend(
+                await asyncio.gather(
+                    *(self._tool_output(call, tool_executor) for call in calls)
+                )
+            )
 
         raise RuntimeError(
             f"Strategy Brain exceeded {self.settings.max_tool_rounds} tool rounds."
@@ -191,8 +195,11 @@ class OpenAIResponsesProvider:
             if tool_executor is None:
                 raise RuntimeError("The model requested a tool but no tool executor was supplied.")
             input_items.extend(_dump_output_item(item) for item in completed.output)
-            for call in calls:
-                input_items.append(await self._tool_output(call, tool_executor))
+            input_items.extend(
+                await asyncio.gather(
+                    *(self._tool_output(call, tool_executor) for call in calls)
+                )
+            )
 
         raise RuntimeError(
             f"Strategy Brain exceeded {self.settings.max_tool_rounds} tool rounds."
