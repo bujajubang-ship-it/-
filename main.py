@@ -13,9 +13,12 @@ from contextlib import asynccontextmanager
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File, Form
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 load_dotenv()
 
@@ -104,6 +107,46 @@ async def app_lifespan(_app: FastAPI):
 app = FastAPI(title="YouTube Content Researcher", lifespan=app_lifespan)
 OWNER_AUTH = OwnerAuthenticator(OwnerAuthSettings.from_env())
 app.add_middleware(OwnerAuthMiddleware, authenticator=OWNER_AUTH)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def api_http_error(request: Request, exc: StarletteHTTPException):
+    """Keep every application-generated API error machine-readable."""
+
+    if request.url.path.startswith("/api/"):
+        detail = exc.detail if isinstance(exc.detail, str) else "요청을 처리하지 못했습니다."
+        return JSONResponse(
+            {"error": detail},
+            status_code=exc.status_code,
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        )
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def api_validation_error(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"error": "요청 형식이 올바르지 않습니다."},
+            status_code=422,
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        )
+    return JSONResponse({"detail": exc.errors()}, status_code=422)
+
+
+@app.exception_handler(Exception)
+async def api_unhandled_error(request: Request, exc: Exception):
+    if request.url.path.startswith("/api/"):
+        print(
+            f"[api-error] path={request.url.path} type={type(exc).__name__}",
+            flush=True,
+        )
+        return JSONResponse(
+            {"error": "서버에서 요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요."},
+            status_code=500,
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        )
+    return PlainTextResponse("Internal Server Error", status_code=500)
 
 if OWNER_AUTH.settings.production and not os.getenv("PIPELINE_REMIND_SECRET", "").strip():
     raise RuntimeError("PIPELINE_REMIND_SECRET is required in production.")
