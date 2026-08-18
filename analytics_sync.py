@@ -235,6 +235,8 @@ class AnalyticsSyncCoordinator:
         *,
         report_id: str,
         report_date: str,
+        report_generated_at: str | None = None,
+        source_as_of: str | None = None,
         collected_at: str | None = None,
     ) -> list[Dict[str, Any]]:
         collected = collected_at or utc_now()
@@ -253,6 +255,8 @@ class AnalyticsSyncCoordinator:
                 expected_video_ids=[row["video_id"] for row in records],
                 expected_date=report_date,
                 report_id=report_id,
+                report_generated_at=report_generated_at,
+                source_as_of=source_as_of,
             )
             self.repository.upsert_videos(records, collected_at=collected)
             self.repository.save_reach_metrics(
@@ -298,6 +302,7 @@ class ReportingSyncCoordinator:
         jobs = await self.service.list_jobs()
         imported = 0
         skipped = 0
+        errors = 0
         for job in jobs:
             if job.get("reportTypeId") != REACH_REPORT_TYPE_ID:
                 continue
@@ -349,6 +354,7 @@ class ReportingSyncCoordinator:
                         videos,
                         report_id=report_id,
                         report_date=report_date,
+                        report_generated_at=str(report.get("createTime") or "") or None,
                         collected_at=collected,
                     )
                     self.repository.record_reporting_file(
@@ -368,5 +374,13 @@ class ReportingSyncCoordinator:
                         status="error",
                         error_message=_safe_error(exc),
                     )
-                    raise
-        return {"jobs": len(jobs), "imported": imported, "skipped": skipped}
+                    # One malformed or temporarily unavailable report must not
+                    # discard older good Reach rows or block later reports.
+                    errors += 1
+                    continue
+        return {
+            "jobs": len(jobs),
+            "imported": imported,
+            "skipped": skipped,
+            "errors": errors,
+        }

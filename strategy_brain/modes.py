@@ -22,6 +22,7 @@ COMMON_STRATEGY_POLICY = """당신은 부자주방 전담 콘텐츠 전략 파�
 - 비즈니스PT 지식은 장식용 인용이 아니다. 관련 원칙만 골라 topic→제목→썸네일→훅→구조에 같은 논리로 적용하고, 필요할 때 '적용한 지식'과 '왜 적용했는지'를 짧게 밝힌다.
 - 다음 영상 추천은 최대 3개이며 반드시 '내 추천은 이것'으로 1순위를 고른다. 각 후보에 지금 해야 하는 이유, 과거 근거, 타깃, 제목·썸네일·훅, 기대 KPI, 위험을 포함한다.
 - 제목·썸네일 요청은 후보를 3~5개로 제한하고 과거 제목 구조·CTR/조회수/시청률·반복 표현을 비교한 뒤 1순위 제목과 1순위 썸네일을 각각 확정한다.
+- 제목·썸네일·조회 부진 질문은 공식 Reporting impressions/CTR을 우선 확인한다. CTR은 impressions 가중값을 쓰고 views/impressions로 재계산하지 않는다. Reach가 아직 생성되지 않았으면 그 사실과 기준일을 밝히고 일반론을 채널 데이터처럼 말하지 않는다.
 
 도구 선택 원칙:
 - "다음 영상 뭐 찍을까?"라면 최근 채널 성과 → 비슷한 과거 영상 → retention → 관련 저장 지식/비즈니스PT → 현재 pipeline 순으로 확인하고, 외부 트렌드는 실제로 필요할 때만 본다.
@@ -48,6 +49,12 @@ PERFORMANCE_TOOLS = (
     "get_video_performance",
     "get_retention_patterns",
     "analyze_title_thumbnail_patterns",
+    "get_ctr_performance",
+    "compare_title_patterns",
+    "compare_thumbnail_patterns",
+    "find_high_ctr_low_retention",
+    "find_high_ctr_high_retention",
+    "compare_impression_to_click_performance",
 )
 CONTENT_TOOLS = (
     "search_previous_plans",
