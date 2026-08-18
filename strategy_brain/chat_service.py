@@ -158,6 +158,10 @@ class StrategyChatService:
         if self._enable_prefetch:
             if self._registry is None:
                 self._registry = build_strategy_tool_registry()
+            else:
+                # Trace is per answer, not process lifetime. This also prevents
+                # old tool evidence from appearing in later production audits.
+                self._registry.trace.clear()
             yield {"type": "progress", "message": "질문 의도를 파악하고 있습니다."}
             prefetch_task = asyncio.create_task(
                 prefetch_strategy_evidence(message, history, self._registry)
@@ -216,6 +220,13 @@ class StrategyChatService:
                             tool for tool in request.tools
                             if tool.get("name") not in prefetched_names
                         ],
+                        # CTR diagnostics are deterministic comparisons over a
+                        # precomputed matrix. Low reasoning keeps the answer
+                        # interactive without dropping any retrieved evidence.
+                        reasoning_effort=(
+                            "low" if intent_name == "ctr_analysis"
+                            else request.reasoning_effort
+                        ),
                     )
                 yield {"type": "provider", "provider": "openai"}
                 async for token in brain.stream(request):

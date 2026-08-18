@@ -383,6 +383,11 @@ async def analytics_collection_status():
     return status
 
 
+@app.get("/api/analytics/reporting/status")
+async def analytics_reporting_status():
+    return AnalyticsRepository().get_reporting_status()
+
+
 @app.post("/api/analytics/refresh")
 async def analytics_manual_refresh():
     async def stream():
@@ -1324,6 +1329,9 @@ async def channel_analyze(req: ChannelAnalyzeRequest):
                     v["ctr_source"] = reach.get("source")
                     v["ctr_period_start"] = reach.get("period_start")
                     v["ctr_period_end"] = reach.get("period_end")
+                    v["ctr_source_as_of"] = reach.get("source_as_of")
+                    v["ctr_report_generated_at"] = reach.get("report_generated_at")
+                    v["ctr_collected_at"] = reach.get("collected_at")
                     v["ctr_sample_size"] = ctr.get("sample_size", 0)
                 else:
                     v["impressions"] = None

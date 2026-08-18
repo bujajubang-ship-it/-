@@ -322,7 +322,7 @@ class RetrievalTests(RepositoryFixture):
         names = {tool["name"] for tool in tools}
         self.assertEqual(
             names,
-            {"get_channel_strategy_snapshot", "get_recent_channel_performance", "get_video_performance", "compare_similar_videos", "get_retention_patterns", "analyze_title_thumbnail_patterns", "search_knowledge", "search_business_pt_knowledge", "search_previous_plans", "search_previous_worksheets", "get_content_pipeline", "search_feedback_history", "search_chat_memory", "search_long_term_memory", "get_recent_trends"},
+            {"get_channel_strategy_snapshot", "get_recent_channel_performance", "get_video_performance", "compare_similar_videos", "get_retention_patterns", "analyze_title_thumbnail_patterns", "get_ctr_performance", "compare_title_patterns", "compare_thumbnail_patterns", "find_high_ctr_low_retention", "find_high_ctr_high_retention", "compare_impression_to_click_performance", "search_knowledge", "search_business_pt_knowledge", "search_previous_plans", "search_previous_worksheets", "get_content_pipeline", "search_feedback_history", "search_chat_memory", "search_long_term_memory", "get_recent_trends"},
         )
         self.assertTrue(all(tool["strict"] for tool in tools))
 

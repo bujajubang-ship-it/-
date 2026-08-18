@@ -7,7 +7,7 @@ import hashlib
 import sqlite3
 import uuid
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, List, Sequence
 
 from analytics_reporting import aggregate_reach_by_video
@@ -123,6 +123,8 @@ SCHEMA_STATEMENTS = (
         impressions_status TEXT NOT NULL,
         ctr_status TEXT NOT NULL,
         collected_at TEXT NOT NULL,
+        report_generated_at TEXT,
+        source_as_of TEXT,
         data_through TEXT,
         source TEXT NOT NULL,
         report_id TEXT,
@@ -278,6 +280,20 @@ class AnalyticsRepository:
             if "snapshot_fingerprint" not in retention_columns:
                 connection.execute(
                     "ALTER TABLE video_retention_snapshots ADD COLUMN snapshot_fingerprint TEXT"
+                )
+            reach_columns = {
+                str(row[1])
+                for row in connection.execute(
+                    "PRAGMA table_info(video_reach_metrics)"
+                ).fetchall()
+            }
+            if "report_generated_at" not in reach_columns:
+                connection.execute(
+                    "ALTER TABLE video_reach_metrics ADD COLUMN report_generated_at TEXT"
+                )
+            if "source_as_of" not in reach_columns:
+                connection.execute(
+                    "ALTER TABLE video_reach_metrics ADD COLUMN source_as_of TEXT"
                 )
             connection.execute(
                 """
@@ -582,8 +598,9 @@ class AnalyticsRepository:
                             video_id, metric_date, channel_id,
                             thumbnail_impressions, thumbnail_ctr_percent,
                             impressions_status, ctr_status, collected_at,
-                            data_through, source, report_id, sync_run_id
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                            report_generated_at, source_as_of, data_through,
+                            source, report_id, sync_run_id
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(video_id, metric_date, source) DO UPDATE SET
                             channel_id=excluded.channel_id,
                             thumbnail_impressions=excluded.thumbnail_impressions,
@@ -591,6 +608,14 @@ class AnalyticsRepository:
                             impressions_status=excluded.impressions_status,
                             ctr_status=excluded.ctr_status,
                             collected_at=excluded.collected_at,
+                            report_generated_at=COALESCE(
+                                excluded.report_generated_at,
+                                video_reach_metrics.report_generated_at
+                            ),
+                            source_as_of=COALESCE(
+                                excluded.source_as_of,
+                                video_reach_metrics.source_as_of
+                            ),
                             data_through=excluded.data_through,
                             report_id=excluded.report_id,
                             sync_run_id=excluded.sync_run_id
@@ -606,6 +631,8 @@ class AnalyticsRepository:
                             impressions["status"],
                             ctr["status"],
                             collected_at,
+                            row.get("report_generated_at"),
+                            row.get("source_as_of") or row.get("data_through"),
                             row.get("data_through"),
                             row["source"],
                             row.get("report_id"),
@@ -809,9 +836,115 @@ class AnalyticsRepository:
                         "value": row["thumbnail_ctr_percent"],
                         "status": row["ctr_status"],
                     },
+                    "source_as_of": row.get("source_as_of") or row["metric_date"],
+                    "report_generated_at": row.get("report_generated_at"),
+                    "collected_at": row.get("collected_at"),
+                    "data_through": row.get("data_through"),
                 }
             )
         return aggregate_reach_by_video(normalized)
+
+    def get_reach_history(
+        self, video_ids: Sequence[str] | None = None, *, limit: int = 50_000
+    ) -> List[Dict[str, Any]]:
+        """Return official daily Reach rows without manufacturing missing metrics."""
+
+        params: list[Any] = []
+        where = ""
+        unique_ids = list(dict.fromkeys(video_ids or []))
+        if unique_ids:
+            placeholders = ",".join("?" for _ in unique_ids)
+            where = f"WHERE r.video_id IN ({placeholders})"
+            params.extend(unique_ids)
+        params.append(max(1, min(int(limit), 200_000)))
+        with closing(self._connect()) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                f"""
+                SELECT r.*, v.title, v.published_at,
+                       d.views AS daily_views,
+                       d.average_view_percentage AS daily_average_view_percentage
+                FROM video_reach_metrics r
+                LEFT JOIN youtube_videos v ON v.video_id=r.video_id
+                LEFT JOIN video_daily_metrics d
+                  ON d.video_id=r.video_id AND d.metric_date=r.metric_date
+                 AND d.row_status='available'
+                {where}
+                ORDER BY r.metric_date DESC, r.video_id
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_reporting_created_after(self) -> str | None:
+        """Use a small overlap so newly generated backfills are still discovered."""
+
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT MAX(CASE WHEN status<>'error' THEN create_time END),
+                       MIN(CASE WHEN status='error' THEN create_time END)
+                FROM youtube_reporting_files
+                """
+            ).fetchone()
+        candidates = []
+        for raw, overlap in ((row[0] if row else None, timedelta(days=2)), (row[1] if row else None, timedelta(minutes=1))):
+            if not raw:
+                continue
+            try:
+                parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            candidates.append(parsed - overlap)
+        if not candidates:
+            return None
+        return min(candidates).isoformat().replace(
+            "+00:00", "Z"
+        )
+
+    def get_reporting_status(self) -> Dict[str, Any]:
+        """Public operational status; report URLs and OAuth material are excluded."""
+
+        with closing(self._connect()) as connection:
+            connection.row_factory = sqlite3.Row
+            job = connection.execute(
+                """
+                SELECT report_type_id, job_name, status, create_time, expire_time,
+                       last_checked_at
+                FROM youtube_reporting_jobs
+                WHERE report_type_id='channel_reach_basic_a1'
+                ORDER BY last_checked_at DESC LIMIT 1
+                """
+            ).fetchone()
+            files = connection.execute(
+                """
+                SELECT COUNT(*) AS discovered,
+                       COALESCE(SUM(CASE WHEN status='imported' THEN 1 ELSE 0 END),0) AS imported,
+                       COALESCE(SUM(CASE WHEN status='error' THEN 1 ELSE 0 END),0) AS errors,
+                       MAX(imported_at) AS last_imported_at,
+                       MAX(end_time) AS latest_report_end
+                FROM youtube_reporting_files
+                """
+            ).fetchone()
+            reach = connection.execute(
+                """
+                SELECT COUNT(*) AS row_count,
+                       COUNT(DISTINCT video_id) AS video_count,
+                       MIN(metric_date) AS period_start,
+                       MAX(metric_date) AS source_as_of,
+                       MAX(collected_at) AS last_collected_at,
+                       MAX(report_generated_at) AS last_report_generated_at
+                FROM video_reach_metrics
+                WHERE impressions_status='available' AND ctr_status='available'
+                """
+            ).fetchone()
+        return {
+            "report_type_id": "channel_reach_basic_a1",
+            "job": dict(job) if job else None,
+            "reports": dict(files) if files else {},
+            "reach": dict(reach) if reach else {},
+        }
 
     def get_recent_video_metrics(self, *, limit: int = 20) -> List[Dict[str, Any]]:
         with closing(self._connect()) as connection:

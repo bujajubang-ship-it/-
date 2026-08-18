@@ -95,6 +95,30 @@ class YouTubeCollectionService:
             # even when a later Analytics API request is temporarily unavailable.
             self.repository.upsert_videos(videos, collected_at=now)
 
+            # Reporting is a periodic cache fill and deliberately runs before
+            # the heavier Analytics/retention work.  A delayed or failed bulk
+            # report never blocks either the rest of this background run or the
+            # synchronous channel-analysis endpoint.
+            reporting = YouTubeReportingService(analytics.get_access_token)
+            try:
+                if _env_bool("YT_REPORTING_AUTO_CREATE", True):
+                    job = await reporting.ensure_reach_job()
+                    self.repository.upsert_reporting_job(job, checked_at=now)
+                reach = await ReportingSyncCoordinator(
+                    reporting, self.repository
+                ).sync_existing_reach_reports(
+                    videos,
+                    created_after=self.repository.get_reporting_created_after(),
+                    collected_at=now,
+                )
+                result.reach_imported = int(reach.get("imported") or 0)
+                if reach.get("errors"):
+                    result.warnings.append(
+                        f"reach: {int(reach['errors'])} report(s) could not be imported"
+                    )
+            except Exception as exc:
+                result.warnings.append("reach: " + _safe_error(exc))
+
             period_start = min(
                 (str(video.get("published_at"))[:10] for video in videos if video.get("published_at")),
                 default="2000-01-01",
@@ -135,18 +159,6 @@ class YouTubeCollectionService:
                     result.warnings.append(
                         f"retention:{target.get('video_id')}: {_safe_error(exc)}"
                     )
-
-            reporting = YouTubeReportingService(analytics.get_access_token)
-            try:
-                if _env_bool("YT_REPORTING_AUTO_CREATE", True):
-                    job = await reporting.ensure_reach_job()
-                    self.repository.upsert_reporting_job(job, checked_at=now)
-                reach = await ReportingSyncCoordinator(
-                    reporting, self.repository
-                ).sync_existing_reach_reports(videos, collected_at=now)
-                result.reach_imported = int(reach.get("imported") or 0)
-            except Exception as exc:
-                result.warnings.append("reach: " + _safe_error(exc))
 
             result.status = "success"
             try:

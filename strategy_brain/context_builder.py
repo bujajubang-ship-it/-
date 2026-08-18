@@ -49,12 +49,14 @@ def classify_strategy_intent(
     message: str, history: list[dict[str, Any]] | None = None
 ) -> StrategyIntent:
     history = history or []
-    lowered = message.replace(" ", "")
+    lowered = message.replace(" ", "").lower()
     query = _topic_query(message, history)
     if any(marker in lowered for marker in ("다음영상", "뭐찍", "주제추천")):
         return StrategyIntent("next_video", "다음 영상 후보를 고르는 중", query)
     if any(marker in lowered for marker in ("채널방향", "방향이맞", "방향맞")):
         return StrategyIntent("channel_direction", "최근 성공·실패 패턴을 비교하는 중", query)
+    if any(marker in lowered for marker in ("ctr", "클릭률", "노출", "조회가안", "조회수가높은데")):
+        return StrategyIntent("ctr_analysis", "공식 Reach·CTR과 retention을 교차 분석하는 중", query)
     if any(marker in lowered for marker in ("제목", "썸네일")):
         return StrategyIntent("title_thumbnail", "과거 제목·썸네일 성과를 비교하는 중", query)
     if any(marker in lowered for marker in ("공통문제", "놓치고", "실패패턴", "최근영상들")):
@@ -75,7 +77,9 @@ def _tool_plan(intent: StrategyIntent) -> list[tuple[str, dict[str, Any]]]:
         return [
             ("get_channel_strategy_snapshot", {"limit": 20}),
             ("get_retention_patterns", {"video_id": None, "limit": 10}),
-            ("analyze_title_thumbnail_patterns", {"query": None, "limit": 120}),
+            ("get_ctr_performance", {"limit": 120}),
+            ("compare_title_patterns", {"query": None}),
+            ("compare_thumbnail_patterns", {}),
             ("search_previous_plans", {"query": "", "limit": 8}),
             ("search_feedback_history", {"query": "", "limit": 8}),
             ("get_content_pipeline", {"status": None, "limit": 40}),
@@ -87,7 +91,9 @@ def _tool_plan(intent: StrategyIntent) -> list[tuple[str, dict[str, Any]]]:
         return [
             ("get_channel_strategy_snapshot", {"limit": 30}),
             ("get_retention_patterns", {"video_id": None, "limit": 12}),
-            ("analyze_title_thumbnail_patterns", {"query": None, "limit": 120}),
+            ("get_ctr_performance", {"limit": 120}),
+            ("compare_title_patterns", {"query": None}),
+            ("compare_thumbnail_patterns", {}),
             ("search_feedback_history", {"query": "", "limit": 10}),
             ("search_previous_plans", {"query": "", "limit": 8}),
             ("get_content_pipeline", {"status": None, "limit": 40}),
@@ -97,7 +103,10 @@ def _tool_plan(intent: StrategyIntent) -> list[tuple[str, dict[str, Any]]]:
         plan = [
             ("compare_similar_videos", {"query": query, "limit": 10}),
             ("get_retention_patterns", {"video_id": None, "limit": 10}),
-            ("analyze_title_thumbnail_patterns", {"query": query, "limit": 120}),
+            ("get_ctr_performance", {"limit": 120}),
+            ("compare_title_patterns", {"query": query}),
+            ("compare_thumbnail_patterns", {}),
+            ("compare_impression_to_click_performance", {}),
             ("search_previous_plans", {"query": query, "limit": 8}),
             ("search_feedback_history", {"query": query, "limit": 8}),
             ("search_business_pt_knowledge", {"query": f"{query} 고객 문제 제목 썸네일 훅 구매 상황", "limit": 6}),
@@ -113,12 +122,24 @@ def _tool_plan(intent: StrategyIntent) -> list[tuple[str, dict[str, Any]]]:
                 ]
             )
         return plan
+    if intent.name == "ctr_analysis":
+        return [
+            ("get_ctr_performance", {"limit": 150}),
+            ("compare_title_patterns", {"query": query}),
+            ("compare_thumbnail_patterns", {}),
+            ("find_high_ctr_low_retention", {}),
+            ("find_high_ctr_high_retention", {}),
+            ("compare_impression_to_click_performance", {}),
+            ("get_retention_patterns", {"video_id": None, "limit": 15}),
+            *common_memory,
+        ]
     if intent.name == "common_problems":
         return [
             ("get_channel_strategy_snapshot", {"limit": 20}),
             ("get_retention_patterns", {"video_id": None, "limit": 15}),
             ("search_feedback_history", {"query": "", "limit": 12}),
-            ("analyze_title_thumbnail_patterns", {"query": None, "limit": 80}),
+            ("get_ctr_performance", {"limit": 100}),
+            ("compare_impression_to_click_performance", {}),
             ("search_previous_plans", {"query": "", "limit": 8}),
             *common_memory,
         ]

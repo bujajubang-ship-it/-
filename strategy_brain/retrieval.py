@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import statistics
+import threading
 import time
 from collections import Counter
 from contextlib import closing
@@ -81,6 +82,27 @@ def _median(values: list[float | int | None]) -> float | None:
     return round(statistics.median(available), 3) if available else None
 
 
+def _weighted_plain(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    usable = [
+        row for row in rows
+        if row.get("thumbnail_impressions") is not None
+        and row.get("thumbnail_ctr_percent") is not None
+        and int(row.get("thumbnail_impressions") or 0) >= 0
+    ]
+    impressions = sum(int(row["thumbnail_impressions"]) for row in usable)
+    if impressions <= 0:
+        return {"ctr_percent": None, "impressions": impressions, "days": len(usable)}
+    ctr = sum(
+        int(row["thumbnail_impressions"]) * float(row["thumbnail_ctr_percent"])
+        for row in usable
+    ) / impressions
+    return {
+        "ctr_percent": round(ctr, 3),
+        "impressions": impressions,
+        "days": len(usable),
+    }
+
+
 def _title_archetypes(title: str) -> list[str]:
     lowered = title.lower()
     patterns = {
@@ -89,10 +111,40 @@ def _title_archetypes(title: str) -> list[str]:
         "number": r"\d+(?:평|개|가지|만원|초|분|%)?",
         "result_solution": r"방법|해결|완성|살리는|바꾸|정리|고르는\s*법|동선",
         "field_case": r"현장|설치|실제|주방|식당|베이커리|카페",
+        "product_focus": r"냉장고|냉동고|오븐|식기세척기|세척기|후드|싱크|작업대|쇼케이스|제품|기계",
         "question": r"\?|왜|어떻게|뭘|무엇",
     }
     matched = [name for name, pattern in patterns.items() if re.search(pattern, lowered)]
     return matched or ["plain_information"]
+
+
+def _thumbnail_archetypes(text: str, strategy: Any = None) -> dict[str, Any]:
+    """Classify only saved thumbnail direction; never infer from an unseen image."""
+
+    raw = f"{text} {json.dumps(_load(strategy, {}), ensure_ascii=False)}".lower()
+    tags: list[str] = []
+    patterns = {
+        "field_wide_shot": r"현장\s*(전체|전경)|전체컷|주방\s*전체|와이드",
+        "product_only": r"제품\s*(단독|만)|제품컷|기계\s*(단독|만)",
+        "before_after": r"before|after|비포|애프터|전후|바꾸기\s*전|바꾼\s*후",
+        "person_included": r"사람|사장|대표|얼굴|인물|직원",
+        "problem_scene": r"문제|막히|좁|실패|불편|엉키|위험|후회",
+        "number_emphasis": r"\d+(?:평|개|만원|%|초|분)?",
+    }
+    for name, pattern in patterns.items():
+        if re.search(pattern, raw):
+            tags.append(name)
+    visible_text = str(text or "").strip()
+    text_length = len(re.sub(r"\s+", "", visible_text))
+    return {
+        "archetypes": tags or ["unclassified"],
+        "text_length": text_length,
+        "text_length_bucket": (
+            "none" if not visible_text else "short" if text_length <= 8 else "medium" if text_length <= 14 else "long"
+        ),
+        "classification": "estimated_from_saved_text_and_strategy",
+        "uncertain": True,
+    }
 
 
 class StrategyRetrieval:
@@ -106,6 +158,8 @@ class StrategyRetrieval:
         self._connect = connect or get_db
         self.analytics = analytics or AnalyticsRepository(self._connect)
         self.strategies = strategies or StrategyRepository(self._connect)
+        self._ctr_cache: tuple[float, dict[str, Any]] | None = None
+        self._ctr_cache_lock = threading.Lock()
 
     def _rows(self, query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         with closing(self._connect()) as connection:
@@ -312,6 +366,348 @@ class StrategyRetrieval:
             freshness=_freshness(through),
             sample_size=len(rows),
             unavailable_reason=None if rows else "no collected channel performance",
+        )
+
+    def _ctr_dataset(self, *, limit: int = 300) -> dict[str, Any]:
+        """Build one shared CTR/retention dataset per chat turn.
+
+        All CTR tools reuse this result, avoiding repeated SQLite scans when the
+        intent-specific prefetch runs them in parallel.
+        """
+
+        with self._ctr_cache_lock:
+            if self._ctr_cache and time.monotonic() - self._ctr_cache[0] < 120:
+                return self._ctr_cache[1]
+
+            metrics = self.analytics.get_recent_video_metrics(limit=limit)
+            ids = [str(row["video_id"]) for row in metrics]
+            reach_rows = self.analytics.get_reach_history(ids)
+            by_video: dict[str, list[dict[str, Any]]] = {}
+            for row in reach_rows:
+                if (
+                    row.get("impressions_status") == "available"
+                    and row.get("ctr_status") == "available"
+                ):
+                    by_video.setdefault(str(row["video_id"]), []).append(row)
+
+            retention_rows = self._rows(
+                """
+                SELECT r.video_id,r.retention_30s_estimate,r.data_through,
+                       r.collected_at,r.point_count
+                FROM video_retention_snapshots r
+                WHERE r.id=(
+                    SELECT r2.id FROM video_retention_snapshots r2
+                    WHERE r2.video_id=r.video_id
+                    ORDER BY r2.collected_at DESC,r2.id DESC LIMIT 1
+                )
+                """
+            )
+            retention = {str(row["video_id"]): row for row in retention_rows}
+            videos: list[dict[str, Any]] = []
+            milestones = (1, 3, 7, 14, 30)
+            for metric in metrics:
+                video_id = str(metric["video_id"])
+                daily = sorted(by_video.get(video_id, []), key=lambda row: row["metric_date"])
+                if not daily:
+                    continue
+                lifecycle: dict[str, Any] = {}
+                published = None
+                try:
+                    published = date.fromisoformat(str(metric.get("published_at") or "")[:10])
+                except ValueError:
+                    pass
+                if published:
+                    aged: list[tuple[int, dict[str, Any]]] = []
+                    for row in daily:
+                        try:
+                            age = (date.fromisoformat(str(row["metric_date"])[:10]) - published).days
+                        except ValueError:
+                            continue
+                        if age >= 0:
+                            aged.append((age, row))
+                    for day in milestones:
+                        window = [row for age, row in aged if age <= day]
+                        if window:
+                            lifecycle[f"D{day}"] = _weighted_plain(window)
+                first_available = _weighted_plain(daily[:3])
+                recent = _weighted_plain(daily[-7:])
+                long = _weighted_plain(daily)
+                retention_item = retention.get(video_id) or {}
+                views_in_period = sum(
+                    int(row["daily_views"])
+                    for row in daily
+                    if row.get("daily_views") is not None
+                )
+                videos.append(
+                    {
+                        "video_id": video_id,
+                        "title": metric.get("title"),
+                        "published_at": metric.get("published_at"),
+                        "views": metric.get("views"),
+                        "views_in_reach_period": views_in_period,
+                        "average_view_percentage": metric.get("average_view_percentage"),
+                        "retention_30s_estimate": retention_item.get("retention_30s_estimate"),
+                        "retention_source_as_of": retention_item.get("data_through"),
+                        "impressions": long["impressions"],
+                        "ctr_percent": long["ctr_percent"],
+                        "estimated_clicks": (
+                            round(long["impressions"] * long["ctr_percent"] / 100)
+                            if long["ctr_percent"] is not None else None
+                        ),
+                        "first_available_3_days": first_available,
+                        "recent_7_available_days": recent,
+                        "ctr_change_percentage_points": (
+                            round(recent["ctr_percent"] - first_available["ctr_percent"], 3)
+                            if recent["ctr_percent"] is not None
+                            and first_available["ctr_percent"] is not None
+                            else None
+                        ),
+                        "lifecycle": lifecycle,
+                        "reach_period": {
+                            "start": daily[0]["metric_date"],
+                            "end": daily[-1]["metric_date"],
+                            "available_days": len(daily),
+                        },
+                        "report_generated_at": max(
+                            (row.get("report_generated_at") for row in daily if row.get("report_generated_at")),
+                            default=None,
+                        ),
+                        "collected_at": max(
+                            (row.get("collected_at") for row in daily if row.get("collected_at")),
+                            default=None,
+                        ),
+                        "title_archetypes": _title_archetypes(str(metric.get("title") or "")),
+                    }
+                )
+            channel = _weighted_plain(reach_rows)
+            result = {
+                "status": "available" if videos else "not_ready",
+                "channel_weighted_ctr_percent": channel["ctr_percent"],
+                "channel_impressions": channel["impressions"],
+                "channel_ctr_sample_days": channel["days"],
+                "ctr_median_percent": _median([row.get("ctr_percent") for row in videos]),
+                "impressions_median": _median([row.get("impressions") for row in videos]),
+                "retention_30s_median": _median(
+                    [row.get("retention_30s_estimate") for row in videos]
+                ),
+                "average_view_percentage_median": _median(
+                    [row.get("average_view_percentage") for row in videos]
+                ),
+                "source_as_of": max(
+                    (str(row.get("metric_date")) for row in reach_rows if row.get("metric_date")),
+                    default=None,
+                ),
+                "collected_at": max(
+                    (str(row.get("collected_at")) for row in reach_rows if row.get("collected_at")),
+                    default=None,
+                ),
+                "video_count": len(videos),
+                "videos": videos,
+                "calculation_note": (
+                    "CTR is the official Reporting percentage weighted by official impressions; "
+                    "estimated_clicks is impressions×CTR only, never views/impressions."
+                ),
+            }
+            self._ctr_cache = (time.monotonic(), result)
+            return result
+
+    def get_ctr_performance(self, args: dict[str, Any]) -> EvidenceEnvelope:
+        limit = max(5, min(int(args.get("limit") or 100), 300))
+        dataset = self._ctr_dataset(limit=max(limit, 300))
+        rows = dataset["videos"][:limit]
+        ranked = sorted(rows, key=lambda row: row.get("ctr_percent") or -1, reverse=True)
+        data = {
+            key: value for key, value in dataset.items() if key != "videos"
+        }
+        data["highest_ctr"] = ranked[:10]
+        data["lowest_ctr"] = list(reversed(ranked[-10:])) if ranked else []
+        data["recent_videos"] = rows[:20]
+        return EvidenceEnvelope(
+            data=_compact(data),
+            source="youtube_reporting_api:channel_reach_basic_a1+youtube_analytics",
+            collected_at=dataset.get("collected_at"),
+            period={"start": None, "end": dataset.get("source_as_of")},
+            freshness=_freshness(dataset.get("source_as_of")),
+            sample_size=dataset.get("video_count", 0),
+            unavailable_reason=(
+                None if dataset.get("video_count") else
+                "Reach report has not produced importable CTR rows yet; previous data was not replaced"
+            ),
+        )
+
+    def compare_title_patterns(self, args: dict[str, Any]) -> EvidenceEnvelope:
+        dataset = self._ctr_dataset()
+        query = str(args.get("query") or "").strip()
+        videos = dataset["videos"]
+        if query:
+            matched = [row for row in videos if _score(query, row.get("title")) > 0]
+            if matched:
+                videos = matched
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for row in videos:
+            for pattern in row.get("title_archetypes") or ["plain_information"]:
+                groups.setdefault(pattern, []).append(row)
+        summaries = []
+        for pattern, rows in groups.items():
+            summaries.append(
+                {
+                    "pattern": pattern,
+                    "sample_size": len(rows),
+                    "ctr_median_percent": _median([row.get("ctr_percent") for row in rows]),
+                    "impressions_median": _median([row.get("impressions") for row in rows]),
+                    "views_median": _median([row.get("views") for row in rows]),
+                    "retention_30s_median": _median([row.get("retention_30s_estimate") for row in rows]),
+                    "average_view_percentage_median": _median([row.get("average_view_percentage") for row in rows]),
+                    "confidence": "directional" if len(rows) < 5 else "moderate" if len(rows) < 12 else "stronger",
+                    "examples": [
+                        {"video_id": row["video_id"], "title": row["title"], "ctr_percent": row["ctr_percent"]}
+                        for row in sorted(rows, key=lambda item: item.get("ctr_percent") or -1, reverse=True)[:3]
+                    ],
+                }
+            )
+        summaries.sort(
+            key=lambda item: (item["ctr_median_percent"] is not None, item["ctr_median_percent"] or -1),
+            reverse=True,
+        )
+        return EvidenceEnvelope(
+            data=_compact({"patterns": summaries, "channel_ctr_percent": dataset.get("channel_weighted_ctr_percent")}),
+            source="youtube_reporting_api+youtube_videos:title_pattern_classification",
+            collected_at=dataset.get("collected_at"),
+            freshness=_freshness(dataset.get("source_as_of")),
+            sample_size=len(videos),
+            unavailable_reason=None if videos else "no Reach rows are available for title comparison",
+        )
+
+    def compare_thumbnail_patterns(self, args: dict[str, Any]) -> EvidenceEnvelope:
+        dataset = self._ctr_dataset()
+        by_id = {row["video_id"]: row for row in dataset["videos"]}
+        links = self._rows(
+            """
+            SELECT l.video_id,l.thumbnail_text,l.title_at_upload,l.linked_at,
+                   c.strategy_json
+            FROM strategy_video_links l
+            JOIN content_strategies c ON c.id=l.strategy_id
+            WHERE COALESCE(l.thumbnail_text,'')<>''
+            ORDER BY l.linked_at DESC LIMIT 300
+            """
+        )
+        classified = []
+        for link in links:
+            performance = by_id.get(str(link.get("video_id")))
+            if not performance:
+                continue
+            classification = _thumbnail_archetypes(
+                str(link.get("thumbnail_text") or ""), link.get("strategy_json")
+            )
+            classified.append({**link, **classification, "performance": performance})
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for row in classified:
+            for pattern in row["archetypes"]:
+                groups.setdefault(pattern, []).append(row)
+        patterns = [
+            {
+                "pattern": pattern,
+                "sample_size": len(rows),
+                "ctr_median_percent": _median(
+                    [row["performance"].get("ctr_percent") for row in rows]
+                ),
+                "impressions_median": _median(
+                    [row["performance"].get("impressions") for row in rows]
+                ),
+                "retention_30s_median": _median(
+                    [row["performance"].get("retention_30s_estimate") for row in rows]
+                ),
+                "classification": "estimated_from_saved_text_and_strategy",
+            }
+            for pattern, rows in groups.items()
+        ]
+        patterns.sort(key=lambda row: row.get("ctr_median_percent") or -1, reverse=True)
+        return EvidenceEnvelope(
+            data=_compact({"patterns": patterns, "classified_examples": classified[:12], "uncertainty": "No thumbnail pixels were inspected; categories are estimates from saved thumbnail text/direction."}),
+            source="strategy_thumbnail_history+youtube_reporting_api:estimated_patterns",
+            collected_at=dataset.get("collected_at"),
+            freshness=_freshness(dataset.get("source_as_of")),
+            sample_size=len(classified),
+            unavailable_reason=None if classified else "no saved thumbnail direction is linked to a video with Reach data",
+        )
+
+    def _ctr_retention_segment(self, *, high_retention: bool) -> EvidenceEnvelope:
+        dataset = self._ctr_dataset()
+        ctr_median = dataset.get("ctr_median_percent")
+        retention_median = dataset.get("retention_30s_median")
+        use_average = retention_median is None
+        if use_average:
+            retention_median = dataset.get("average_view_percentage_median")
+        selected = []
+        if ctr_median is not None and retention_median is not None:
+            for row in dataset["videos"]:
+                retention = (
+                    row.get("average_view_percentage") if use_average
+                    else row.get("retention_30s_estimate")
+                )
+                if row.get("ctr_percent") is None or retention is None:
+                    continue
+                matches_retention = retention >= retention_median if high_retention else retention < retention_median
+                if row["ctr_percent"] >= ctr_median and matches_retention:
+                    selected.append(row)
+        selected.sort(key=lambda row: (row.get("ctr_percent") or -1, row.get("impressions") or -1), reverse=True)
+        label = "high_ctr_high_retention" if high_retention else "high_ctr_low_retention"
+        return EvidenceEnvelope(
+            data=_compact({
+                "segment": label,
+                "ctr_threshold_percent": ctr_median,
+                "retention_threshold": retention_median,
+                "retention_metric": "average_view_percentage" if use_average else "retention_30s_estimate",
+                "videos": selected[:20],
+            }),
+            source="youtube_reporting_api+youtube_analytics+retention:ctr_retention_segment",
+            collected_at=dataset.get("collected_at"),
+            freshness=_freshness(dataset.get("source_as_of")),
+            sample_size=len(selected),
+            unavailable_reason=None if ctr_median is not None and retention_median is not None else "CTR or retention baseline is not available",
+        )
+
+    def find_high_ctr_low_retention(self, args: dict[str, Any]) -> EvidenceEnvelope:
+        return self._ctr_retention_segment(high_retention=False)
+
+    def find_high_ctr_high_retention(self, args: dict[str, Any]) -> EvidenceEnvelope:
+        return self._ctr_retention_segment(high_retention=True)
+
+    def compare_impression_to_click_performance(self, args: dict[str, Any]) -> EvidenceEnvelope:
+        dataset = self._ctr_dataset()
+        ctr = dataset.get("ctr_median_percent")
+        impressions = dataset.get("impressions_median")
+        segments = {
+            "high_impressions_low_ctr": [],
+            "high_impressions_high_ctr": [],
+            "low_impressions_high_ctr": [],
+        }
+        if ctr is not None and impressions is not None:
+            for row in dataset["videos"]:
+                if row.get("ctr_percent") is None or row.get("impressions") is None:
+                    continue
+                high_i = row["impressions"] >= impressions
+                high_c = row["ctr_percent"] >= ctr
+                key = (
+                    "high_impressions_high_ctr" if high_i and high_c else
+                    "high_impressions_low_ctr" if high_i else
+                    "low_impressions_high_ctr" if high_c else None
+                )
+                if key:
+                    segments[key].append(row)
+        for values in segments.values():
+            values.sort(key=lambda row: row.get("impressions") or -1, reverse=True)
+        return EvidenceEnvelope(
+            data=_compact({
+                "thresholds": {"ctr_median_percent": ctr, "impressions_median": impressions},
+                "segments": {key: values[:15] for key, values in segments.items()},
+                "click_note": "estimated_clicks derives from official impressions×official CTR; it is not a reported click field.",
+            }),
+            source="youtube_reporting_api:impression_ctr_matrix+youtube_analytics",
+            collected_at=dataset.get("collected_at"),
+            freshness=_freshness(dataset.get("source_as_of")),
+            sample_size=dataset.get("video_count", 0),
+            unavailable_reason=None if ctr is not None and impressions is not None else "Reach baseline is not ready",
         )
 
     def analyze_title_thumbnail_patterns(self, args: dict[str, Any]) -> EvidenceEnvelope:
@@ -725,6 +1121,12 @@ def build_strategy_tool_registry(retrieval: StrategyRetrieval | None = None) -> 
         ("compare_similar_videos", "새 주제와 제목이 비슷한 과거 부자주방 영상들을 찾아 성과를 비교한다.", _object_schema({"query": {"type": "string"}, "limit": {"type": "integer"}}), service.compare_similar_videos),
         ("get_retention_patterns", "최근 영상 또는 지정 영상의 초반 유지율, 급락 구간, audience/relative retention 패턴을 조회한다.", _object_schema({"video_id": NULLABLE_STRING, "limit": {"type": "integer"}}), service.get_retention_patterns),
         ("analyze_title_thumbnail_patterns", "과거 제목 구조별 조회수·시청률·CTR, 최근 반복 표현과 실제 썸네일 히스토리를 비교한다.", _object_schema({"query": NULLABLE_STRING, "limit": {"type": "integer"}}), service.analyze_title_thumbnail_patterns),
+        ("get_ctr_performance", "공식 Reporting Reach의 영상별 impressions·가중 CTR·초기/최근 변화·D1/D3/D7/D14/D30 snapshot을 Analytics 조회수와 함께 조회한다.", _object_schema({"limit": {"type": "integer"}}), service.get_ctr_performance),
+        ("compare_title_patterns", "부자주방 제목을 문제형·결과형·숫자형·비교형·현장형·제품형으로 분류하고 실제 CTR·impressions·retention 성과를 비교한다.", _object_schema({"query": NULLABLE_STRING}), service.compare_title_patterns),
+        ("compare_thumbnail_patterns", "저장된 실제 썸네일 문구·기획 방향을 분류해 CTR 성과를 비교한다. 이미지 미확인 분류는 추정값임을 명시한다.", _object_schema({}), service.compare_thumbnail_patterns),
+        ("find_high_ctr_low_retention", "채널 CTR 중앙값 이상이지만 초반 retention이 낮아 클릭 약속을 회수하지 못한 영상을 찾는다.", _object_schema({}), service.find_high_ctr_low_retention),
+        ("find_high_ctr_high_retention", "CTR과 retention이 모두 채널 기준 이상인 재사용 가치가 높은 영상을 찾는다.", _object_schema({}), service.find_high_ctr_high_retention),
+        ("compare_impression_to_click_performance", "impressions가 높은데 CTR이 낮은 영상, CTR은 높지만 노출이 작은 영상, 둘 다 높은 영상을 구분한다.", _object_schema({}), service.compare_impression_to_click_performance),
         ("search_knowledge", "지식 저장소에서 이번 판단에 관련된 원칙과 강의만 검색한다.", _object_schema({"query": {"type": "string"}, "limit": {"type": "integer"}}), service.search_knowledge),
         ("search_business_pt_knowledge", "비즈니스PT에서 공부해 저장한 지식 중 이번 주제와 관련된 것만 검색한다.", _object_schema({"query": {"type": "string"}, "limit": {"type": "integer"}}), service.search_business_pt_knowledge),
         ("search_previous_plans", "과거 미드폼·숏폼·기획과 공통 전략 context를 검색한다.", _object_schema({"query": {"type": "string"}, "limit": {"type": "integer"}}), service.search_previous_plans),

@@ -77,6 +77,8 @@ def parse_reach_csv(
     expected_video_ids: Sequence[str] | None = None,
     expected_date: str | None = None,
     report_id: str | None = None,
+    report_generated_at: str | None = None,
+    source_as_of: str | None = None,
 ) -> List[Dict[str, Any]]:
     """Parse channel_reach_basic_a1 CSV and make omitted rows explicit.
 
@@ -125,6 +127,8 @@ def parse_reach_csv(
                 "ctr_unit": CTR_UNIT,
                 "source": REACH_SOURCE,
                 "report_id": report_id,
+                "report_generated_at": report_generated_at,
+                "source_as_of": source_as_of or metric_date,
                 "data_through": metric_date,
                 "row_status": STATUS_AVAILABLE,
             }
@@ -154,6 +158,8 @@ def parse_reach_csv(
                     "ctr_unit": CTR_UNIT,
                     "source": REACH_SOURCE,
                     "report_id": report_id,
+                    "report_generated_at": report_generated_at,
+                    "source_as_of": source_as_of or expected_date,
                     "data_through": expected_date,
                     "row_status": STATUS_NOT_REPORTED,
                 }
@@ -220,6 +226,21 @@ def aggregate_reach_by_video(rows: Iterable[Dict[str, Any]]) -> Dict[str, Dict[s
             "thumbnail_ctr": weighted_ctr(video_rows),
             "period_start": min(row["metric_date"] for row in video_rows),
             "period_end": max(row["metric_date"] for row in video_rows),
+            "source_as_of": max(
+                (
+                    str(row.get("source_as_of") or row.get("data_through") or row["metric_date"])
+                    for row in video_rows
+                ),
+                default=None,
+            ),
+            "report_generated_at": max(
+                (str(row.get("report_generated_at")) for row in video_rows if row.get("report_generated_at")),
+                default=None,
+            ),
+            "collected_at": max(
+                (str(row.get("collected_at")) for row in video_rows if row.get("collected_at")),
+                default=None,
+            ),
             "source": REACH_SOURCE,
         }
     return result

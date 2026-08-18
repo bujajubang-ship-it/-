@@ -69,7 +69,8 @@ class StrategyIntentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             {
                 "get_channel_strategy_snapshot", "get_retention_patterns",
-                "analyze_title_thumbnail_patterns", "search_previous_plans",
+                "get_ctr_performance", "compare_title_patterns",
+                "compare_thumbnail_patterns", "search_previous_plans",
                 "search_feedback_history", "get_content_pipeline",
                 "search_business_pt_knowledge", "get_recent_trends",
                 "search_long_term_memory", "search_chat_memory",

@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import unittest
 from types import SimpleNamespace
 
@@ -142,6 +143,14 @@ class ChannelAIOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("평균시청률 unavailable", prompt)
         self.assertIn("unavailable/pending/not_reported는 0이 아니다", prompt)
         self.assertIn("Reporting", prompt)
+
+    def test_channel_button_only_reads_cached_reporting_data(self):
+        from main import channel_analyze
+
+        source = inspect.getsource(channel_analyze)
+        self.assertIn("get_reach_for_videos", source)
+        self.assertNotIn("ensure_reach_job", source)
+        self.assertNotIn("download_report", source)
 
 
 if __name__ == "__main__":
