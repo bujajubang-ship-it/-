@@ -14,6 +14,7 @@ from strategy_brain.contracts import StrategyMode
 from strategy_brain.providers import OpenAIResponsesProvider
 from strategy_brain.retrieval import StrategyRetrieval, build_strategy_tool_registry
 from strategy_repository import StrategyRepository
+from edit_learning_service import build_editing_benchmarks
 
 
 SEGMENT_SCHEMA = {
@@ -41,6 +42,29 @@ SEGMENT_SCHEMA = {
     ],
 }
 
+ENHANCEMENT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "id": {"type": "string"},
+        "start_time": {"type": "number"},
+        "end_time": {"type": "number"},
+        "type": {"type": "string", "enum": ["broll", "caption_emphasis"]},
+        "instruction": {"type": "string"},
+        "asset_requirements": {"type": "array", "items": {"type": "string"}},
+        "overlay_text": {"type": "string"},
+        "priority": {"type": "string", "enum": ["high", "medium", "low"]},
+        "confidence": {"type": "number"},
+        "reason": {"type": "string"},
+        "render_mode": {"type": "string", "enum": ["suggestion_only"]},
+    },
+    "required": [
+        "id", "start_time", "end_time", "type", "instruction",
+        "asset_requirements", "overlay_text", "priority", "confidence",
+        "reason", "render_mode",
+    ],
+}
+
 PLAN_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -51,10 +75,11 @@ PLAN_SCHEMA = {
         "short_target_seconds": {"type": "number"},
         "editor_notes": {"type": "array", "items": {"type": "string"}},
         "segments": {"type": "array", "items": SEGMENT_SCHEMA},
+        "enhancements": {"type": "array", "items": ENHANCEMENT_SCHEMA},
     },
     "required": [
         "recommended_direction", "target_length_seconds", "create_short_highlight",
-        "short_target_seconds", "editor_notes", "segments",
+        "short_target_seconds", "editor_notes", "segments", "enhancements",
     ],
 }
 
@@ -88,12 +113,23 @@ DIAGNOSIS_SCHEMA = {
             },
         },
         "data_limitations": {"type": "array", "items": {"type": "string"}},
+        "strategy_alignment": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "status": {"type": "string", "enum": ["aligned", "partial", "conflict", "unavailable"]},
+                "matched_promises": {"type": "array", "items": {"type": "string"}},
+                "conflicts": {"type": "array", "items": {"type": "string"}},
+                "worksheet_priorities": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["status", "matched_promises", "conflicts", "worksheet_priorities"],
+        },
         "plan": PLAN_SCHEMA,
     },
     "required": [
         "overall_summary", "strong_points", "weak_points", "recommended_direction",
         "estimated_problems", "suggested_final_length", "suggested_hook_range",
-        "channel_basis", "data_limitations", "plan",
+        "channel_basis", "data_limitations", "strategy_alignment", "plan",
     ],
 }
 
@@ -137,6 +173,7 @@ class EditAnalysisService:
         calls = {
             "similar_videos": (self.retrieval.compare_similar_videos, {"query": query, "limit": 8}),
             "retention": (self.retrieval.get_retention_patterns, {"video_id": None, "limit": 12}),
+            "channel_snapshot": (self.retrieval.get_channel_strategy_snapshot, {"limit": 20}),
             "business_pt": (self.retrieval.search_business_pt_knowledge, {"query": query, "limit": 6}),
             "feedback": (self.retrieval.search_feedback_history, {"query": query, "limit": 6}),
             "worksheets": (self.retrieval.search_previous_worksheets, {"query": query, "limit": 5}),
@@ -153,6 +190,12 @@ class EditAnalysisService:
                     "unavailable_reason": f"{type(exc).__name__}: retrieval unavailable",
                 }
 
+        strategy_task = (
+            asyncio.create_task(
+                asyncio.to_thread(self.strategies.get_execution_context, strategy_id)
+            )
+            if strategy_id is not None else None
+        )
         results = await asyncio.gather(
             *(run_one(name, method, args) for name, (method, args) in calls.items())
         )
@@ -173,7 +216,7 @@ class EditAnalysisService:
         strategy = None
         if strategy_id is not None:
             try:
-                strategy = await asyncio.to_thread(self.strategies.get, strategy_id)
+                strategy = await strategy_task if strategy_task else None
             except Exception:
                 strategy = None
             trace.append(
@@ -185,6 +228,16 @@ class EditAnalysisService:
                     "unavailable": strategy is None,
                 }
             )
+        evidence["editing_benchmarks"] = build_editing_benchmarks(evidence)
+        trace.append(
+            {
+                "tool": "build_editing_benchmarks",
+                "source": "youtube_analytics_retention+knowledge:business_pt",
+                "sample_size": evidence["editing_benchmarks"].get("retention_sample_size", 0),
+                "freshness": (evidence.get("retention") or {}).get("freshness"),
+                "unavailable": not bool(evidence["editing_benchmarks"].get("decision_rules")),
+            }
+        )
         return evidence, trace, strategy
 
     @staticmethod
@@ -213,6 +266,7 @@ class EditAnalysisService:
         instructions: str,
         schema: dict[str, Any],
         schema_name: str,
+        reasoning_effort: str = "high",
     ) -> dict[str, Any]:
         openai_error: Exception | None = None
         if os.getenv("OPENAI_API_KEY", "").strip() or self._brain is not None:
@@ -226,7 +280,7 @@ class EditAnalysisService:
                     output_schema_name=schema_name,
                     metadata={"surface": "edit_director", "channel": "bujajubang"},
                 )
-                request = replace(request, tools=[], reasoning_effort="high")
+                request = replace(request, tools=[], reasoning_effort=reasoning_effort)
                 result = await brain.run(request)
                 if not isinstance(result.parsed, dict):
                     raise RuntimeError("AI 편집 응답 형식이 올바르지 않습니다.")
@@ -248,6 +302,52 @@ class EditAnalysisService:
                 return result
         raise RuntimeError("AI 편집 분석에 실패했습니다.") from openai_error
 
+    @staticmethod
+    def _ground_diagnosis(
+        diagnosis: dict[str, Any], evidence: dict[str, Any], strategy: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Guarantee that displayed evidence is traceable to retrieved data."""
+
+        diagnosis = dict(diagnosis or {})
+        basis = list(diagnosis.get("channel_basis") or [])
+        benchmarks = evidence.get("editing_benchmarks") or {}
+        sources = " ".join(str(item.get("source") or "").lower() for item in basis)
+        retention = benchmarks.get("retention_30s_median")
+        if retention is not None and "retention" not in sources:
+            basis.append(
+                {
+                    "source": "youtube_analytics_retention",
+                    "insight": f"채널 retention 표본 {benchmarks.get('retention_sample_size', 0)}개의 30초 중앙값 {float(retention) * 100:.1f}%를 오프닝 판단 기준으로 사용",
+                    "confidence": "high" if benchmarks.get("retention_sample_size", 0) >= 5 else "medium",
+                }
+            )
+        principles = benchmarks.get("business_pt_principles") or []
+        if principles and "business" not in sources and "knowledge" not in sources:
+            basis.append(
+                {
+                    "source": "knowledge:business_pt",
+                    "insight": f"{principles[0].get('title') or '비즈니스PT 원칙'}: {principles[0].get('principle') or ''}"[:900],
+                    "confidence": "medium",
+                }
+            )
+        diagnosis["channel_basis"] = basis[:12]
+        limitations = list(diagnosis.get("data_limitations") or [])
+        for item in benchmarks.get("limitations") or []:
+            if item not in limitations:
+                limitations.append(item)
+        diagnosis["data_limitations"] = limitations[:12]
+        if not isinstance(diagnosis.get("strategy_alignment"), dict):
+            diagnosis["strategy_alignment"] = {
+                "status": "unavailable" if not strategy else "partial",
+                "matched_promises": [],
+                "conflicts": [],
+                "worksheet_priorities": [],
+            }
+        plan = dict(diagnosis.get("plan") or {})
+        plan.setdefault("enhancements", [])
+        diagnosis["plan"] = plan
+        return diagnosis
+
     async def diagnose(
         self,
         *,
@@ -265,12 +365,14 @@ class EditAnalysisService:
 - transcript의 실제 타임코드와 silence/scene 힌트를 근거로 제안한다.
 - raw_footage는 말실수·반복·대기·정적을 적극 찾고, rough_cut은 이미 만든 리듬과 의도를 존중한다.
 - 제목·썸네일·훅 전략이 있으면 본문이 그 약속을 회수하는지 확인한다.
-- 채널 retention, 유사 영상, 과거 피드백, 워크시트, memory, 비즈니스PT 지식은 관련 있는 것만 적용한다.
+- editing_benchmarks의 실제 retention 중앙값과 강/약 오프닝 표본을 편집 길이·첫 훅 판단에 우선 적용한다.
+- 비즈니스PT 지식은 단순 인용하지 말고 해당 원칙이 바꾸는 컷·훅·B-roll·자막 결정을 명시한다.
+- 연결 strategy의 제목·썸네일 약속, worksheet 촬영 우선순위, pipeline 목적과 충돌 여부를 strategy_alignment에 쓴다.
 - 데이터가 없으면 일반론을 채널 사실처럼 말하지 말고 data_limitations에 적는다.
 - cut/trim은 해당 구간 전체 제거, shorten은 해당 구간의 뒷부분 축약, use_as_hook은 해당 구간을 오프닝으로 이동한다.
 - 실제로 잘라야 할 구간만 구체적으로 쓰고 영상 전체를 촘촘히 재서술하지 않는다.
 - confidence는 0~1이다. 지나치게 공격적인 컷은 낮은 confidence로 표시한다.
-- B-roll/자막은 렌더러가 자동 합성하지 않고 편집 로그 지시로만 남는다는 점을 고려한다.
+- B-roll/자막은 enhancements에 정확한 타임코드·필요 소스·화면 문구·우선순위를 쓰고 render_mode는 suggestion_only로 둔다.
 - 사용자가 승인하기 전에는 어떤 편집도 실행되지 않는다."""
         prompt = f"""[입력 설정]
 {_compact_json(settings)}
@@ -295,12 +397,22 @@ class EditAnalysisService:
 {self.transcript_for_prompt(transcript)}
 
 intro 지연, 반복, 늘어짐, 정적, B-roll/자막, 제목 약속 회수, 초반 이탈, 핵심 메시지, 후반 길이, 쇼츠 후보, CTA를 모두 점검하고 구조화된 진단과 최초 edit plan을 작성하라."""
-        return await self._structured(
+        # Short/rough-cut inputs have bounded evidence and do not benefit from a
+        # long deliberation pass.  Long raw footage keeps high reasoning.
+        effort = (
+            "medium"
+            if settings.get("video_type") == "rough_cut"
+            or float(media.get("duration") or 0) <= 180
+            else "high"
+        )
+        diagnosis = await self._structured(
             prompt=prompt,
             instructions=instructions,
             schema=DIAGNOSIS_SCHEMA,
             schema_name="edit_diagnosis",
+            reasoning_effort=effort,
         )
+        return self._ground_diagnosis(diagnosis, evidence, strategy)
 
     async def revise(
         self,
@@ -334,9 +446,14 @@ intro 지연, 반복, 늘어짐, 정적, B-roll/자막, 제목 약속 회수, �
 {self.transcript_for_prompt(transcript)}
 
 수정된 전체 plan과 무엇을 바꿨는지 한 문장 revision_summary를 반환하라."""
-        return await self._structured(
+        revised = await self._structured(
             prompt=prompt,
             instructions=instructions,
             schema=REVISION_SCHEMA,
             schema_name="edit_plan_revision",
+            reasoning_effort="medium",
         )
+        plan = dict(revised.get("plan") or {})
+        plan.setdefault("enhancements", current_plan.get("enhancements") or [])
+        revised["plan"] = plan
+        return revised

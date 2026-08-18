@@ -40,6 +40,10 @@ from media_ingest import MediaIngestService, MediaValidationError
 from edit_analysis_service import EditAnalysisService
 from edit_plan_service import prepare_plan, plan_diff
 from edit_render_service import EditRenderService
+from edit_learning_service import (
+    EditFeedbackService,
+    record_approved_edit_memory,
+)
 from viewtrap_service import ViewTrapService
 from heatmap_service import fetch_heatmap, summarize_for_prompt
 from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
@@ -1777,6 +1781,9 @@ async def edit_projects_analyze(
         "outputs": {},
         "render_runs": [],
         "applied_edit_log": [],
+        "advisory_edit_log": [],
+        "timings": {},
+        "approval_memory_id": None,
         "upload_feedback": {"video_id": None, "linked_at": None, "checkpoints": []},
         "error": None,
     }
@@ -1787,6 +1794,7 @@ async def edit_projects_analyze(
 
     async def stream():
         nonlocal project
+        analysis_started = time.perf_counter()
         try:
             yield sse({"step": "validating", "message": "업로드를 마쳤습니다. 영상 메타데이터를 확인합니다.", "project_id": project_id})
             media = await asyncio.to_thread(ingest.probe, source_path)
@@ -1795,6 +1803,7 @@ async def edit_projects_analyze(
             store.save(project_id, project)
 
             yield sse({"step": "signals", "message": "대사·정적·장면 전환을 타임코드로 분석합니다.", "project_id": project_id})
+            signals_started = time.perf_counter()
             inspect_task = asyncio.create_task(ingest.inspect_and_transcribe(source_path, media))
             waited = 0
             while not inspect_task.done():
@@ -1810,11 +1819,15 @@ async def edit_projects_analyze(
             transcript, silences, scenes = inspect_task.result()
             project["transcript"] = transcript
             project["analysis_signals"] = {"silences": silences, "scene_changes": scenes}
+            project["timings"]["media_and_transcript_seconds"] = round(
+                time.perf_counter() - signals_started, 3
+            )
             project["status"] = "retrieving_context"
             store.save(project_id, project)
 
             analysis = EditAnalysisService()
             yield sse({"step": "retrieving", "message": "유사 영상 retention·과거 피드백·비즈니스PT 지식을 연결합니다.", "project_id": project_id})
+            retrieval_started = time.perf_counter()
             evidence_task = asyncio.create_task(
                 analysis.collect_evidence(
                     topic=settings["topic"], purpose=settings["purpose"], strategy_id=strategy_id
@@ -1826,6 +1839,9 @@ async def edit_projects_analyze(
                 except TimeoutError:
                     yield sse({"step": "retrieving", "message": "채널 근거를 병렬로 비교하고 있습니다.", "project_id": project_id})
             evidence, trace, strategy = evidence_task.result()
+            project["timings"]["retrieval_seconds"] = round(
+                time.perf_counter() - retrieval_started, 3
+            )
             project["evidence_snapshot"] = evidence
             project["evidence_trace"] = trace
             project["strategy_snapshot"] = strategy
@@ -1833,6 +1849,7 @@ async def edit_projects_analyze(
             store.save(project_id, project)
 
             yield sse({"step": "diagnosing", "message": "AI가 타임코드 기반 최초 편집안을 작성합니다. 아직 편집은 실행하지 않습니다.", "project_id": project_id})
+            diagnosis_started = time.perf_counter()
             diagnosis_task = asyncio.create_task(
                 analysis.diagnose(
                     transcript=transcript,
@@ -1856,7 +1873,14 @@ async def edit_projects_analyze(
                         "project_id": project_id,
                     })
             diagnosis = diagnosis_task.result()
-            plan = prepare_plan(diagnosis.get("plan") or {}, float(media["duration"]))
+            project["timings"]["gpt_diagnosis_seconds"] = round(
+                time.perf_counter() - diagnosis_started, 3
+            )
+            plan = prepare_plan(
+                diagnosis.get("plan") or {},
+                float(media["duration"]),
+                target_format=settings.get("target_format"),
+            )
             project["diagnosis"] = {key: value for key, value in diagnosis.items() if key != "plan"}
             project["plan_versions"] = [
                 {
@@ -1872,6 +1896,9 @@ async def edit_projects_analyze(
             ]
             project["status"] = "proposed"
             project["error"] = None
+            project["timings"]["analysis_total_seconds"] = round(
+                time.perf_counter() - analysis_started, 3
+            )
             store.save(project_id, project)
             yield sse({"step": "done", "message": "분석 제안이 준비됐습니다. 대화로 수정한 뒤 승인해주세요.", "project": public_project(store.get(project_id))})
         except Exception as exc:
@@ -1933,7 +1960,11 @@ async def edit_projects_revise(project_id: int, req: EditPlanRevisionRequest):
                     yield sse({"step": "revising", "message": f"합의안을 갱신하고 있습니다. ({waited}초)"})
             revised = revision_task.result()
             media_duration = float(((project.get("source") or {}).get("media") or {}).get("duration") or 0)
-            plan = prepare_plan(revised.get("plan") or {}, media_duration)
+            plan = prepare_plan(
+                revised.get("plan") or {},
+                media_duration,
+                target_format=(project.get("settings") or {}).get("target_format"),
+            )
             version = int(versions[-1]["version"]) + 1
             diff = plan_diff(current, plan)
             versions.append(
@@ -1990,6 +2021,12 @@ async def edit_projects_approve(project_id: int, req: EditPlanApprovalRequest):
     project["conversation"] = (project.get("conversation") or []) + [
         {"role": "user", "content": f"편집안 v{latest} 승인", "created_at": utc_now(), "version": latest}
     ]
+    try:
+        project["approval_memory_id"] = record_approved_edit_memory(
+            project_id, project
+        )
+    except Exception:
+        project["approval_memory_id"] = None
     EditProjectStore().save(project_id, project)
     return {"ok": True, "project": public_project(EditProjectStore().get(project_id))}
 
@@ -2051,6 +2088,9 @@ async def edit_projects_render(project_id: int):
             outputs, edit_log = task.result()
             project["outputs"] = outputs
             project["applied_edit_log"] = edit_log
+            project["advisory_edit_log"] = renderer.advisory_log(
+                version_row["plan"]
+            )
             project["render_runs"] = (project.get("render_runs") or []) + [
                 {
                     "version": int(approved_version),
@@ -2061,6 +2101,9 @@ async def edit_projects_render(project_id: int):
             ]
             project["status"] = "completed"
             project["error"] = None
+            project.setdefault("timings", {})["render_seconds"] = round(
+                time.perf_counter() - started, 3
+            )
             store.save(project_id, project)
             yield sse({"step": "done", "percent": 100, "message": "승인된 편집본을 만들었습니다.", "project": public_project(store.get(project_id))})
         except Exception as exc:
@@ -2105,6 +2148,7 @@ async def edit_projects_link_upload(project_id: int, req: EditProjectUploadLinkR
         "video_id": video_id,
         "linked_at": utc_now(),
         "checkpoints": (project.get("upload_feedback") or {}).get("checkpoints") or [],
+        "comparisons": (project.get("upload_feedback") or {}).get("comparisons") or [],
     }
     strategy_id = (project.get("settings") or {}).get("content_strategy_id")
     if strategy_id:
@@ -2112,8 +2156,61 @@ async def edit_projects_link_upload(project_id: int, req: EditProjectUploadLinkR
             StrategyRepository().link_video(int(strategy_id), video_id)
         except Exception:
             pass
+    try:
+        comparison = EditFeedbackService().evaluate(project_id, project)
+    except Exception:
+        comparison = {
+            "status": "pending",
+            "video_id": video_id,
+            "checked_at": utc_now(),
+            "message": "성과 데이터가 아직 준비되지 않았습니다. 연결은 저장됐으며 다음 자동 수집에서 다시 확인합니다.",
+        }
+    project["upload_feedback"]["latest_comparison"] = comparison
+    if comparison.get("status") == "measured":
+        project["upload_feedback"]["comparisons"] = (
+            project["upload_feedback"].get("comparisons") or []
+        ) + [comparison]
     EditProjectStore().save(project_id, project)
-    return {"ok": True}
+    return {"ok": True, "project": public_project(EditProjectStore().get(project_id))}
+
+
+@app.post("/api/edit-projects/{project_id}/feedback/refresh")
+async def edit_projects_refresh_feedback(project_id: int):
+    try:
+        row = _edit_row(project_id)
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    project = row["report"]
+    if not str((project.get("upload_feedback") or {}).get("video_id") or "").strip():
+        return JSONResponse({"error": "먼저 업로드한 YouTube video ID를 연결해주세요."}, status_code=409)
+    evaluation_failed = False
+    try:
+        result = EditFeedbackService().evaluate(project_id, project)
+    except Exception:
+        evaluation_failed = True
+        result = {
+            "status": "pending",
+            "video_id": (project.get("upload_feedback") or {}).get("video_id"),
+            "checked_at": utc_now(),
+            "message": "성과 데이터를 읽지 못했습니다. 이전 정상 비교 결과는 유지됩니다.",
+        }
+    feedback = project.get("upload_feedback") or {}
+    if evaluation_failed:
+        feedback["last_refresh_status"] = result
+        project["upload_feedback"] = feedback
+        EditProjectStore().save(project_id, project)
+        return {"ok": True, "project": public_project(EditProjectStore().get(project_id))}
+    comparisons = feedback.get("comparisons") or []
+    fingerprint = (result.get("source_as_of"), result.get("status"))
+    if not comparisons or (
+        comparisons[-1].get("source_as_of"), comparisons[-1].get("status")
+    ) != fingerprint:
+        comparisons.append(result)
+    feedback["latest_comparison"] = result
+    feedback["comparisons"] = comparisons[-40:]
+    project["upload_feedback"] = feedback
+    EditProjectStore().save(project_id, project)
+    return {"ok": True, "project": public_project(EditProjectStore().get(project_id))}
 
 
 @app.post("/api/chat")

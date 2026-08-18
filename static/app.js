@@ -333,6 +333,7 @@ function edRenderProject(project) {
   document.getElementById('ed-transcript-preview').textContent = project.transcript?.preview || '받아쓰기 없음';
 
   const diagnosis = project.diagnosis || {};
+  const alignment = diagnosis.strategy_alignment || {};
   const list = (items) => (items || []).map(item => `<li>${escHtml(String(item))}</li>`).join('') || '<li>없음</li>';
   const basis = (diagnosis.channel_basis || []).map(item =>
     `<span class="ed-evidence-chip" title="${escHtml(item.insight || '')}">${escHtml(item.source || '근거')} · ${escHtml(item.confidence || '')}</span>`
@@ -344,6 +345,11 @@ function edRenderProject(project) {
       <div class="ed-diagnosis-box"><h4>약점·이탈 위험</h4><ul>${list([...(diagnosis.weak_points || []), ...(diagnosis.estimated_problems || [])])}</ul></div>
     </div>
     <div class="ed-diagnosis-summary"><b>추천 방향</b><br>${escHtml(diagnosis.recommended_direction || '-')}<br><small>추천 길이 ${edTime(diagnosis.suggested_final_length)} · 훅 ${edTime(diagnosis.suggested_hook_range?.start_time)}~${edTime(diagnosis.suggested_hook_range?.end_time)}</small></div>
+    <div class="ed-strategy-alignment"><b>콘텐츠 전략 정합성 · ${escHtml(alignment.status || 'unavailable')}</b><br>
+      ${(alignment.matched_promises || []).length ? `일치: ${(alignment.matched_promises || []).map(escHtml).join(' · ')}<br>` : ''}
+      ${(alignment.conflicts || []).length ? `충돌: ${(alignment.conflicts || []).map(escHtml).join(' · ')}<br>` : ''}
+      ${(alignment.worksheet_priorities || []).length ? `워크시트 우선순위: ${(alignment.worksheet_priorities || []).map(escHtml).join(' · ')}` : ''}
+    </div>
     <div class="ed-evidence-list">${basis}</div>
     ${(diagnosis.data_limitations || []).length ? `<div class="ed-plan-notes"><b>데이터 한계</b><br>${(diagnosis.data_limitations || []).map(escHtml).join('<br>')}</div>` : ''}` :
     `<div class="ed-diagnosis-summary">${escHtml(project.error || '분석 제안이 아직 없습니다.')}</div>`;
@@ -355,6 +361,15 @@ function edRenderProject(project) {
   document.getElementById('ed-segments').innerHTML = (plan.segments || []).map(item => `
     <tr><td>${edTime(item.start_time)}~${edTime(item.end_time)}</td><td><span class="ed-action-pill">${escHtml(item.action || '')}</span></td><td>${escHtml(item.reason || '')}<br><small>${escHtml(item.expected_effect || '')}</small></td><td>${Math.round(Number(item.confidence || 0) * 100)}%</td></tr>`
   ).join('') || '<tr><td colspan="4">타임코드 제안이 없습니다.</td></tr>';
+  document.getElementById('ed-enhancements').innerHTML = (plan.enhancements || []).length ? `
+    <h4>B-roll·자막 강조 지시 <small>현재 자동 합성하지 않음</small></h4>
+    ${(plan.enhancements || []).map(item => `<div class="ed-enhancement-item">
+      <b>${edTime(item.start_time)}~${edTime(item.end_time)} · ${item.type === 'broll' ? 'B-roll' : '자막 강조'} · ${escHtml(item.priority || '')}</b>
+      <div>${escHtml(item.instruction || '')}</div>
+      ${item.overlay_text ? `<div>화면 문구: <b>${escHtml(item.overlay_text)}</b></div>` : ''}
+      ${(item.asset_requirements || []).length ? `<small>필요 소스: ${(item.asset_requirements || []).map(escHtml).join(' · ')}</small>` : ''}
+      <small>${escHtml(item.reason || '')} · 신뢰도 ${Math.round(Number(item.confidence || 0) * 100)}%</small>
+    </div>`).join('')}` : '';
   const timeline = (plan.render_timeline || []).map((item, i) => `${i + 1}. ${edTime(item.source_start)}~${edTime(item.source_end)} (${item.action})`).join('<br>');
   document.getElementById('ed-plan-notes').innerHTML = `<b>실제 승인 시 출력 순서</b><br>${timeline || '출력 구간 없음'}${(plan.editor_notes || []).length ? `<br><br><b>편집자 지시</b><br>${plan.editor_notes.map(escHtml).join('<br>')}` : ''}`;
 
@@ -388,10 +403,46 @@ function edRenderProject(project) {
     document.getElementById('ed-edit-log').innerHTML = (project.applied_edit_log || []).map(item =>
       `<div class="ed-log-row">${item.output === 'short' ? '쇼츠' : '전체'} #${Number(item.order)} · ${edTime(item.source_start)}~${edTime(item.source_end)} · ${escHtml(item.action || '')}<br>${escHtml(item.reason || '')}</div>`
     ).join('');
+    document.getElementById('ed-advisory-log').innerHTML = (project.advisory_edit_log || []).map(item =>
+      `<div class="ed-log-row">제안 · ${edTime(item.start_time)}~${edTime(item.end_time)} · ${escHtml(item.type || '')}<br>${escHtml(item.instruction || '')}${item.overlay_text ? `<br>문구: ${escHtml(item.overlay_text)}` : ''}</div>`
+    ).join('') || '<div class="ed-log-row">추가 B-roll·자막 지시 없음</div>';
+    const feedback = project.upload_feedback || {};
+    const videoInput = document.getElementById('ed-upload-video-id');
+    if (videoInput) videoInput.value = feedback.video_id || '';
+    const measured = feedback.latest_comparison || {};
+    document.getElementById('ed-feedback-result').innerHTML = measured.status ? `
+      <b>${escHtml(measured.status)}</b> · ${escHtml(measured.source_as_of || measured.checked_at || '')}<br>
+      ${escHtml(measured.summary || measured.message || '')}
+      ${(measured.decision_outcomes || []).map(item => `<div>${escHtml(item.decision || '')}: <b>${escHtml(item.status || '')}</b> · 실제 ${escHtml(String(item.actual ?? '없음'))} / 기준 ${escHtml(String(item.baseline ?? '없음'))}</div>`).join('')}` : '아직 연결된 성과가 없습니다.';
   } else {
     outputCard.classList.add('hidden');
   }
   workspace.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+async function edLinkUpload() {
+  if (!edCurrentProject) return;
+  const input = document.getElementById('ed-upload-video-id');
+  const videoId = input.value.trim();
+  if (!videoId) return;
+  try {
+    const response = await fetch(`/api/edit-projects/${edCurrentProject.id}/link-upload`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({video_id: videoId})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '영상을 연결하지 못했습니다.');
+    if (data.project) edRenderProject(data.project);
+  } catch (e) { alert(e.message); }
+}
+
+async function edRefreshFeedback() {
+  if (!edCurrentProject) return;
+  try {
+    const response = await fetch(`/api/edit-projects/${edCurrentProject.id}/feedback/refresh`, {method: 'POST'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '성과를 갱신하지 못했습니다.');
+    if (data.project) edRenderProject(data.project);
+  } catch (e) { alert(e.message); }
 }
 
 async function edRevise() {

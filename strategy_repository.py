@@ -253,6 +253,29 @@ class StrategyRepository:
             point.pop("analysis_json", None)
         return item
 
+    def get_execution_context(self, strategy_id: int) -> dict[str, Any] | None:
+        """Return the exact strategy plus its linked worksheet/pipeline execution state."""
+
+        strategy = self.get(strategy_id)
+        if not strategy:
+            return None
+        pipeline = worksheet = None
+        with closing(self._connect()) as connection:
+            connection.row_factory = sqlite3.Row
+            if strategy.get("pipeline_id") is not None:
+                row = connection.execute(
+                    "SELECT * FROM pipeline WHERE id=?", (strategy["pipeline_id"],)
+                ).fetchone()
+                pipeline = dict(row) if row else None
+            if strategy.get("worksheet_id") is not None:
+                row = connection.execute(
+                    "SELECT * FROM worksheet_rows WHERE id=?", (strategy["worksheet_id"],)
+                ).fetchone()
+                if row:
+                    worksheet = dict(row)
+                    worksheet["data"] = _load(worksheet.get("data"), {})
+        return {"strategy": strategy, "pipeline": pipeline, "worksheet": worksheet}
+
     def list(self, *, limit: int = 50, query: str = "") -> list[dict[str, Any]]:
         with closing(self._connect()) as connection:
             connection.row_factory = sqlite3.Row

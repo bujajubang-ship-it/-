@@ -2051,6 +2051,7 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ed-diagnosis-box ul { margin: 0; padding-left: 18px; line-height: 1.65; font-size: 13px; }
 .ed-evidence-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .ed-evidence-chip { background: #eef2ff; color: #4338ca; padding: 5px 8px; border-radius: 7px; font-size: 11px; }
+.ed-strategy-alignment { margin-top: 12px; padding: 12px 14px; border: 1px solid #dbeafe; border-radius: 10px; background: #f8fbff; color: #334155; line-height: 1.65; font-size: 13px; }
 .ed-transcript { margin-top: 13px; font-size: 13px; color: #64748b; }
 .ed-transcript pre { white-space: pre-wrap; max-height: 220px; overflow: auto; background: #f8fafc; padding: 12px; border-radius: 9px; font-family: inherit; line-height: 1.6; }
 .ed-table-wrap { overflow-x: auto; margin-top: 14px; }
@@ -2058,6 +2059,11 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ed-segment-table th, .ed-segment-table td { padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }
 .ed-segment-table th { color: #64748b; background: #f8fafc; }
 .ed-action-pill { display: inline-block; padding: 4px 7px; border-radius: 6px; color: #5b21b6; background: #ede9fe; font-weight: 700; white-space: nowrap; }
+.ed-enhancements { margin-top: 14px; display: grid; gap: 8px; }
+.ed-enhancements h4 { margin: 0 0 2px; }
+.ed-enhancements h4 small { color: #7c3aed; font-weight: 500; }
+.ed-enhancement-item { padding: 11px 13px; border: 1px solid #e9d5ff; border-radius: 10px; background: #fdfaff; display: grid; gap: 4px; line-height: 1.45; }
+.ed-enhancement-item small { color: #64748b; }
 .ed-plan-notes { margin-top: 12px; color: #475569; font-size: 13px; line-height: 1.7; }
 .ed-conversation { display: flex; flex-direction: column; gap: 8px; margin: 14px 0; max-height: 260px; overflow: auto; }
 .ed-conversation:empty::before { content: '아직 수정 대화가 없습니다. 최초 제안을 그대로 승인하거나 아래에서 수정하세요.'; color: #94a3b8; font-size: 13px; }
@@ -2081,6 +2087,13 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ed-output-links a { padding: 9px 12px; border-radius: 8px; background: #111827; color: #fff; text-decoration: none; font-size: 13px; font-weight: 700; }
 .ed-edit-log { max-height: 280px; overflow: auto; margin-top: 10px; }
 .ed-log-row { padding: 8px 0; border-bottom: 1px solid #e5e7eb; font-size: 12px; color: #475569; }
+.ed-feedback-loop { margin-top: 18px; padding: 15px; border: 1px solid #dbeafe; border-radius: 12px; background: #f8fbff; }
+.ed-feedback-loop h4 { margin: 0 0 5px; }
+.ed-feedback-loop p { margin: 0 0 10px; color: #64748b; font-size: 13px; }
+.ed-feedback-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.ed-feedback-row input { min-width: 240px; flex: 1; padding: 9px 11px; border: 1px solid #cbd5e1; border-radius: 8px; }
+.ed-feedback-row button { padding: 9px 12px; border: 1px solid #c4b5fd; border-radius: 8px; background: white; color: #5b21b6; cursor: pointer; }
+.ed-feedback-result { margin-top: 10px; font-size: 13px; line-height: 1.6; }
 @media (max-width: 820px) {
   .ed-form-grid { grid-template-columns: 1fr 1fr; }
   .ed-diagnosis-grid { grid-template-columns: 1fr; }
