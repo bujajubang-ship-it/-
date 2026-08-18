@@ -42,21 +42,23 @@ class EditRenderService:
         ]
 
     @staticmethod
+    def _thread_count() -> int:
+        try:
+            return max(1, min(4, int(os.getenv("EDIT_FFMPEG_THREADS", "1"))))
+        except ValueError:
+            return 1
+
+    @staticmethod
     def _filter(timeline: list[dict[str, Any]], *, has_audio: bool) -> str:
+        """Join seek-bounded inputs without buffering the full source."""
         filters = []
         video_labels = []
         audio_labels = []
-        for index, item in enumerate(timeline):
-            start = float(item["source_start"])
-            end = float(item["source_end"])
-            filters.append(
-                f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{index}]"
-            )
+        for index, _item in enumerate(timeline):
+            filters.append(f"[{index}:v]setpts=PTS-STARTPTS[v{index}]")
             video_labels.append(f"[v{index}]")
             if has_audio:
-                filters.append(
-                    f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{index}]"
-                )
+                filters.append(f"[{index}:a]asetpts=PTS-STARTPTS[a{index}]")
                 audio_labels.append(f"[a{index}]")
         if has_audio:
             inputs = "".join(
@@ -99,19 +101,31 @@ class EditRenderService:
         part = output.with_name(f".{output.stem}.part{output.suffix}")
         part.unlink(missing_ok=True)
         filter_complex = self._filter(timeline, has_audio=has_audio)
+        threads = str(self._thread_count())
         command = [
             self.ffmpeg,
             "-hide_banner",
             "-loglevel", "error",
-            "-i", str(source),
-            "-filter_complex", filter_complex,
-            "-map", "[vout]",
+            "-filter_complex_threads", threads,
         ]
+        for item in timeline:
+            start = float(item["source_start"])
+            segment_duration = float(item["source_end"]) - start
+            command.extend(
+                [
+                    "-threads:v", threads,
+                    "-ss", f"{start:.3f}",
+                    "-t", f"{segment_duration:.3f}",
+                    "-i", str(source),
+                ]
+            )
+        command.extend(["-filter_complex", filter_complex, "-map", "[vout]"])
         if has_audio:
             command.extend(["-map", "[aout]"])
         command.extend(
             [
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                "-c:v", "libx264", "-threads:v", threads,
+                "-preset", "veryfast", "-crf", "22",
                 "-pix_fmt", "yuv420p",
             ]
         )
