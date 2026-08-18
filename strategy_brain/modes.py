@@ -84,7 +84,10 @@ MODE_REGISTRY: dict[StrategyMode, ModeSpec] = {
     StrategyMode.SNS_CONVERSION: ModeSpec(StrategyMode.SNS_CONVERSION, "원 콘텐츠의 전략을 유지하며 채널별 형식으로 변환한다.", CONTENT_TOOLS + KNOWLEDGE_TOOLS, reasoning_effort="high"),
     StrategyMode.DETAIL_PAGE: ModeSpec(StrategyMode.DETAIL_PAGE, "시청자 문제와 제품 근거를 연결한 상세페이지를 기획한다.", KNOWLEDGE_TOOLS + MARKET_TOOLS),
     StrategyMode.BLOG: ModeSpec(StrategyMode.BLOG, "입력 자료를 근거로 검색·전환 목적의 글을 만든다.", CONTENT_TOOLS + KNOWLEDGE_TOOLS + MARKET_TOOLS, reasoning_effort="high"),
-    StrategyMode.STRATEGY_CHAT: ModeSpec(StrategyMode.STRATEGY_CHAT, "사용자와 장기 콘텐츠 방향을 함께 판단한다.", PERFORMANCE_TOOLS + CONTENT_TOOLS + KNOWLEDGE_TOOLS + MARKET_TOOLS, structured_output=False, streaming=True, reasoning_effort="high"),
+    # Intent-specific evidence is already assembled deterministically. Medium
+    # reasoning preserves comparison quality while leaving enough output budget
+    # for an interactive answer instead of spending it all on hidden reasoning.
+    StrategyMode.STRATEGY_CHAT: ModeSpec(StrategyMode.STRATEGY_CHAT, "사용자와 장기 콘텐츠 방향을 함께 판단한다.", PERFORMANCE_TOOLS + CONTENT_TOOLS + KNOWLEDGE_TOOLS + MARKET_TOOLS, structured_output=False, streaming=True, reasoning_effort="medium"),
     StrategyMode.POSTMORTEM: ModeSpec(StrategyMode.POSTMORTEM, "기획 가설과 실제 성과를 비교해 재사용할 교훈을 만든다.", PERFORMANCE_TOOLS + CONTENT_TOOLS + KNOWLEDGE_TOOLS),
 }
 
