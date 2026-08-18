@@ -116,7 +116,7 @@ class MediaIngestService:
         return destination, total, filename[:240]
 
     @staticmethod
-    def probe(path: Path) -> dict[str, Any]:
+    def probe(path: str | Path) -> dict[str, Any]:
         try:
             result = subprocess.run(
                 [
@@ -164,14 +164,17 @@ class MediaIngestService:
         }
 
     @staticmethod
-    def extract_audio(path: Path, output: Path, duration: float) -> Path:
+    def extract_audio(
+        path: str | Path, output: Path, duration: float, *, start: float = 0.0
+    ) -> Path:
         if not shutil.which("ffmpeg"):
             raise RuntimeError("ffmpeg가 설치되어 있지 않습니다.")
         timeout = max(120, min(1800, int(duration * 1.5) + 60))
         try:
             result = subprocess.run(
                 [
-                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+                    "ffmpeg", "-hide_banner", "-loglevel", "error",
+                    "-ss", f"{max(0.0, start):.3f}", "-t", f"{duration:.3f}", "-i", str(path),
                     "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", str(output), "-y",
                 ],
                 capture_output=True,
@@ -187,12 +190,15 @@ class MediaIngestService:
         return output
 
     @staticmethod
-    def detect_silences(path: Path, duration: float) -> list[dict[str, float]]:
+    def detect_silences(
+        path: str | Path, duration: float, *, start_offset: float = 0.0
+    ) -> list[dict[str, float]]:
         timeout = max(90, min(900, int(duration) + 60))
         try:
             result = subprocess.run(
                 [
-                    "ffmpeg", "-hide_banner", "-i", str(path),
+                    "ffmpeg", "-hide_banner", "-ss", f"{max(0.0, start_offset):.3f}",
+                    "-t", f"{duration:.3f}", "-i", str(path),
                     "-af", "silencedetect=noise=-35dB:d=0.6", "-f", "null", "-",
                 ],
                 capture_output=True,
@@ -212,28 +218,48 @@ class MediaIngestService:
         output = []
         for index, start in enumerate(starts):
             end, length = ends[index] if index < len(ends) else (duration, max(0.0, duration - start))
-            output.append({"start": round(start, 3), "end": round(end, 3), "duration": round(length, 3)})
+            output.append({
+                "start": round(start + start_offset, 3),
+                "end": round(end + start_offset, 3),
+                "duration": round(length, 3),
+            })
         return output[:500]
 
+    @classmethod
+    def detect_silences_chunked(cls, path: str | Path, duration: float) -> list[dict[str, float]]:
+        chunk = max(300, min(1200, int(os.getenv("EDIT_SIGNAL_CHUNK_SECONDS", "900"))))
+        output = []
+        for start in range(0, max(1, int(duration)), chunk):
+            length = min(float(chunk), duration - start)
+            if length <= 0:
+                break
+            output.extend(cls.detect_silences(path, length, start_offset=float(start)))
+        return output[:1500]
+
     @staticmethod
-    def detect_scenes(path: Path, duration: float) -> list[float]:
-        scan_limit = min(duration, float(os.getenv("EDIT_SCENE_SCAN_MAX_SECONDS", "1200")))
-        try:
-            result = subprocess.run(
-                [
-                    "ffmpeg", "-hide_banner", "-ss", "0", "-t", f"{scan_limit:.3f}",
-                    "-i", str(path), "-vf",
-                    "fps=2,scale=320:-2,select='gt(scene,0.30)',showinfo",
-                    "-an", "-f", "null", "-",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=max(90, min(600, int(scan_limit) + 60)),
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return []
-        values = [float(value) for value in re.findall(r"pts_time:([0-9.]+)", result.stderr)]
-        return [round(value, 3) for value in values[:500]]
+    def detect_scenes(path: str | Path, duration: float) -> list[float]:
+        chunk = max(300, min(1200, int(os.getenv("EDIT_SCENE_CHUNK_SECONDS", "900"))))
+        output = []
+        for start in range(0, max(1, int(duration)), chunk):
+            scan = min(float(chunk), duration - start)
+            if scan <= 0:
+                break
+            try:
+                result = subprocess.run(
+                    [
+                        "ffmpeg", "-hide_banner", "-ss", f"{float(start):.3f}", "-t", f"{scan:.3f}",
+                        "-i", str(path), "-vf",
+                        "fps=2,scale=320:-2,select='gt(scene,0.30)',showinfo",
+                        "-an", "-f", "null", "-",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=max(90, min(900, int(scan) + 60)),
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            output.extend(float(value) + start for value in re.findall(r"pts_time:([0-9.]+)", result.stderr))
+        return [round(value, 3) for value in output[:1500]]
 
     async def transcribe(self, audio_path: Path) -> dict[str, Any]:
         proxy_base = os.getenv("CNMAKER_BASE", "").rstrip("/")
@@ -292,17 +318,44 @@ class MediaIngestService:
         return {"text": text[:200_000], "segments": segments[:5000], "provider": provider}
 
     async def inspect_and_transcribe(
-        self, path: Path, media: dict[str, Any]
+        self, path: str | Path, media: dict[str, Any], *, work_dir: Path | None = None
     ) -> tuple[dict[str, Any], list[dict[str, float]], list[float]]:
         if not media.get("has_audio"):
             raise TranscriptionError("오디오 트랙이 없어 대화 기반 편집 분석을 진행할 수 없습니다.")
-        audio_path = path.parent / "analysis_audio.mp3"
-        audio_task = asyncio.to_thread(self.extract_audio, path, audio_path, float(media["duration"]))
-        silence_task = asyncio.to_thread(self.detect_silences, path, float(media["duration"]))
-        scene_task = asyncio.to_thread(self.detect_scenes, path, float(media["duration"]))
-        _, silences, scenes = await asyncio.gather(audio_task, silence_task, scene_task)
+        duration = float(media["duration"])
+        directory = work_dir or (path.parent if isinstance(path, Path) else self.store.storage_root)
+        directory.mkdir(parents=True, exist_ok=True)
+        silence_task = asyncio.to_thread(self.detect_silences_chunked, path, duration)
+        scene_task = asyncio.to_thread(self.detect_scenes, path, duration)
+        chunk_seconds = max(600, min(1800, int(os.getenv("EDIT_TRANSCRIPT_CHUNK_SECONDS", "1200"))))
+        transcripts = []
         try:
-            transcript = await self.transcribe(audio_path)
+            for index, start in enumerate(range(0, max(1, int(duration)), chunk_seconds)):
+                length = min(float(chunk_seconds), duration - start)
+                if length <= 0:
+                    break
+                audio_path = directory / f"analysis_audio_{index:03d}.mp3"
+                await asyncio.to_thread(self.extract_audio, path, audio_path, length, start=float(start))
+                try:
+                    part = await self.transcribe(audio_path)
+                finally:
+                    audio_path.unlink(missing_ok=True)
+                adjusted = []
+                for segment in part.get("segments") or []:
+                    adjusted.append({
+                        **segment,
+                        "start": round(float(segment.get("start") or 0) + start, 3),
+                        "end": round(float(segment.get("end") or 0) + start, 3),
+                    })
+                transcripts.append({**part, "segments": adjusted})
         finally:
-            audio_path.unlink(missing_ok=True)
+            for temp in directory.glob("analysis_audio_*.mp3"):
+                temp.unlink(missing_ok=True)
+        silences, scenes = await asyncio.gather(silence_task, scene_task)
+        transcript = {
+            "text": " ".join(str(item.get("text") or "") for item in transcripts).strip()[:500_000],
+            "segments": [segment for item in transcripts for segment in (item.get("segments") or [])][:15000],
+            "provider": "+".join(dict.fromkeys(str(item.get("provider") or "") for item in transcripts)),
+            "chunks": len(transcripts),
+        }
         return transcript, silences, scenes

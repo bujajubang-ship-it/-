@@ -139,6 +139,7 @@ let edSelectedFile = null;
 let edCurrentProject = null;
 let edBusy = false;
 let edCapacityOkay = false;
+let edStorageState = null;
 
 function edFormatBytes(value) {
   const bytes = Math.max(0, Number(value) || 0);
@@ -194,9 +195,10 @@ async function edFetchJson(input, init, fallback) {
 }
 
 const ED_STATUS_LABELS = {
-  uploaded: '업로드 완료', transcribing: '받아쓰기 중', retrieving_context: '채널 근거 조회 중',
+  uploading: '직접 업로드 중', upload_failed: '업로드 실패', uploaded: '업로드 완료', transcribing: '받아쓰기 중', retrieving_context: '채널 근거 조회 중',
   diagnosing: 'AI 진단 중', proposed: '최초 제안', revised: '수정안 확인 필요',
-  approved: '편집안 승인됨', rendering: '편집 렌더링 중', completed: '편집 완료',
+  approved: '편집안 승인됨', queued: '안전 작업 큐 대기', rendering: '편집 렌더링 중', completed: '편집 완료',
+  published_or_downloaded: '업로드/다운로드 확인', media_purged: '미디어 정리 완료',
   analysis_failed: '분석 실패', render_failed: '렌더링 실패'
 };
 
@@ -236,12 +238,130 @@ async function edLoadStorage() {
   const policy = document.getElementById('ed-storage-policy');
   try {
     const data = await edFetchJson('/api/edit-storage', undefined, '저장공간 정보를 불러오지 못했습니다.');
-    if (summary) summary.textContent = `사용 ${edFormatBytes(data.used_bytes)} / ${edFormatBytes(data.total_bytes)} · 남음 ${edFormatBytes(data.free_bytes)} · 편집 파일 ${edFormatBytes(data.managed_bytes)}`;
-    if (policy) policy.textContent = `원본 ${Math.round(Number(data.policy?.source_retention_hours || 0) / 24)}일 · 결과 ${Math.round(Number(data.policy?.output_retention_hours || 0) / 24)}일 보존`;
+    edStorageState = data;
+    const objectText = data.object_storage_ready
+      ? `Object Storage ${Number(data.object_storage?.objects || 0)}개 · ${edFormatBytes(data.object_storage?.bytes)}`
+      : 'Object Storage 미설정 · 로컬 안전 모드';
+    const queue = data.queue?.counts || {};
+    if (summary) summary.textContent = `${objectText} | 로컬 작업공간 ${edFormatBytes(data.managed_bytes)} · 남음 ${edFormatBytes(data.free_bytes)} | 작업중 ${Number(queue.running || 0)} · 대기 ${Number(queue.queued || 0)}`;
+    if (policy) policy.textContent = '원본·완성본은 사용자 확인 전 자동 삭제하지 않으며, 임시파일만 자동 정리합니다.';
     return data;
   } catch (error) {
     if (summary) summary.textContent = error.message;
     return null;
+  }
+}
+
+function edUploadPart(url, blob, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(event.loaded); };
+    xhr.onload = () => {
+      if (xhr.status < 200 || xhr.status >= 300) return reject(new Error(`파트 업로드 실패 (${xhr.status})`));
+      const etag = (xhr.getResponseHeader('ETag') || '').replaceAll('"', '');
+      if (!etag) return reject(new Error('Object Storage CORS에서 ETag 응답 노출이 필요합니다.'));
+      resolve(etag);
+    };
+    xhr.onerror = () => reject(new Error('Object Storage 연결이 끊겼습니다.'));
+    xhr.send(blob);
+  });
+}
+
+async function edAnalyzeDirect() {
+  const file = edSelectedFile;
+  const clientId = `ed-${file.size}-${file.lastModified}-${file.name}`.slice(0, 155);
+  const settings = {
+    client_upload_id: clientId, filename: file.name, file_size: file.size,
+    content_type: file.type || 'video/mp4', video_type: document.getElementById('ed-video-type').value,
+    target_format: document.getElementById('ed-target-format').value,
+    target_length_seconds: Number(document.getElementById('ed-target-length').value || 0),
+    purpose: document.getElementById('ed-purpose').value,
+    topic: document.getElementById('ed-topic').value.trim(),
+    strategy_id: Number(document.getElementById('ed-strategy-id').value) || null,
+  };
+  const started = performance.now();
+  const start = await edFetchJson('/api/edit-uploads/multipart/start', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(settings)
+  }, '대용량 직접 업로드를 시작하지 못했습니다.');
+  if (start.status !== 'uploading') {
+    if (['uploaded', 'transcribing', 'retrieving_context', 'diagnosing'].includes(start.status)) {
+      await edPollAnalysis(start.project_id);
+    } else {
+      await edOpenProject(start.project_id);
+      edSetProgress('done', '같은 원본의 기존 프로젝트를 열었습니다.', 100);
+    }
+    return {project_id: start.project_id, reused: true};
+  }
+  const partSize = Number(start.part_size);
+  if (!partSize) throw new Error('업로드 파트 크기를 받지 못했습니다.');
+  const totalParts = Math.ceil(file.size / partSize);
+  const finished = new Map((start.uploaded_parts || []).map(item => [Number(item.part_number), item]));
+  const progress = new Map([...finished.values()].map(item => [Number(item.part_number), Number(item.size_bytes || partSize)]));
+  const pending = Array.from({length: totalParts}, (_, i) => i + 1).filter(part => !finished.has(part));
+  let cursor = 0;
+  const update = () => {
+    const loaded = Math.min(file.size, [...progress.values()].reduce((a, b) => a + b, 0));
+    const elapsed = Math.max(1, (performance.now() - started) / 1000);
+    const speed = loaded / elapsed;
+    const eta = speed ? Math.max(0, (file.size - loaded) / speed) : 0;
+    edSetProgress('uploading', `Object Storage로 직접 업로드 중 ${Math.round(loaded / file.size * 100)}% · ${edFormatBytes(loaded)} / ${edFormatBytes(file.size)} · 약 ${Math.ceil(eta / 60)}분 남음`, Math.max(1, Math.round(loaded / file.size * 55)));
+  };
+  async function worker() {
+    while (cursor < pending.length) {
+      const partNumber = pending[cursor++];
+      const begin = (partNumber - 1) * partSize;
+      const blob = file.slice(begin, Math.min(file.size, begin + partSize));
+      let lastError;
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        try {
+          const signed = await edFetchJson(`/api/edit-uploads/${start.project_id}/parts/sign`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({part_number: partNumber})
+          }, '업로드 URL을 만들지 못했습니다.');
+          const etag = await edUploadPart(signed.url, blob, bytes => { progress.set(partNumber, bytes); update(); });
+          finished.set(partNumber, {part_number: partNumber, etag});
+          progress.set(partNumber, blob.size); update(); lastError = null; break;
+        } catch (error) {
+          lastError = error;
+          await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** (attempt - 1))));
+        }
+      }
+      if (lastError) throw lastError;
+    }
+  }
+  await Promise.all(Array.from({length: Math.min(3, pending.length || 1)}, worker));
+  const completed = await edFetchJson(`/api/edit-uploads/${start.project_id}/complete`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({parts: [...finished.values()].sort((a, b) => a.part_number - b.part_number)})
+  }, '업로드 완료 상태를 저장하지 못했습니다. 원본 object는 보존됩니다.');
+  edSetProgress('validating', '원본을 안전하게 보관했습니다. 분석 작업 큐에 등록했습니다.', 58);
+  await edPollAnalysis(start.project_id);
+  return completed;
+}
+
+async function edPollAnalysis(projectId) {
+  const labels = {
+    uploaded: '분석 작업 대기 중', transcribing: '음성·장면·정적을 분석 중',
+    retrieving_context: 'Retention·과거 영상·비즈니스PT 지식을 비교 중',
+    diagnosing: '채널 전용 편집안을 작성 중',
+  };
+  for (;;) {
+    const project = await edFetchJson(`/api/edit-projects/${projectId}`, undefined, '분석 상태를 확인하지 못했습니다.');
+    if (['proposed', 'revised', 'approved', 'completed'].includes(project.status)) {
+      edRenderProject(project); await Promise.allSettled([edLoadProjects(), edLoadStorage()]);
+      edSetProgress('done', '분석 제안이 준비됐습니다. 대화로 수정한 뒤 승인해주세요.', 100); return;
+    }
+    if (project.status === 'analysis_failed' && project.current_job?.status === 'queued') {
+      edSetProgress('queued', `일시 오류를 복구해 분석을 다시 시도합니다${project.queue_position ? ` · 대기 ${project.queue_position}번째` : ''}.`, 62);
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      continue;
+    }
+    if (project.status === 'analysis_failed') {
+      edRenderProject(project); throw new Error(project.error || 'AI 편집 분석에 실패했습니다. 다시 시도할 수 있습니다.');
+    }
+    const position = project.queue_position ? ` · 대기 ${project.queue_position}번째` : '';
+    edSetProgress(project.status === 'diagnosing' ? 'diagnosing' : 'transcribing', `${labels[project.status] || '안전한 작업 큐에서 처리 중'}${position}`, project.status === 'diagnosing' ? 85 : 65);
+    await new Promise(resolve => setTimeout(resolve, 3000));
   }
 }
 
@@ -366,6 +486,19 @@ async function edAnalyze() {
   button.disabled = true;
   button.textContent = '분석 중...';
   edSetProgress('uploading', '영상 업로드를 시작합니다.', 1);
+
+  if (edStorageState?.direct_upload_enabled) {
+    try {
+      await edAnalyzeDirect();
+    } catch (error) {
+      edSetProgress('error', error.message, 100);
+    } finally {
+      edBusy = false;
+      button.disabled = !edSelectedFile;
+      button.textContent = 'AI 분석 제안 만들기';
+    }
+    return;
+  }
 
   const form = new FormData();
   form.append('file', edSelectedFile);
@@ -540,6 +673,13 @@ function edRenderProject(project) {
   const render = document.getElementById('ed-render-btn');
   render.disabled = !approved || runtimeRendering;
   render.textContent = runtimeRendering ? '편집 실행 중...' : (interruptedRender ? '중단된 편집 안전하게 다시 실행' : '승인안으로 편집 실행');
+  if (project.queue_position) {
+    document.getElementById('ed-render-message').textContent = `안전 작업 큐 ${Number(project.queue_position)}번째에서 기다리고 있습니다.`;
+    document.getElementById('ed-render-progress').classList.remove('hidden');
+  }
+  if (project.failed_job) {
+    document.getElementById('ed-plan-notes').innerHTML += `<br><button class="ed-retry-btn" onclick="edRetryJob(${Number(project.failed_job.job_id)})">실패 단계부터 다시 시도</button>`;
+  }
 
   const outputs = project.outputs || {};
   const outputCard = document.getElementById('ed-output-card');
@@ -551,6 +691,10 @@ function edRenderProject(project) {
       <a href="${outputs.full.download_url}" download>전체 편집본 다운로드</a>
       ${outputs.short ? `<a href="${outputs.short.download_url}" download>쇼츠 하이라이트 다운로드</a>` : ''}
       ${outputs.decision ? `<a href="${outputs.decision.download_url}" download>편집 결정 JSON</a>` : ''}`;
+    const qaRows = Object.entries(project.quality_assurance || {});
+    document.getElementById('ed-quality-assurance').innerHTML = qaRows.length
+      ? `<b>자동 품질 검사</b>${qaRows.map(([kind, qa]) => `<div>${kind === 'short' ? '쇼츠' : '전체'} · ${escHtml(qa.status || '-')} · ${edTime(qa.actual_duration)}${(qa.warnings || []).length ? `<br>⚠️ ${(qa.warnings || []).map(item => escHtml(item.message || item.code || '')).join(' · ')}` : ''}</div>`).join('')}`
+      : '<b>자동 품질 검사</b><div>이전 버전 결과에는 QA 기록이 없습니다.</div>';
     document.getElementById('ed-edit-log').innerHTML = (project.applied_edit_log || []).map(item =>
       `<div class="ed-log-row">${item.output === 'short' ? '쇼츠' : '전체'} #${Number(item.order)} · ${edTime(item.source_start)}~${edTime(item.source_end)} · ${escHtml(item.action || '')}<br>${escHtml(item.reason || '')}</div>`
     ).join('');
@@ -673,6 +817,28 @@ async function edDeleteProjectFiles(scope) {
   } catch (error) {
     edSetProgress('error', error.message, 100);
   }
+}
+
+async function edPurgeProjectMedia() {
+  if (!edCurrentProject || edBusy) return;
+  if (!confirm('YouTube 업로드 또는 다운로드를 완료했나요? 원본·proxy·full·short 미디어는 삭제되며 편집안·EDL·대화·성과 학습 데이터는 계속 보존됩니다.')) return;
+  try {
+    const result = await edFetchJson(`/api/edit-projects/${edCurrentProject.id}/media-purge`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({confirmed: true})
+    }, '미디어를 정리하지 못했습니다. 기존 파일은 그대로 유지됩니다.');
+    edRenderProject(result.project);
+    edSetProgress('done', `${edFormatBytes(result.deleted_bytes)}의 작업 미디어를 정리했습니다. 편집 결정 데이터는 보존했습니다.`, 100);
+    await Promise.allSettled([edLoadStorage(), edLoadProjects()]);
+  } catch (error) { edSetProgress('error', error.message, 100); }
+}
+
+async function edRetryJob(jobId) {
+  try {
+    await edFetchJson(`/api/edit-jobs/${jobId}/retry`, {method: 'POST'}, '작업을 다시 시도하지 못했습니다.');
+    edSetProgress('queued', '실패 단계부터 안전 작업 큐에 다시 등록했습니다.', 10);
+    if (edCurrentProject) await edOpenProject(edCurrentProject.id);
+    await edLoadStorage();
+  } catch (error) { edSetProgress('error', error.message, 100); }
 }
 
 // ===== ✂️ 자동 컷편집 =====

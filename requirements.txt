@@ -5,5 +5,6 @@ anthropic>=0.120.0   # Opus 5: output_config(effort)·adaptive thinking 지원 �
 openai>=2.48.0,<3    # Responses API 기반 GPT Strategy Brain; provider env로 Claude rollback 가능
 python-dotenv==1.0.1
 python-multipart==0.0.9
+boto3>=1.35,<2
 yt-dlp
 Pillow

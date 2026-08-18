@@ -21,7 +21,20 @@ from database import get_db
 
 
 PROJECT_TYPE = "edit_project"
+CURRENT_PROJECT_SCHEMA = 2
 _UUID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+LIFECYCLE_BY_STATUS = {
+    "uploading": "UPLOADING", "upload_failed": "FAILED_UPLOAD",
+    "uploaded": "UPLOADED", "transcribing": "ANALYZING",
+    "retrieving_context": "ANALYZING", "diagnosing": "ANALYZING",
+    "analysis_failed": "FAILED_ANALYSIS", "proposed": "AWAITING_REVIEW",
+    "revised": "AWAITING_REVIEW", "approved": "APPROVED",
+    "queued": "QUEUED", "rendering": "RENDERING",
+    "render_failed": "FAILED_RENDER", "completed": "COMPLETED",
+    "published_or_downloaded": "PUBLISHED_OR_DOWNLOADED",
+    "media_purged": "MEDIA_PURGED",
+}
 
 
 def utc_now() -> str:
@@ -56,7 +69,7 @@ class EditProjectStore:
                 report = json.loads(report)
             except json.JSONDecodeError:
                 report = {}
-        item["report"] = report if isinstance(report, dict) else {}
+        item["report"] = migrate_project(report if isinstance(report, dict) else {})
         return item
 
     def ensure_storage(self) -> None:
@@ -77,7 +90,7 @@ class EditProjectStore:
 
     def create(self, *, keyword: str, project: dict[str, Any]) -> int:
         now = utc_now()
-        payload = dict(project)
+        payload = migrate_project(dict(project))
         payload.setdefault("created_at", now)
         payload["updated_at"] = now
         with closing(self._connect()) as connection:
@@ -102,7 +115,7 @@ class EditProjectStore:
         return self._decode(row) if row else None
 
     def save(self, project_id: int, project: dict[str, Any]) -> bool:
-        payload = dict(project)
+        payload = migrate_project(dict(project))
         payload["updated_at"] = utc_now()
         with closing(self._connect()) as connection:
             cursor = connection.execute(
@@ -179,6 +192,15 @@ class EditProjectStore:
             ).fetchall()
         return [self._decode(row) for row in rows]
 
+    def find_by_client_upload_id(self, client_upload_id: str) -> dict[str, Any] | None:
+        marker = str(client_upload_id or "").strip()
+        if not marker:
+            return None
+        for row in self.all_rows(limit=2000):
+            if str((row["report"].get("upload") or {}).get("client_upload_id") or "") == marker:
+                return row
+        return None
+
     def resolve_media_path(self, project: dict[str, Any], key: str) -> Path:
         project_uuid = str(project.get("project_uuid") or "")
         directory = self.project_dir(project_uuid)
@@ -206,9 +228,47 @@ def public_project(row: dict[str, Any]) -> dict[str, Any]:
     transcript["preview"] = text[:4000]
     project.pop("evidence_snapshot", None)
     project.pop("strategy_snapshot", None)
+    upload = project.get("upload") or {}
+    upload.pop("multipart_upload_id", None)
+    upload.pop("object_key", None)
     outputs = project.get("outputs") or {}
     for kind, output in outputs.items():
         if isinstance(output, dict):
             output.pop("storage_name", None)
             output["download_url"] = f"/api/edit-projects/{row.get('id')}/outputs/{kind}"
     return project
+
+
+def migrate_project(project: dict[str, Any]) -> dict[str, Any]:
+    """Add lifecycle/audit fields without rewriting or deleting legacy data."""
+
+    payload = dict(project or {})
+    status = str(payload.get("status") or "uploaded")
+    payload["schema_version"] = max(int(payload.get("schema_version") or 1), CURRENT_PROJECT_SCHEMA)
+    payload.setdefault("lifecycle_status", LIFECYCLE_BY_STATUS.get(status, status.upper()))
+    payload.setdefault("state_history", [])
+    payload.setdefault("jobs", [])
+    payload.setdefault("media_state", "available")
+    payload.setdefault("quality_assurance", {})
+    payload.setdefault("observability", {})
+    return payload
+
+
+def transition_project(
+    project: dict[str, Any], status: str, *, lifecycle: str | None = None,
+    reason: str = "", job_id: int | None = None,
+) -> dict[str, Any]:
+    payload = migrate_project(project)
+    previous = str(payload.get("status") or "")
+    next_lifecycle = lifecycle or LIFECYCLE_BY_STATUS.get(status, status.upper())
+    payload["status"] = status
+    payload["lifecycle_status"] = next_lifecycle
+    event = {
+        "from": previous, "to": status, "lifecycle": next_lifecycle,
+        "at": utc_now(), "reason": str(reason or "")[:500], "job_id": job_id,
+    }
+    history = list(payload.get("state_history") or [])
+    if not history or (history[-1].get("to"), history[-1].get("job_id")) != (status, job_id):
+        history.append(event)
+    payload["state_history"] = history[-200:]
+    return payload

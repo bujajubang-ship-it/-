@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 import main
 from edit_analysis_service import EditAnalysisService
 from edit_learning_service import EditFeedbackService, build_editing_benchmarks
+from edit_job_queue import EditJobQueue
 from edit_plan_service import build_render_timeline, plan_diff, prepare_plan
 from edit_project_store import EditProjectStore, public_project
 from edit_render_service import EditRenderError, EditRenderService
@@ -463,9 +464,12 @@ class EditDirectorApiTests(unittest.TestCase):
     def test_upload_diagnosis_revision_approval_gate_render_and_history(self):
         store_factory = lambda: self.store
         ingest_factory = lambda store=None: FakeIngest(store or self.store)
+        queue = EditJobQueue(self.connect)
         with patch.object(main, "EditProjectStore", store_factory), patch.object(
             main, "MediaIngestService", ingest_factory
-        ), patch.object(main, "EditAnalysisService", FakeAnalysis):
+        ), patch.object(main, "EditAnalysisService", FakeAnalysis), patch.object(
+            main, "EDIT_JOB_QUEUE", queue
+        ):
             ids = []
             for video_type in ("raw_footage", "rough_cut"):
                 with open(self.sample, "rb") as source:

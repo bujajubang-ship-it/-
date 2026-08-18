@@ -160,7 +160,7 @@ class EditStorageTests(unittest.TestCase):
         self.assertTrue(output.exists())
         self.assertEqual(result["deleted_bytes"], 4)
 
-    def test_retention_removes_old_source_then_old_outputs_but_keeps_db(self):
+    def test_retention_never_removes_owner_media_without_confirmation(self):
         project_id, payload, directory = self.create(status="completed", age_hours=800)
         source = directory / "source.mp4"
         output = directory / "edited-v1.mp4"
@@ -181,12 +181,17 @@ class EditStorageTests(unittest.TestCase):
             connection.execute("UPDATE history SET report=? WHERE id=?", (json.dumps(report), project_id))
             connection.commit()
         result = self.service.cleanup(now=datetime.now(timezone.utc))
-        self.assertGreater(result["deleted_bytes"], 0)
+        self.assertEqual(result["deleted_bytes"], 0)
+        self.assertTrue(source.exists())
+        self.assertTrue(output.exists())
+        purged = self.service.delete_project_files(project_id, scope="media")
+        self.assertGreater(purged["deleted_bytes"], 0)
         self.assertFalse(source.exists())
         self.assertFalse(output.exists())
+        self.assertTrue(decision.exists())
         saved = self.store.get(project_id)
         self.assertIsNotNone(saved)
-        self.assertEqual(saved["report"]["outputs"], {})
+        self.assertIn("decision", saved["report"]["outputs"])
 
     def test_orphan_cleanup_is_age_bounded_and_idempotent(self):
         orphan = self.store.project_dir(os.urandom(16).hex(), create=True)

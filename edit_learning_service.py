@@ -33,6 +33,7 @@ def build_editing_benchmarks(evidence: dict[str, Any]) -> dict[str, Any]:
     similar_rows = ((evidence.get("similar_videos") or {}).get("data") or [])
     knowledge_rows = ((evidence.get("business_pt") or {}).get("data") or [])
     channel = (evidence.get("channel_snapshot") or {}).get("data") or {}
+    ctr_data = (evidence.get("ctr_performance") or {}).get("data") or {}
 
     retention_30s = _median(
         [row.get("retention_30s_estimate") for row in retention_rows]
@@ -49,6 +50,10 @@ def build_editing_benchmarks(evidence: dict[str, Any]) -> dict[str, Any]:
     average_view_percentage = (
         (channel.get("baselines") or {}).get("average_view_percentage_median")
         if isinstance(channel, dict) else None
+    )
+    channel_ctr = (
+        ctr_data.get("channel_weighted_ctr_percent")
+        if isinstance(ctr_data, dict) else None
     )
 
     strongest = sorted(
@@ -101,6 +106,15 @@ def build_editing_benchmarks(evidence: dict[str, Any]) -> dict[str, Any]:
                 "source": "youtube_analytics_snapshots",
             }
         )
+    if channel_ctr is not None:
+        rules.append(
+            {
+                "metric": "channel_weighted_thumbnail_ctr_percent",
+                "value": channel_ctr,
+                "decision": "제목·썸네일 약속을 오프닝에서 즉시 회수하는지 판단할 때 공식 Reporting Reach 기준을 사용한다.",
+                "source": "youtube_reporting_reach",
+            }
+        )
 
     return {
         "retention_sample_size": len(retention_rows),
@@ -110,6 +124,7 @@ def build_editing_benchmarks(evidence: dict[str, Any]) -> dict[str, Any]:
         "similar_retention_30s_median": similar_retention,
         "opening_relative_retention_median": opening_relative,
         "average_view_percentage_median": average_view_percentage,
+        "channel_weighted_ctr_percent": channel_ctr,
         "strong_openings": [
             {
                 "video_id": row.get("video_id"),
