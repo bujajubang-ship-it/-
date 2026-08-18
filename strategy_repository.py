@@ -81,6 +81,90 @@ def _load(value: str | None, default: Any) -> Any:
         return default
 
 
+def _worksheet_from_strategy(
+    strategy_id: int, topic: str, strategy: dict[str, Any]
+) -> dict[str, Any]:
+    thumbnail = strategy.get("thumbnail") or {}
+    if not isinstance(thumbnail, dict):
+        thumbnail = {"text": str(thumbnail)}
+    structure = strategy.get("structure") or []
+    body_lines = []
+    for section in structure:
+        if isinstance(section, dict):
+            body_lines.append(
+                "\n".join(
+                    value
+                    for value in (
+                        str(section.get("section") or "").strip(),
+                        str(section.get("purpose") or "").strip(),
+                        str(section.get("content") or "").strip(),
+                    )
+                    if value
+                )
+            )
+        elif section:
+            body_lines.append(str(section))
+    evidence = strategy.get("evidence") or []
+    evidence_lines = []
+    for item in evidence:
+        if isinstance(item, dict):
+            claim = str(item.get("claim") or "").strip()
+            source = str(item.get("source") or "").strip()
+            if claim or source:
+                evidence_lines.append(f"{claim} ({source})".strip())
+        elif item:
+            evidence_lines.append(str(item))
+    kpis = strategy.get("kpis") or []
+    kpi_lines = []
+    for item in kpis:
+        if isinstance(item, dict):
+            kpi_lines.append(
+                " · ".join(
+                    str(item.get(key) or "").strip()
+                    for key in ("checkpoint", "metric", "target", "decision_rule")
+                    if str(item.get(key) or "").strip()
+                )
+            )
+        elif item:
+            kpi_lines.append(str(item))
+    title_candidates = strategy.get("title_candidates") or []
+    recommended = str(strategy.get("recommended_title") or topic).strip()
+    return {
+        "name": recommended or topic,
+        "keyword": str(strategy.get("topic") or topic),
+        "viewerTalk": "\n".join(
+            value
+            for value in (
+                f"타깃: {strategy.get('target_audience')}" if strategy.get("target_audience") else "",
+                f"왜 지금: {strategy.get('why_now')}" if strategy.get("why_now") else "",
+                f"핵심 메시지: {strategy.get('core_message')}" if strategy.get("core_message") else "",
+            )
+            if value
+        ),
+        "empathy": "\n".join(evidence_lines),
+        "titleCopy": "\n".join(
+            [recommended] + [str(item) for item in title_candidates if str(item) != recommended]
+        ),
+        "thumbCopy": str(thumbnail.get("text") or ""),
+        "thumbDesign": "\n".join(
+            value
+            for value in (
+                str(thumbnail.get("composition") or "").strip(),
+                str(thumbnail.get("shooting_direction") or "").strip(),
+            )
+            if value
+        ),
+        "introScript": str(strategy.get("hook_5_15s") or ""),
+        "bodyScript": "\n\n".join(line for line in body_lines if line),
+        "memo": "\n".join(
+            [f"공통 전략 #{strategy_id}"]
+            + (["KPI"] + kpi_lines if kpi_lines else [])
+            + [str(item) for item in strategy.get("counterargument_and_risks") or []]
+        ),
+        "strategyId": strategy_id,
+    }
+
+
 class StrategyRepository:
     def __init__(self, connect: Callable[[], sqlite3.Connection] | None = None) -> None:
         self._connect = connect or _default_connect
@@ -230,6 +314,64 @@ class StrategyRepository:
                 (str(strategy_id), video_id),
             )
             connection.commit()
+
+    def activate(self, strategy_id: int) -> dict[str, int]:
+        """Idempotently materialize one strategy in pipeline and worksheet."""
+
+        with closing(self._connect()) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM content_strategies WHERE id=?", (strategy_id,)
+            ).fetchone()
+            if not row:
+                connection.rollback()
+                raise KeyError("strategy not found")
+            pipeline_id = row["pipeline_id"]
+            worksheet_id = row["worksheet_id"]
+            if pipeline_id is not None and not connection.execute(
+                "SELECT 1 FROM pipeline WHERE id=?", (pipeline_id,)
+            ).fetchone():
+                pipeline_id = None
+            if worksheet_id is not None and not connection.execute(
+                "SELECT 1 FROM worksheet_rows WHERE id=?", (worksheet_id,)
+            ).fetchone():
+                worksheet_id = None
+            strategy = _load(row["strategy_json"], {})
+            title = str(strategy.get("recommended_title") or row["topic"]).strip()
+            if pipeline_id is None:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO pipeline (
+                        title, stage, content_type, editor, planned_date, notes
+                    ) VALUES (?, 'pick', ?, '', '', ?)
+                    """,
+                    (
+                        title,
+                        row["content_type"],
+                        f"공통 전략 #{strategy_id} · {strategy.get('why_now') or ''}"[:1000],
+                    ),
+                )
+                pipeline_id = int(cursor.lastrowid)
+            if worksheet_id is None:
+                worksheet = _worksheet_from_strategy(
+                    strategy_id, str(row["topic"]), strategy
+                )
+                worksheet["videoId"] = pipeline_id
+                cursor = connection.execute(
+                    "INSERT INTO worksheet_rows (data) VALUES (?)", (_dump(worksheet),)
+                )
+                worksheet_id = int(cursor.lastrowid)
+            connection.execute(
+                """
+                UPDATE content_strategies
+                SET pipeline_id=?, worksheet_id=?, status='active', updated_at=?
+                WHERE id=?
+                """,
+                (pipeline_id, worksheet_id, _now(), strategy_id),
+            )
+            connection.commit()
+        return {"pipeline_id": int(pipeline_id), "worksheet_id": int(worksheet_id)}
 
     def refresh_performance_checkpoints(self) -> int:
         """Attach available D1/D3/D7/D14/D30/long snapshots to linked plans."""

@@ -2196,3 +2196,60 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ac-steps span { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: #f2f2f2; color: #999; }
 .ac-steps span.active { background: #FDE7E9; color: #D70010; font-weight: 700; }
 .ac-steps span.done { background: #E9F5EC; color: #2E7D45; }
+
+/* ===== 🎯 공통 전략 보관함 ===== */
+.strategy-page { max-width: 1320px; margin: 0 auto; padding: 26px 22px 70px; }
+.strategy-topbar { display:flex; justify-content:space-between; gap:18px; align-items:flex-start; margin-bottom:18px; }
+.strategy-topbar h1 { margin:0 0 6px; font-size:25px; color:#111827; }
+.strategy-topbar p { margin:0; color:#64748b; line-height:1.55; }
+.strategy-layout { display:grid; grid-template-columns:330px minmax(0,1fr); gap:18px; align-items:start; }
+.strategy-sidebar, .strategy-detail { background:#fff; border:1px solid #e2e8f0; border-radius:16px; box-shadow:0 8px 25px rgba(15,23,42,.05); }
+.strategy-sidebar { padding:14px; position:sticky; top:142px; max-height:calc(100vh - 165px); overflow:auto; }
+.strategy-create-card { display:flex; flex-direction:column; gap:8px; padding:13px; background:#f8fafc; border-radius:12px; }
+.strategy-create-card label { font-size:12px; font-weight:800; color:#475569; }
+.strategy-create-card select, .strategy-create-card textarea, .strategy-link-grid input, .strategy-refine textarea {
+  width:100%; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:9px; padding:10px 11px; font:inherit; background:#fff;
+}
+.strategy-primary, .strategy-secondary { border:0; border-radius:9px; padding:10px 14px; font-weight:800; cursor:pointer; }
+.strategy-primary { background:#D70010; color:#fff; }
+.strategy-primary:disabled { opacity:.55; cursor:wait; }
+.strategy-secondary { background:#eef2ff; color:#3730a3; }
+.strategy-status { min-height:18px; font-size:12.5px; line-height:1.45; color:#64748b; }
+.strategy-list-title { margin:16px 3px 8px; font-size:12px; font-weight:900; color:#64748b; text-transform:uppercase; }
+.strategy-list { display:flex; flex-direction:column; gap:7px; }
+.strategy-list-item { border:1px solid #e2e8f0; background:#fff; border-radius:10px; padding:10px 11px; text-align:left; cursor:pointer; }
+.strategy-list-item.active { border-color:#D70010; background:#fff7f7; }
+.strategy-list-topic { font-size:13.5px; font-weight:800; color:#1e293b; line-height:1.4; }
+.strategy-list-meta { margin-top:4px; font-size:11.5px; color:#94a3b8; }
+.strategy-detail { min-height:520px; padding:22px; }
+.strategy-empty { display:flex; align-items:center; justify-content:center; min-height:470px; color:#94a3b8; text-align:center; }
+.strategy-detail-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; padding-bottom:17px; border-bottom:1px solid #e2e8f0; }
+.strategy-detail-head h2 { margin:0 0 7px; font-size:23px; line-height:1.35; }
+.strategy-badges { display:flex; gap:6px; flex-wrap:wrap; }
+.strategy-badge { font-size:11.5px; font-weight:800; padding:4px 8px; border-radius:999px; background:#f1f5f9; color:#475569; }
+.strategy-badge.active { background:#dcfce7; color:#166534; }
+.strategy-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+.strategy-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px; margin-top:16px; }
+.strategy-section { border:1px solid #e2e8f0; border-radius:12px; padding:14px 15px; min-width:0; }
+.strategy-section.wide { grid-column:1/-1; }
+.strategy-section h3 { margin:0 0 9px; font-size:14px; color:#0f172a; }
+.strategy-section-body { color:#334155; font-size:13.5px; line-height:1.65; overflow-wrap:anywhere; }
+.strategy-section-body ul { margin:0; padding-left:20px; }
+.strategy-section-body li + li { margin-top:6px; }
+.strategy-kv { display:grid; grid-template-columns:minmax(90px,auto) 1fr; gap:5px 10px; }
+.strategy-kv-key { font-weight:800; color:#64748b; }
+.strategy-evidence { padding:9px 10px; background:#f8fafc; border-radius:8px; margin-bottom:7px; }
+.strategy-evidence-source { margin-top:4px; font-size:11.5px; color:#64748b; }
+.strategy-workflow { margin-top:17px; padding:15px; background:#f8fafc; border-radius:12px; }
+.strategy-workflow h3 { margin:0 0 10px; font-size:14px; }
+.strategy-link-grid { display:grid; grid-template-columns:1fr 1.2fr 1fr auto; gap:8px; }
+.strategy-refine { display:flex; gap:8px; margin-top:12px; }
+.strategy-refine textarea { min-height:45px; resize:vertical; }
+.strategy-refine button { flex:0 0 auto; }
+@media (max-width: 900px) {
+  .strategy-layout { grid-template-columns:1fr; }
+  .strategy-sidebar { position:static; max-height:none; }
+  .strategy-grid { grid-template-columns:1fr; }
+  .strategy-section.wide { grid-column:auto; }
+  .strategy-link-grid { grid-template-columns:1fr; }
+}

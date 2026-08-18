@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
-  <link rel="stylesheet" href="style.css?v=20260806a" />
+  <link rel="stylesheet" href="style.css?v=20260818-strategy2" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -31,6 +31,7 @@
         <button class="tab-btn" id="tab-video-feedback" onclick="switchTab('video-feedback')">🎬 영상 피드백</button>
         <button class="tab-btn" id="tab-autocut" onclick="switchTab('autocut')">✂️ 자동 컷편집</button>
         <button class="tab-btn tab-btn-chat" id="tab-chat" onclick="switchTab('chat')">💬 AI 상담</button>
+        <button class="tab-btn tab-btn-chat" id="tab-strategy" onclick="switchTab('strategy')">🎯 전략 보관함</button>
         <button class="tab-btn" id="tab-history" onclick="switchTab('history')">히스토리</button>
         <button class="tab-btn tab-btn-pipeline" id="tab-pipeline" onclick="switchTab('pipeline')">📋 파이프라인</button>
         <button class="tab-btn tab-btn-pipeline" id="tab-worksheet" onclick="switchTab('worksheet')">📝 기획 워크시트</button>
@@ -72,6 +73,7 @@
             <p class="report-subtitle">원클릭 영상 기획 완성본</p>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
+            <button class="pdf-btn hidden" id="midform-strategy-btn">🎯 공통 전략 열기</button>
             <button class="pdf-btn" onclick="downloadPdf('midform-report-section','부자주방_미드폼기획')">⬇ PDF 저장</button>
             <button class="reset-btn" onclick="resetToMidform()">← 새 기획</button>
           </div>
@@ -221,6 +223,7 @@
             <p class="report-subtitle">인스타그램 릴스 기획안</p>
           </div>
           <div class="report-header-actions">
+            <button class="action-btn hidden" id="shortform-strategy-btn">🎯 공통 전략 열기</button>
             <button class="action-btn copy-btn" onclick="copyShortformCaption()">📋 캡션 복사</button>
             <button class="pdf-btn" onclick="downloadPdf('shortform-report-section','부자주방_숏폼기획')">⬇ PDF 저장</button>
             <button class="reset-btn" onclick="resetToShortform()">← 새 기획</button>
@@ -925,6 +928,39 @@
      </div>
     </div>
 
+    <!-- ===== 🎯 공통 전략 보관함 ===== -->
+    <div id="pane-strategy" class="hidden">
+      <div class="strategy-page">
+        <div class="strategy-topbar">
+          <div>
+            <h1>🎯 공통 전략 보관함</h1>
+            <p>주제부터 촬영 워크시트·업로드 KPI·실제 성과까지 하나의 전략으로 관리합니다.</p>
+          </div>
+          <button class="strategy-secondary" onclick="loadStrategies()">새로고침</button>
+        </div>
+        <div class="strategy-layout">
+          <aside class="strategy-sidebar">
+            <div class="strategy-create-card">
+              <label for="strategy-content-type">콘텐츠 형식</label>
+              <select id="strategy-content-type">
+                <option>미드폼</option>
+                <option>숏폼</option>
+              </select>
+              <label for="strategy-prompt">전략 요청</label>
+              <textarea id="strategy-prompt" rows="6" placeholder="예: 다음 영상 뭐 찍을까? 실제 채널 성과와 비즈니스PT 지식을 보고 촬영 워크시트까지 완성해줘."></textarea>
+              <button id="strategy-generate-btn" class="strategy-primary" onclick="generateStrategy()">데이터로 통합 기획 생성</button>
+              <div id="strategy-generate-status" class="strategy-status"></div>
+            </div>
+            <div class="strategy-list-title">저장된 전략</div>
+            <div id="strategy-list" class="strategy-list"></div>
+          </aside>
+          <section id="strategy-detail" class="strategy-detail">
+            <div class="strategy-empty">왼쪽에서 전략을 선택하거나 새 전략을 생성하세요.</div>
+          </section>
+        </div>
+      </div>
+    </div>
+
     <!-- ===== 📚 히스토리 탭 ===== -->
     <div id="pane-history" class="hidden">
       <div class="history-page">
@@ -1319,7 +1355,7 @@
 
   </main>
 
-  <script src="app.js?v=20260818-strategy"></script>
+  <script src="app.js?v=20260818-strategy2"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

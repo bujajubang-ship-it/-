@@ -166,6 +166,35 @@ class FeedbackLoopTests(RepositoryFixture):
                 str(strategy_id),
             )
 
+    def test_strategy_activation_materializes_pipeline_and_worksheet_once(self):
+        strategy_id = self.strategies.create(
+            topic="냉장고 선택",
+            content_type="미드폼",
+            strategy={
+                "topic": "냉장고 선택",
+                "target_audience": "식당 창업자",
+                "why_now": "여름 교체 수요",
+                "core_message": "용량보다 동선을 먼저 본다",
+                "title_candidates": ["냉장고, 용량보다 이것"],
+                "recommended_title": "냉장고, 용량보다 이것",
+                "thumbnail": {"text": "용량부터 보면 실패", "composition": "문 앞 인물", "shooting_direction": "정면"},
+                "hook_5_15s": "큰 냉장고가 오히려 손해인 이유부터 보여드리겠습니다.",
+                "structure": [{"section": "문제", "purpose": "오해 깨기", "content": "동선 비교"}],
+                "kpis": [{"checkpoint": "D1", "metric": "CTR", "target": "최근 중앙값 이상", "decision_rule": "미달이면 썸네일 교체"}],
+                "counterargument_and_risks": ["설치 공간 실측 필요"],
+            },
+        )
+        first = self.strategies.activate(strategy_id)
+        second = self.strategies.activate(strategy_id)
+        self.assertEqual(first, second)
+        with self.connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM pipeline").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM worksheet_rows").fetchone()[0], 1)
+            worksheet = json.loads(connection.execute("SELECT data FROM worksheet_rows").fetchone()[0])
+        self.assertEqual(worksheet["videoId"], first["pipeline_id"])
+        self.assertEqual(worksheet["thumbCopy"], "용량부터 보면 실패")
+        self.assertIn("동선 비교", worksheet["bodyScript"])
+
 
 class RetrievalTests(RepositoryFixture):
     def setUp(self):
@@ -304,6 +333,23 @@ class GPTToolStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output, "최종 전략")
         self.assertEqual(len(responses.calls), 2)
         self.assertTrue(any(item.get("type") == "function_call_output" for item in responses.calls[1]["input"]))
+
+
+class StrategyUIContractTests(unittest.TestCase):
+    def test_strategy_workspace_exposes_generate_activate_and_feedback_actions(self):
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "static" / "index.html").read_text(encoding="utf-8")
+        script = (root / "static" / "app.js").read_text(encoding="utf-8")
+        for marker in (
+            'id="tab-strategy"',
+            'id="pane-strategy"',
+            'id="strategy-prompt"',
+            'id="strategy-video-id"',
+        ):
+            self.assertIn(marker, html + script)
+        self.assertIn("/api/strategies/generate", script)
+        self.assertIn("/activate", script)
+        self.assertIn("/link-video", script)
 
 
 if __name__ == "__main__":

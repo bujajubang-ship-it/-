@@ -15,6 +15,8 @@
 
 `content_strategies`는 미드폼·숏폼·상담이 공유하는 하나의 전략 context를 저장한다. 주제, 타깃, why-now, 핵심 메시지, 근거, 제목, 썸네일, 훅, 구조, 촬영 컷, 워크시트와 KPI를 한 객체로 유지한다.
 
+UI의 `전략 보관함`에서 새 통합 기획을 생성하거나 기존 전략을 같은 context로 개선한다. `파이프라인·워크시트에 보내기`는 idempotent하게 기존 전략을 한 개 pipeline item과 한 개 worksheet card로 materialize하며, 다시 눌러도 중복 생성하지 않는다. 기존 미드폼·숏폼 결과의 `공통 전략 열기` 버튼도 같은 저장 context로 이동한다.
+
 업로드 후 `/api/strategies/{id}/link-video`로 YouTube video ID를 연결한다. 자동 수집이 새 snapshot을 저장하면 `performance_checkpoints`가 D1/D3/D7/D14/D30/long 성과와 최신 retention snapshot을 원래 기획에 연결한다. 이 기록은 이후 `search_feedback_history`의 근거가 된다.
 
 ## 자동 수집

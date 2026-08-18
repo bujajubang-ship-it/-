@@ -470,6 +470,8 @@ async def strategy_link_video(strategy_id: int, req: StrategyVideoLinkRequest):
     repository = StrategyRepository()
     if not repository.get(strategy_id):
         return JSONResponse({"error": "전략을 찾지 못했습니다."}, status_code=404)
+    if not req.video_id.strip():
+        return JSONResponse({"error": "YouTube video ID를 입력해주세요."}, status_code=400)
     repository.link_video(
         strategy_id,
         req.video_id.strip(),
@@ -478,6 +480,15 @@ async def strategy_link_video(strategy_id: int, req: StrategyVideoLinkRequest):
     )
     repository.refresh_performance_checkpoints()
     return {"ok": True}
+
+
+@app.post("/api/strategies/{strategy_id}/activate")
+async def strategy_activate(strategy_id: int):
+    try:
+        links = StrategyRepository().activate(strategy_id)
+    except KeyError:
+        return JSONResponse({"error": "전략을 찾지 못했습니다."}, status_code=404)
+    return {"ok": True, **links}
 
 
 @app.post("/api/analyze")
