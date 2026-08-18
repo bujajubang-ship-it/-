@@ -167,6 +167,16 @@ class YouTubeCollectionService:
                 StrategyRepository().refresh_performance_checkpoints()
             except Exception as exc:
                 result.warnings.append("feedback_loop: " + _safe_error(exc))
+            try:
+                from edit_learning_service import refresh_linked_edit_feedback
+
+                edit_feedback = refresh_linked_edit_feedback()
+                if edit_feedback.get("errors"):
+                    result.warnings.append(
+                        f"edit_feedback_loop: {edit_feedback['errors']} project(s) failed"
+                    )
+            except Exception as exc:
+                result.warnings.append("edit_feedback_loop: " + _safe_error(exc))
             self.repository.finish_collection(
                 owner,
                 status="success",

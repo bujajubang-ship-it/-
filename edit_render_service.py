@@ -21,6 +21,26 @@ class EditRenderService:
         self.ffmpeg = ffmpeg or shutil.which("ffmpeg") or ""
 
     @staticmethod
+    def advisory_log(plan: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": item.get("id"),
+                "start_time": item.get("start_time"),
+                "end_time": item.get("end_time"),
+                "type": item.get("type"),
+                "instruction": item.get("instruction"),
+                "asset_requirements": item.get("asset_requirements") or [],
+                "overlay_text": item.get("overlay_text") or "",
+                "priority": item.get("priority"),
+                "confidence": item.get("confidence"),
+                "reason": item.get("reason"),
+                "applied": False,
+                "render_mode": "suggestion_only",
+            }
+            for item in plan.get("enhancements") or []
+        ]
+
+    @staticmethod
     def _filter(timeline: list[dict[str, Any]], *, has_audio: bool) -> str:
         filters = []
         video_labels = []
@@ -172,6 +192,7 @@ class EditRenderService:
             "version": version,
             "approved_plan": plan,
             "applied_edit_log": edit_log,
+            "advisory_edit_log": self.advisory_log(plan),
             "exports": {
                 key: {k: v for k, v in value.items() if k != "storage_name"}
                 for key, value in outputs.items()

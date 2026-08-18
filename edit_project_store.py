@@ -148,6 +148,25 @@ class EditProjectStore:
             )
         return projects
 
+    def linked_projects(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Return linked projects for the periodic measured-feedback pass."""
+
+        safe_limit = max(1, min(int(limit), 500))
+        with closing(self._connect()) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                """
+                SELECT * FROM history WHERE type=? ORDER BY id DESC LIMIT ?
+                """,
+                (PROJECT_TYPE, safe_limit),
+            ).fetchall()
+        output = []
+        for row in rows:
+            item = self._decode(row)
+            if str((item["report"].get("upload_feedback") or {}).get("video_id") or "").strip():
+                output.append(item)
+        return output
+
     def resolve_media_path(self, project: dict[str, Any], key: str) -> Path:
         project_uuid = str(project.get("project_uuid") or "")
         directory = self.project_dir(project_uuid)

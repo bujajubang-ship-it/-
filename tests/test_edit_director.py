@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import main
 from edit_analysis_service import EditAnalysisService
+from edit_learning_service import EditFeedbackService, build_editing_benchmarks
 from edit_plan_service import build_render_timeline, plan_diff, prepare_plan
 from edit_project_store import EditProjectStore, public_project
 from edit_render_service import EditRenderError, EditRenderService
@@ -50,6 +51,15 @@ def sample_plan(short=True):
         "create_short_highlight": short,
         "short_target_seconds": 30,
         "editor_notes": ["제품 클로즈업 B-roll은 수동 추가"],
+        "enhancements": [
+            {
+                "id": "broll-1", "start_time": 1.4, "end_time": 2.0,
+                "type": "broll", "instruction": "통로 전체컷 삽입",
+                "asset_requirements": ["개선 후 통로 전체컷"], "overlay_text": "통로 확보",
+                "priority": "high", "confidence": 0.9, "reason": "변화를 증명",
+                "render_mode": "suggestion_only",
+            }
+        ],
         "segments": [
             {
                 "id": "hook",
@@ -96,6 +106,10 @@ def sample_diagnosis():
         "suggested_hook_range": {"start_time": 2.0, "end_time": 2.8, "reason": "결과 장면"},
         "channel_basis": [{"source": "retention", "insight": "설명형 도입 약함", "confidence": "medium"}],
         "data_limitations": ["샘플 프로젝트"],
+        "strategy_alignment": {
+            "status": "partial", "matched_promises": ["문제 우선"],
+            "conflicts": [], "worksheet_priorities": ["통로 전체컷"],
+        },
         "plan": sample_plan(),
     }
 
@@ -133,6 +147,7 @@ class FakeRetrieval:
 
     def compare_similar_videos(self, _args): return self._value("similar")
     def get_retention_patterns(self, _args): return self._value("retention")
+    def get_channel_strategy_snapshot(self, _args): return self._value("channel_snapshot")
     def search_business_pt_knowledge(self, _args): return self._value("business_pt")
     def search_feedback_history(self, _args): return self._value("feedback")
     def search_previous_worksheets(self, _args): return self._value("worksheets")
@@ -202,6 +217,12 @@ class EditDirectorUnitTests(unittest.TestCase):
         changed["recommended_direction"] = "현장 분위기 보존"
         self.assertTrue(plan_diff(prepared, changed))
 
+    def test_short_reel_always_keeps_separate_highlight_export(self):
+        plan = sample_plan(short=False)
+        prepared = prepare_plan(plan, 4.0, target_format="short_reel")
+        self.assertTrue(prepared["create_short_highlight"])
+        self.assertTrue(prepared["short_timeline"])
+
     def test_channel_evidence_and_structured_diagnosis(self):
         provider = FakeProvider(sample_diagnosis())
         service = EditAnalysisService(
@@ -211,8 +232,9 @@ class EditDirectorUnitTests(unittest.TestCase):
         evidence, trace, strategy = asyncio.run(
             service.collect_evidence(topic="베이커리", purpose="조회수형", strategy_id=None)
         )
-        self.assertEqual(len(trace), 6)
+        self.assertEqual(len(trace), 8)
         self.assertIn("retention", evidence)
+        self.assertIn("editing_benchmarks", evidence)
         diagnosis = asyncio.run(
             service.diagnose(
                 transcript={"segments": [{"start": 0, "end": 2, "text": "주방이 좁습니다"}]},
@@ -227,6 +249,46 @@ class EditDirectorUnitTests(unittest.TestCase):
         self.assertEqual(diagnosis["plan"]["segments"][0]["action"], "use_as_hook")
         self.assertEqual(provider.requests[0].mode.value, "edit_director")
         self.assertEqual(provider.requests[0].tools, [])
+
+    def test_benchmarks_do_not_invent_missing_retention_or_knowledge(self):
+        empty = build_editing_benchmarks({})
+        self.assertIsNone(empty["retention_30s_median"])
+        self.assertFalse(empty["decision_rules"])
+        self.assertEqual(len(empty["limitations"]), 3)
+
+
+class FakeFeedbackAnalytics:
+    def compare_video_performance(self, _ids):
+        return [{"views": 1200, "average_view_percentage": 48.0, "data_through": "2026-08-17"}]
+
+    def get_video_retention(self, _video_id):
+        return {"retention_30s_estimate": 0.61, "data_through": "2026-08-17"}
+
+    def get_reach_for_videos(self, _ids):
+        return {"video-1": {"thumbnail_ctr": {"value": 8.2}, "thumbnail_impressions": {"value": 2000}}}
+
+
+class FakeMemory:
+    def __init__(self): self.rows = []
+    def record(self, **kwargs): self.rows.append(kwargs); return len(self.rows)
+
+
+class EditDirectorFeedbackTests(unittest.TestCase):
+    def test_actual_retention_is_compared_to_approved_edit_decisions(self):
+        memory = FakeMemory()
+        service = EditFeedbackService(analytics=FakeFeedbackAnalytics(), memories=memory)
+        project = {
+            "settings": {"content_strategy_id": 7},
+            "upload_feedback": {"video_id": "video-1"},
+            "approved_version": 1,
+            "evidence_snapshot": {"editing_benchmarks": {"retention_30s_median": 0.55, "average_view_percentage_median": 42.0}},
+            "plan_versions": [{"version": 1, "plan": sample_plan()}],
+        }
+        result = service.evaluate(10, project)
+        self.assertEqual(result["status"], "measured")
+        self.assertTrue(all(item["status"] == "effective" for item in result["decision_outcomes"]))
+        self.assertEqual(result["actual"]["thumbnail_ctr"], 8.2)
+        self.assertEqual(memory.rows[0]["memory_type"], "edit_learning")
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg required")
