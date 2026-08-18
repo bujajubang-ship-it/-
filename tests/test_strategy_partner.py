@@ -126,6 +126,56 @@ class SnapshotIdempotencyTests(RepositoryFixture):
 
 
 class FeedbackLoopTests(RepositoryFixture):
+    def test_daily_metrics_reconstruct_milestones_despite_collection_lag(self):
+        collected = "2026-08-16T00:00:00Z"
+        self.analytics.upsert_videos(
+            [{"video_id": "daily-video", "title": "일별 영상", "published_at": "2026-08-01", "duration_seconds": 300}],
+            collected_at=collected,
+        )
+        run = self.analytics.begin_sync_run("daily", ANALYTICS_SOURCE)
+        with self.connect() as connection:
+            for day in range(1, 9):
+                metric_date = f"2026-08-{day:02d}"
+                connection.execute(
+                    """
+                    INSERT INTO video_daily_metrics (
+                        video_id, metric_date, views, likes, comments, shares,
+                        subscribers_gained, subscribers_lost,
+                        estimated_minutes_watched, average_view_duration,
+                        average_view_percentage, row_status, metric_statuses_json,
+                        collected_at, data_through, source, sync_run_id
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        "daily-video", metric_date, 10, 2, 1, 1, 1, 0,
+                        20.0, 100.0, 50.0, "available", "{}", collected,
+                        "2026-08-16", ANALYTICS_SOURCE, run,
+                    ),
+                )
+            connection.commit()
+        strategy_id = self.strategies.create(
+            topic="일별 성과", content_type="미드폼", strategy={"recommended_title": "일별 영상"}
+        )
+        self.strategies.link_video(strategy_id, "daily-video")
+        self.strategies.refresh_performance_checkpoints()
+        checkpoints = {
+            point["checkpoint_label"]: point
+            for point in self.strategies.get(strategy_id)["checkpoints"]
+        }
+        self.assertEqual(set(checkpoints), {"D1", "D3", "D7"})
+        self.assertEqual(checkpoints["D1"]["analysis"]["metrics"]["views"], 20)
+        self.assertEqual(checkpoints["D3"]["analysis"]["metrics"]["views"], 40)
+        self.assertEqual(checkpoints["D7"]["analysis"]["metrics"]["views"], 80)
+        feedback = StrategyRetrieval(
+            self.connect, analytics=self.analytics, strategies=self.strategies
+        ).search_feedback_history({"query": "일별", "limit": 10})
+        d3 = next(
+            row for row in feedback.data["performance_checkpoints"]
+            if row["checkpoint_label"] == "D3"
+        )
+        self.assertEqual(d3["views"], 40)
+        self.assertEqual(d3["measurement_source"], "video_daily_metrics:cumulative")
+
     def test_strategy_links_to_uploaded_video_and_latest_checkpoint(self):
         collected = "2026-08-18T00:00:00Z"
         self.analytics.upsert_videos(
@@ -149,10 +199,13 @@ class FeedbackLoopTests(RepositoryFixture):
             title_at_upload="실제 업로드 제목",
             thumbnail_text="절대 먼저 사지 마세요",
         )
-        self.assertEqual(self.strategies.refresh_performance_checkpoints(), 1)
+        self.assertEqual(self.strategies.refresh_performance_checkpoints(), 2)
         linked = self.strategies.get(strategy_id)
         self.assertEqual(linked["videos"][0]["video_id"], "video-a")
-        self.assertEqual(linked["checkpoints"][0]["checkpoint_label"], "D7")
+        self.assertEqual(
+            {point["checkpoint_label"] for point in linked["checkpoints"]},
+            {"D7", "long"},
+        )
         feedback = StrategyRetrieval(
             self.connect, analytics=self.analytics, strategies=self.strategies
         ).search_feedback_history({"query": "냉장고", "limit": 5})

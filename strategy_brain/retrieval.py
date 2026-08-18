@@ -323,6 +323,16 @@ class StrategyRetrieval:
             row["planned_title"] = strategy.get("recommended_title")
             row["planned_core_message"] = strategy.get("core_message")
             row["analysis"] = _load(row.pop("analysis_json"), {})
+            computed_metrics = row["analysis"].get("metrics") or {}
+            for metric_name in (
+                "views", "likes", "comments", "shares", "subscribers_gained",
+                "subscribers_lost", "estimated_minutes_watched",
+                "average_view_duration", "average_view_percentage",
+            ):
+                if row.get(metric_name) is None and metric_name in computed_metrics:
+                    row[metric_name] = computed_metrics[metric_name]
+            row["measurement_source"] = row["analysis"].get("source")
+            row["measurement_period"] = row["analysis"].get("period")
             ranked.append((score, row))
         ranked.sort(
             key=lambda item: (item[0], str(item[1].get("measured_at"))),

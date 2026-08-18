@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
 
@@ -374,49 +374,231 @@ class StrategyRepository:
         return {"pipeline_id": int(pipeline_id), "worksheet_id": int(worksheet_id)}
 
     def refresh_performance_checkpoints(self) -> int:
-        """Attach available D1/D3/D7/D14/D30/long snapshots to linked plans."""
+        """Build reliable D1/D3/D7/D14/D30 and long outcome checkpoints.
 
+        Milestones are reconstructed from daily rows so Analytics reporting lag
+        cannot make the collector skip a day. Exact aggregate labels remain a
+        fallback, and the latest aggregate snapshot is always the long view.
+        """
+
+        milestones = (1, 3, 7, 14, 30)
+        additive_columns = (
+            "views", "likes", "comments", "shares", "subscribers_gained",
+            "subscribers_lost", "estimated_minutes_watched",
+        )
         saved = 0
+
+        def retention_id(
+            connection: sqlite3.Connection, video_id: str, cutoff: str | None
+        ) -> int | None:
+            if cutoff:
+                row = connection.execute(
+                    """
+                    SELECT id FROM video_retention_snapshots
+                    WHERE video_id=? AND data_through IS NOT NULL AND data_through<=?
+                    ORDER BY data_through DESC, collected_at DESC, id DESC LIMIT 1
+                    """,
+                    (video_id, cutoff),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT id FROM video_retention_snapshots WHERE video_id=?
+                    ORDER BY collected_at DESC, id DESC LIMIT 1
+                    """,
+                    (video_id,),
+                ).fetchone()
+            return int(row[0]) if row else None
+
+        def upsert(
+            connection: sqlite3.Connection,
+            *,
+            strategy_id: int,
+            video_id: str,
+            label: str,
+            metric_snapshot_id: int | None,
+            retention_snapshot_id: int | None,
+            measured_at: str,
+            analysis: dict[str, Any],
+        ) -> None:
+            nonlocal saved
+            existing = connection.execute(
+                """
+                SELECT analysis_json FROM performance_checkpoints
+                WHERE strategy_id=? AND video_id=? AND checkpoint_label=?
+                """,
+                (strategy_id, video_id, label),
+            ).fetchone()
+            merged = _load(existing[0], {}) if existing else {}
+            merged.update(analysis)
+            cursor = connection.execute(
+                """
+                INSERT INTO performance_checkpoints (
+                    strategy_id, video_id, checkpoint_label,
+                    metric_snapshot_id, retention_snapshot_id, measured_at,
+                    analysis_json
+                ) VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(strategy_id, video_id, checkpoint_label) DO UPDATE SET
+                    metric_snapshot_id=excluded.metric_snapshot_id,
+                    retention_snapshot_id=excluded.retention_snapshot_id,
+                    measured_at=excluded.measured_at,
+                    analysis_json=excluded.analysis_json
+                """,
+                (
+                    strategy_id, video_id, label, metric_snapshot_id,
+                    retention_snapshot_id, measured_at, _dump(merged),
+                ),
+            )
+            saved += max(cursor.rowcount, 0)
+
         with closing(self._connect()) as connection:
             connection.row_factory = sqlite3.Row
-            rows = connection.execute(
+            links = connection.execute(
                 """
-                SELECT l.strategy_id, l.video_id, s.id AS metric_snapshot_id,
-                       COALESCE(s.snapshot_label, 'long') AS checkpoint_label,
-                       s.collected_at,
-                       (SELECT r.id FROM video_retention_snapshots r
-                        WHERE r.video_id=l.video_id
-                        ORDER BY r.collected_at DESC, r.id DESC LIMIT 1) AS retention_snapshot_id
+                SELECT l.strategy_id, l.video_id, v.published_at
                 FROM strategy_video_links l
-                JOIN video_metric_snapshots s ON s.id=(
-                    SELECT s2.id FROM video_metric_snapshots s2
-                    WHERE s2.video_id=l.video_id
-                    ORDER BY s2.collected_at DESC, s2.id DESC LIMIT 1
-                )
+                LEFT JOIN youtube_videos v ON v.video_id=l.video_id
                 """
             ).fetchall()
-            for row in rows:
-                cursor = connection.execute(
+            for link in links:
+                strategy_id = int(link["strategy_id"])
+                video_id = str(link["video_id"])
+
+                # Exact aggregate milestones are a fallback for databases that
+                # predate daily collection.
+                exact_rows = connection.execute(
                     """
-                    INSERT INTO performance_checkpoints (
-                        strategy_id, video_id, checkpoint_label,
-                        metric_snapshot_id, retention_snapshot_id, measured_at
-                    ) VALUES (?,?,?,?,?,?)
-                    ON CONFLICT(strategy_id, video_id, checkpoint_label) DO UPDATE SET
-                        metric_snapshot_id=excluded.metric_snapshot_id,
-                        retention_snapshot_id=excluded.retention_snapshot_id,
-                        measured_at=excluded.measured_at
+                    SELECT s.* FROM video_metric_snapshots s
+                    WHERE s.video_id=? AND s.snapshot_label IS NOT NULL
+                      AND s.id=(SELECT s2.id FROM video_metric_snapshots s2
+                                WHERE s2.video_id=s.video_id
+                                  AND s2.snapshot_label=s.snapshot_label
+                                ORDER BY s2.collected_at DESC, s2.id DESC LIMIT 1)
                     """,
-                    (
-                        row["strategy_id"],
-                        row["video_id"],
-                        row["checkpoint_label"],
-                        row["metric_snapshot_id"],
-                        row["retention_snapshot_id"],
-                        row["collected_at"],
-                    ),
-                )
-                saved += max(cursor.rowcount, 0)
+                    (video_id,),
+                ).fetchall()
+                for snapshot in exact_rows:
+                    label = str(snapshot["snapshot_label"])
+                    upsert(
+                        connection,
+                        strategy_id=strategy_id,
+                        video_id=video_id,
+                        label=label,
+                        metric_snapshot_id=int(snapshot["id"]),
+                        retention_snapshot_id=retention_id(
+                            connection, video_id, snapshot["data_through"]
+                        ),
+                        measured_at=str(snapshot["collected_at"]),
+                        analysis={
+                            "source": "video_metric_snapshots",
+                            "period": {
+                                "start": snapshot["period_start"],
+                                "end": snapshot["data_through"],
+                            },
+                            "metrics": {
+                                column: snapshot[column]
+                                for column in additive_columns
+                            }
+                            | {
+                                "average_view_duration": snapshot["average_view_duration"],
+                                "average_view_percentage": snapshot["average_view_percentage"],
+                            },
+                        },
+                    )
+
+                published_at = str(link["published_at"] or "")[:10]
+                try:
+                    published = date.fromisoformat(published_at)
+                except ValueError:
+                    published = None
+                if published:
+                    for day_number in milestones:
+                        target = (published + timedelta(days=day_number)).isoformat()
+                        rows = connection.execute(
+                            """
+                            SELECT * FROM video_daily_metrics
+                            WHERE video_id=? AND metric_date BETWEEN ? AND ?
+                            ORDER BY metric_date
+                            """,
+                            (video_id, published.isoformat(), target),
+                        ).fetchall()
+                        # The collector persists an explicit daily matrix,
+                        # including not-reported rows. Missing calendar rows
+                        # therefore mean this milestone cannot be reconstructed.
+                        if len(rows) < day_number + 1:
+                            continue
+                        reported_through = max(
+                            (str(row["data_through"]) for row in rows if row["data_through"]),
+                            default="",
+                        )
+                        if reported_through < target:
+                            continue
+                        metrics: dict[str, Any] = {}
+                        for column in additive_columns:
+                            values = [row[column] for row in rows if row[column] is not None]
+                            metrics[column] = sum(values) if values else None
+                        for column in ("average_view_duration", "average_view_percentage"):
+                            weighted = [
+                                (float(row[column]), int(row["views"]))
+                                for row in rows
+                                if row[column] is not None and row["views"] not in (None, 0)
+                            ]
+                            metrics[column] = (
+                                sum(value * weight for value, weight in weighted)
+                                / sum(weight for _, weight in weighted)
+                                if weighted else None
+                            )
+                        measured_at = max(str(row["collected_at"]) for row in rows)
+                        upsert(
+                            connection,
+                            strategy_id=strategy_id,
+                            video_id=video_id,
+                            label=f"D{day_number}",
+                            metric_snapshot_id=None,
+                            retention_snapshot_id=retention_id(
+                                connection, video_id, target
+                            ),
+                            measured_at=measured_at,
+                            analysis={
+                                "source": "video_daily_metrics:cumulative",
+                                "period": {"start": published.isoformat(), "end": target},
+                                "data_through": reported_through,
+                                "sample_size": len(rows),
+                                "metrics": metrics,
+                            },
+                        )
+
+                latest = connection.execute(
+                    """
+                    SELECT * FROM video_metric_snapshots WHERE video_id=?
+                    ORDER BY collected_at DESC, id DESC LIMIT 1
+                    """,
+                    (video_id,),
+                ).fetchone()
+                if latest:
+                    upsert(
+                        connection,
+                        strategy_id=strategy_id,
+                        video_id=video_id,
+                        label="long",
+                        metric_snapshot_id=int(latest["id"]),
+                        retention_snapshot_id=retention_id(connection, video_id, None),
+                        measured_at=str(latest["collected_at"]),
+                        analysis={
+                            "source": "video_metric_snapshots",
+                            "period": {
+                                "start": latest["period_start"],
+                                "end": latest["data_through"],
+                            },
+                            "metrics": {
+                                column: latest[column] for column in additive_columns
+                            }
+                            | {
+                                "average_view_duration": latest["average_view_duration"],
+                                "average_view_percentage": latest["average_view_percentage"],
+                            },
+                        },
+                    )
             connection.commit()
         return saved
 
