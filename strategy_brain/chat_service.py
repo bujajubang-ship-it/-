@@ -23,23 +23,15 @@ from .tools import ReadOnlyToolRegistry
 logger = logging.getLogger(__name__)
 
 
-CHAT_TASK_INSTRUCTIONS = """사용자의 질문에 직접 답한다.
+CHAT_TASK_INSTRUCTIONS = """사용자의 질문에 직접, 짧고 명확하게 답한다.
 
-전략·기획 요청이면 반드시 관련 내부 데이터를 도구로 먼저 확인한다. 답변은 결론을 앞에 두고 다음을 포함한다.
-1) 추천 주제와 한 문장 판단
-2) 측정된 근거(영상/기간/data_through)와 해석
-3) 반대 근거 또는 리스크
-4) 타깃 시청자와 왜 지금 해야 하는지
-5) 핵심 메시지
-6) 제목 후보와 최종 추천 제목
-7) 썸네일 문구와 실제 촬영 구도
-8) 첫 5~15초 훅
-9) 전체 영상 구조
-10) 필요한 촬영 컷
-11) 촬영 워크시트
-12) 업로드 후 확인할 KPI(1일/3일/7일/장기)
+전략·기획 요청이면 반드시 서버가 조회한 내부 근거를 사용한다. 모든 질문에 긴 워크시트를 반복하지 않는다.
+- 다음 영상 추천: 최대 3개, 각 후보의 이유·근거·타깃·제목/썸네일/훅·KPI·위험을 한눈에 비교하고 1순위를 확정한다. 상세 워크시트는 사용자가 요청하거나 공통 전략으로 넘길 때 만든다.
+- 채널 방향/공통 문제: 진단과 우선 행동에 집중하고 불필요한 제목·촬영표는 생략한다.
+- 특정 주제 기획: 유사 과거 영상, 성공/실패 패턴, 적용 지식, 차별점, 제목·썸네일·훅·핵심 구조·KPI를 제시한다. 촬영표는 핵심 컷만 간결하게 쓴다.
+- 제목/썸네일 확정: 후보 3~5개 이내, 1순위 제목과 1순위 썸네일을 명확히 확정한다. 관련 부분만 갱신한다.
 
-짧은 조회 질문에는 필요한 항목만 간결하게 답한다. 사용자가 특정 칸만 요청하면 공통 전략과 충돌 여부를 확인한 뒤 그 칸을 집중적으로 작성한다.
+짧은 조회 질문에는 필요한 항목만 답한다. 사용자가 특정 칸만 요청하면 공통 전략과 충돌 여부를 확인한 뒤 그 칸을 집중적으로 작성한다.
 
 답변 기본 구조:
 1. 결론
@@ -66,11 +58,15 @@ def build_openai_input(
     items: list[dict[str, Any]] = []
     # Recent turns preserve conversational continuity; durable decisions are
     # supplied by search_long_term_memory instead of replaying whole sessions.
-    for old in history[-8:]:
+    # Keep only the two most recent exchanges and bound generated prose so a
+    # detailed worksheet does not slow every later follow-up.
+    for old in history[-4:]:
         role = old.get("role")
         content = old.get("content")
         if role in {"user", "assistant"} and isinstance(content, str):
-            items.append(_text_message(role, content))
+            limit = 2_000 if role == "user" else 6_000
+            compact = content[-limit:] if len(content) > limit else content
+            items.append(_text_message(role, compact))
 
     current: list[dict[str, Any]] = []
     for attachment in attachments or []:

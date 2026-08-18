@@ -172,8 +172,13 @@ class SharedStrategyContextTests(unittest.TestCase):
             for index in range(30)
         ]
         items = build_openai_input("현재", history)
-        self.assertEqual(len(items), 9)
-        self.assertEqual(items[0]["content"][0]["text"], "22")
+        self.assertEqual(len(items), 5)
+        self.assertEqual(items[0]["content"][0]["text"], "26")
+
+    def test_chat_context_bounds_long_generated_answers(self):
+        history = [{"role": "assistant", "content": "가" * 10_000}]
+        items = build_openai_input("현재", history)
+        self.assertEqual(len(items[0]["content"][0]["text"]), 6_000)
 
 
 if __name__ == "__main__":

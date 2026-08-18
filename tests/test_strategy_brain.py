@@ -257,6 +257,7 @@ class OpenAIProviderTests(unittest.IsolatedAsyncioTestCase):
         kwargs = provider._request_kwargs(request, "test")
         self.assertEqual(kwargs["reasoning"]["effort"], "medium")
         self.assertEqual(kwargs["max_output_tokens"], 12000)
+        self.assertEqual(kwargs["text"]["verbosity"], "low")
 
 
 if __name__ == "__main__":
