@@ -79,6 +79,7 @@ class TranscriptionResult:
     text: str
     timed_text: str
     provider: str
+    segments: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -110,7 +111,21 @@ def _normalise_transcription(payload: Any, provider: str) -> TranscriptionResult
         text = " ".join(line.split("] ", 1)[-1] for line in timed.splitlines())
     if not text:
         raise ValueError("empty transcription")
-    return TranscriptionResult(text=text, timed_text=timed or text, provider=provider)
+    normalized_segments = [
+        {
+            "start": float(segment.get("start") or 0),
+            "end": float(segment.get("end") or segment.get("start") or 0),
+            "text": str(segment.get("text") or "").strip(),
+        }
+        for segment in segments
+        if str(segment.get("text") or "").strip()
+    ]
+    return TranscriptionResult(
+        text=text,
+        timed_text=timed or text,
+        provider=provider,
+        segments=normalized_segments,
+    )
 
 
 class VideoFeedbackService:

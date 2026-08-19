@@ -52,7 +52,7 @@ function switchTab(tab) {
   if (tab === 'strategy') loadStrategies();
   if (tab === 'ytsearch') ysInit();
   if (tab === 'autocut') acInit();
-  if (tab === 'video-feedback') loadVfHistory();
+  if (tab === 'video-feedback') { loadVfHistory(); resumeVideoFeedbackJob(); }
   if (tab === 'edit-director') edInit();
 }
 
@@ -4613,21 +4613,93 @@ function onVideoFileSelected(event) {
 const VF_STEP_PROGRESS = {
   uploading: 10,
   validating: 15,
-  extracting: 30,
-  transcribing: 60,
-  analyzing: 85,
+  queued: 12,
+  extracting: 25,
+  transcribing: 42,
+  selecting_frames: 58,
+  retrieving: 70,
+  analyzing: 82,
+  processing: 50,
+  partial: 100,
+  failed: 100,
   done: 100,
 };
 
 const VF_STEP_LABEL = {
   uploading: '영상 파일 저장 중...',
   validating: '파일 유효성 검사 중...',
-  extracting: '오디오 추출 중...',
-  transcribing: '자막 추출 중... (영상 길이에 따라 2~5분 소요)',
-  analyzing: 'AI 피드백 분석 중...',
+  queued: '백그라운드 분석 대기 중...',
+  extracting: '피드백용 오디오 준비 중...',
+  transcribing: '타임코드 대본 요약 중...',
+  selecting_frames: '대표 화면 선별 중... (최대 30장)',
+  retrieving: '오늘의 채널 데이터 불러오는 중...',
+  analyzing: '한 번의 GPT 호출로 글 피드백 작성 중...',
+  partial: '기초 분석 저장 완료',
+  failed: '분석 실패',
   done: '완료!',
   error: '오류 발생',
 };
+
+let vfPollingJobId = null;
+
+function setVfProgress(step, message, percent) {
+  const stepMsgEl = document.getElementById('vf-step-msg');
+  const fillEl = document.getElementById('vf-progress-fill');
+  const pct = Number.isFinite(Number(percent)) ? Number(percent) : (VF_STEP_PROGRESS[step] || 0);
+  stepMsgEl.textContent = message || VF_STEP_LABEL[step] || step;
+  fillEl.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  fillEl.style.background = step === 'failed' || step === 'error' ? '#ef4444' : '';
+}
+
+async function pollVideoFeedbackJob(jobId) {
+  if (!jobId || vfPollingJobId === jobId) return;
+  vfPollingJobId = jobId;
+  localStorage.setItem('vf_active_job_id', jobId);
+  const progressEl = document.getElementById('vf-progress');
+  const resultEl = document.getElementById('vf-result');
+  const analyzeBtn = document.getElementById('vf-analyze-btn');
+  progressEl.classList.remove('hidden');
+  resultEl.classList.add('hidden');
+  try {
+    while (vfPollingJobId === jobId) {
+      const response = await fetch(`/api/video-feedback/jobs/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+      if (response.status === 401) { redirectToOwnerLogin(); return; }
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok || !contentType.includes('application/json')) {
+        throw new Error('영상 피드백 상태를 확인하지 못했습니다.');
+      }
+      const job = await response.json();
+      setVfProgress(job.progress_step || job.status, job.progress_message, job.progress_percent);
+      if (job.status === 'done' || job.status === 'partial') {
+        renderVideoFeedback(job.result || {});
+        localStorage.removeItem('vf_active_job_id');
+        vfPollingJobId = null;
+        analyzeBtn.disabled = !vfSelectedFile;
+        analyzeBtn.textContent = 'AI 피드백 받기';
+        loadVfHistory();
+        return;
+      }
+      if (job.status === 'failed') {
+        localStorage.removeItem('vf_active_job_id');
+        vfPollingJobId = null;
+        analyzeBtn.disabled = !vfSelectedFile;
+        analyzeBtn.textContent = 'AI 피드백 받기';
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  } catch (error) {
+    setVfProgress('error', error.message || '영상 피드백 상태 확인에 실패했습니다.');
+    vfPollingJobId = null;
+    analyzeBtn.disabled = !vfSelectedFile;
+    analyzeBtn.textContent = 'AI 피드백 받기';
+  }
+}
+
+function resumeVideoFeedbackJob() {
+  const jobId = localStorage.getItem('vf_active_job_id');
+  if (jobId) pollVideoFeedbackJob(jobId);
+}
 
 async function analyzeVideo() {
   if (!vfSelectedFile) return;
@@ -4645,13 +4717,7 @@ async function analyzeVideo() {
   resultEl.classList.add('hidden');
   resultEl.innerHTML = '';
 
-  function setProgress(step, msg) {
-    const pct = VF_STEP_PROGRESS[step] || 0;
-    stepMsgEl.textContent = msg || VF_STEP_LABEL[step] || step;
-    fillEl.style.width = pct + '%';
-  }
-
-  // XHR로 업로드 진행률 표시 + SSE 스트림 수신
+  // 업로드 요청은 job_id만 반환한다. 분석은 서버 background worker가 맡는다.
   const formData = new FormData();
   formData.append('file', vfSelectedFile);
   formData.append('topic', (document.getElementById('vf-topic')?.value || '').trim());
@@ -4662,30 +4728,10 @@ async function analyzeVideo() {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/video-feedback');
 
-    let resolved = false;
-    function done() { if (!resolved) { resolved = true; clearTimeout(stallTimer); resolve(); } }
-
-    // 무응답 감지: 마지막 SSE 수신 후 5분간 새 데이터 없으면 에러
-    // (서버가 ffmpeg/Whisper ping을 5초마다 보내므로 실제로는 훨씬 빨리 감지됨)
-    const STALL_MS = 5 * 60 * 1000;
-    function onStall() {
-      if (resolved) return;
-      xhr.abort();
-      setProgress('error', '응답이 없습니다. 파일이 손상되었거나 서버가 중단되었을 수 있습니다. 다시 시도해주세요.');
-      fillEl.style.background = '#ef4444';
-      analyzeBtn.disabled = false;
-      analyzeBtn.textContent = 'AI 피드백 받기';
-      done();
-    }
-    let stallTimer = setTimeout(onStall, STALL_MS);
-
-    function resetStallTimer() { clearTimeout(stallTimer); stallTimer = setTimeout(onStall, STALL_MS); }
-
     // 업로드 진행률
     stepMsgEl.textContent = '서버로 전송 중...';
     fillEl.style.width = '2%';
     xhr.upload.onprogress = (e) => {
-      resetStallTimer();
       if (!e.lengthComputable) return;
       const pct = Math.round((e.loaded / e.total) * 8); // 0~8% (업로드 단계)
       const uploadedMB = (e.loaded / 1024 / 1024).toFixed(0);
@@ -4693,53 +4739,38 @@ async function analyzeVideo() {
       fillEl.style.width = pct + '%';
     };
     xhr.upload.onload = () => {
-      resetStallTimer();
       stepMsgEl.textContent = '전송 완료, 서버 처리 준비 중...';
       fillEl.style.width = '8%';
     };
 
-    // 응답 스트림 처리
-    let buf = '';
-    xhr.onreadystatechange = () => {
-      if (xhr.readyState === 4 && xhr.status === 401) {
+    xhr.onload = () => {
+      if (xhr.status === 401) {
         redirectToOwnerLogin();
-        done();
+        resolve();
         return;
       }
-      if (xhr.readyState < 3) return;
-      const newText = xhr.responseText.slice(buf.length);
-      if (newText) resetStallTimer();
-      buf = xhr.responseText;
-      const lines = newText.split('\n');
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        let data;
-        try { data = JSON.parse(line.slice(6)); } catch { continue; }
-        if (data.step === 'ping') continue;
-        if (data.step === 'error') {
-          setProgress('error', '오류: ' + data.message);
-          fillEl.style.background = '#ef4444';
-          analyzeBtn.disabled = false;
-          analyzeBtn.textContent = 'AI 피드백 받기';
-          done(); return;
-        }
-        if (data.step === 'done') {
-          setProgress('done');
-          renderVideoFeedback(data);
-          analyzeBtn.disabled = false;
-          analyzeBtn.textContent = 'AI 피드백 받기';
-          done(); return;
-        }
-        setProgress(data.step, data.message);
+      const contentType = xhr.getResponseHeader('content-type') || '';
+      let data = null;
+      if (contentType.includes('application/json')) {
+        try { data = JSON.parse(xhr.responseText); } catch (_) {}
       }
+      if (xhr.status !== 202 || !data?.job_id) {
+        setVfProgress('error', data?.error || '업로드를 시작하지 못했습니다. 다시 시도해 주세요.');
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = 'AI 피드백 받기';
+        resolve();
+        return;
+      }
+      setVfProgress('queued', data.message, 10);
+      pollVideoFeedbackJob(data.job_id);
+      resolve();
     };
 
     xhr.onerror = () => {
-      setProgress('error', '네트워크 오류가 발생했습니다.');
-      fillEl.style.background = '#ef4444';
+      setVfProgress('error', '네트워크 오류가 발생했습니다.');
       analyzeBtn.disabled = false;
       analyzeBtn.textContent = 'AI 피드백 받기';
-      done();
+      resolve();
     };
 
     xhr.send(formData);
@@ -4767,6 +4798,24 @@ function renderVideoFeedback(data, targetEl) {
   const fb = data.feedback || {};
   const transcript = data.transcript || '';
   const resultEl = targetEl || document.getElementById('vf-result');
+
+  if (data.markdown) {
+    const meta = data.analysis_metadata || {};
+    const summary = data.retrieval_summary || {};
+    resultEl.innerHTML = `
+      <div class="vf-card">
+        <div class="vf-card-header"><span>📊 데이터 적용 상태</span></div>
+        <div class="vf-card-body">
+          <div class="vf-field"><span class="vf-field-label">AI</span><span>${escHtml(data.provider || 'openai')} · GPT 호출 ${Number(meta.gpt_call_count || 0)}회</span></div>
+          <div class="vf-field"><span class="vf-field-label">대표 화면</span><span>${Number(meta.selected_frames_count || 0)}장 · 이미지 전송 ${Number(meta.images_sent_to_gpt || 0)}장</span></div>
+          <div class="vf-field"><span class="vf-field-label">YouTube 표본</span><span>채널 ${Number(summary.channel_snapshot_sample_size || 0)} · 최근 영상 ${Number(summary.recent_video_sample_size || 0)} · 일일 cache ${meta.youtube_cache_used ? '사용' : '갱신'}</span></div>
+        </div>
+      </div>
+      <div class="vf-card"><pre class="vf-transcript" style="white-space:pre-wrap">${escHtml(data.markdown)}</pre></div>`;
+    resultEl.classList.remove('hidden');
+    resultEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
 
   const overallColor = scoreColor(fb.overall_score || 0);
 

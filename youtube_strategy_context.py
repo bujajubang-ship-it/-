@@ -17,6 +17,7 @@ from typing import Any
 
 from analytics_repository import AnalyticsRepository
 from analytics_service import AnalyticsApiError, AnalyticsService, response_rows
+from database import get_db
 
 
 KNOWLEDGE_FILES = {
@@ -27,6 +28,17 @@ KNOWLEDGE_FILES = {
 }
 _CACHE: dict[str, tuple[float, "StrategyDataContext"]] = {}
 _CACHE_TTL_SECONDS = 10 * 60
+_DAILY_CACHE_TABLE = "youtube_strategy_daily_cache"
+
+COMPACT_STRATEGY_KNOWLEDGE = """부자주방 전략 요약:
+- 현장형 주방 솔루션 브랜드: 설계·동선·납품·시공·A/S까지 책임진다.
+- 고객: 외식창업자·식당 사장·프랜차이즈 담당자.
+- 구조: 고객 문제 → 비용/운영 위험 → 현장 증거 → 해결 → 결과 증명 → CTA.
+- 증거: 도면·동선·배수·후드·덕트·가스·전기·Before/After·실제 작업.
+- 첫 10초에 결과·문제·현장 가치 중 하나를 보여준다.
+- 화면 가치가 높으면 무음도 살리고, 말이 좋아도 화면 가치가 낮으면 줄인다.
+- 작은 표본은 가설로 표시하고 없는 CTR·retention 수치를 만들지 않는다.
+- 조회수뿐 아니라 문의·상담·견적 전환 가능성을 함께 판단한다."""
 
 
 @dataclass(frozen=True)
@@ -90,6 +102,92 @@ def _missing_entry(source: str, reason: str, detail: str | None = None) -> dict[
     return row
 
 
+def _ensure_daily_cache_table() -> None:
+    connection = get_db()
+    try:
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_DAILY_CACHE_TABLE} (
+                cache_key TEXT NOT NULL,
+                snapshot_date TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(cache_key, snapshot_date)
+            )
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _read_persistent_cache(
+    cache_key: str, *, current_only: bool
+) -> StrategyDataContext | None:
+    try:
+        _ensure_daily_cache_table()
+        connection = get_db()
+        try:
+            if current_only:
+                row = connection.execute(
+                    f"SELECT payload_json,snapshot_date FROM {_DAILY_CACHE_TABLE} "
+                    "WHERE cache_key=? AND snapshot_date=?",
+                    (cache_key, date.today().isoformat()),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    f"SELECT payload_json,snapshot_date FROM {_DAILY_CACHE_TABLE} "
+                    "WHERE cache_key=? ORDER BY snapshot_date DESC LIMIT 1",
+                    (cache_key,),
+                ).fetchone()
+        finally:
+            connection.close()
+        if not row:
+            return None
+        payload = json.loads(row["payload_json"])
+        summary = dict(payload.get("retrieval_summary") or {})
+        summary["youtube_cache_hit"] = True
+        summary["youtube_cache_date"] = str(row["snapshot_date"])
+        evidence = dict(payload.get("evidence") or {})
+        evidence["retrieval_summary"] = summary
+        return StrategyDataContext(
+            evidence=evidence,
+            retrieval_summary=summary,
+            knowledge_text=str(payload.get("knowledge_text") or ""),
+        )
+    except Exception:
+        return None
+
+
+def _write_persistent_cache(cache_key: str, context: StrategyDataContext) -> None:
+    try:
+        _ensure_daily_cache_table()
+        connection = get_db()
+        try:
+            connection.execute(
+                f"INSERT OR REPLACE INTO {_DAILY_CACHE_TABLE} "
+                "(cache_key,snapshot_date,payload_json) VALUES (?,?,?)",
+                (
+                    cache_key,
+                    date.today().isoformat(),
+                    json.dumps(
+                        {
+                            "evidence": context.evidence,
+                            "retrieval_summary": context.retrieval_summary,
+                            "knowledge_text": context.knowledge_text,
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+    except Exception:
+        pass
+
+
 class YouTubeStrategyContextService:
     def __init__(
         self,
@@ -109,6 +207,11 @@ class YouTubeStrategyContextService:
         use_cache: bool = True,
     ) -> StrategyDataContext:
         cache_key = f"{video_id or '-'}:{recent_limit}"
+        if use_cache and self._owns_analytics:
+            persistent = _read_persistent_cache(cache_key, current_only=True)
+            if persistent is not None:
+                await self.analytics.close()
+                return persistent
         cached = _CACHE.get(cache_key)
         if use_cache and cached and time.monotonic() - cached[0] <= _CACHE_TTL_SECONDS:
             if self._owns_analytics:
@@ -240,6 +343,24 @@ class YouTubeStrategyContextService:
             "retrieval_summary": summary,
         }
         result = StrategyDataContext(evidence, summary, knowledge_text)
+        if (
+            self._owns_analytics
+            and result.retrieval_summary.get("youtube_analytics_applied")
+        ):
+            _write_persistent_cache(cache_key, result)
+        elif self._owns_analytics:
+            stale = _read_persistent_cache(cache_key, current_only=False)
+            if stale is not None:
+                stale_summary = dict(stale.retrieval_summary)
+                stale_summary["youtube_analytics_status"] = "cached_stale_fallback"
+                stale_summary["missing_sources"] = list(
+                    stale_summary.get("missing_sources") or []
+                ) + list(summary.get("missing_sources") or [])
+                stale_evidence = dict(stale.evidence)
+                stale_evidence["retrieval_summary"] = stale_summary
+                result = StrategyDataContext(
+                    stale_evidence, stale_summary, stale.knowledge_text
+                )
         _CACHE[cache_key] = (time.monotonic(), result)
         return result
 
@@ -250,4 +371,45 @@ def format_strategy_data_context(context: StrategyDataContext) -> str:
         + json.dumps(context.evidence, ensure_ascii=False, default=str)[:30000]
         + "\n\n[고정 전략 지식]\n"
         + context.knowledge_text[:16000]
+    )
+
+
+def format_compact_strategy_data_context(context: StrategyDataContext) -> str:
+    """Bounded prompt context for the one-call video feedback job."""
+
+    channel = context.evidence.get("channel_snapshot_90d") or {}
+    recent_rows = context.evidence.get("recent_videos_90d") or []
+    compact_recent = []
+    for row in recent_rows[:12]:
+        metrics = row.get("metrics") or {}
+        reach = row.get("reach") or {}
+        compact_recent.append(
+            {
+                "title": str(row.get("title") or "")[:100],
+                "published_at": row.get("published_at"),
+                "views": (metrics.get("views") or {}).get("value"),
+                "average_view_percentage": (
+                    metrics.get("averageViewPercentage") or {}
+                ).get("value"),
+                "thumbnail_impressions": reach.get("thumbnail_impressions"),
+                "thumbnail_ctr": (reach.get("thumbnail_ctr") or {}).get("value"),
+            }
+        )
+    payload = {
+        "retrieval_summary": context.retrieval_summary,
+        "channel_snapshot_90d": {
+            key: channel.get(key)
+            for key in (
+                "views", "estimatedMinutesWatched", "averageViewDuration",
+                "averageViewPercentage", "likes", "comments", "shares",
+                "subscribersGained", "sample_size",
+            )
+        },
+        "recent_videos": compact_recent,
+    }
+    return (
+        "[하루 1회 캐시된 YouTube 근거]\n"
+        + json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":"))
+        + "\n\n[압축 전략 원칙]\n"
+        + COMPACT_STRATEGY_KNOWLEDGE
     )

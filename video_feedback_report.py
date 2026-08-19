@@ -12,6 +12,7 @@ from strategy_brain.providers import OpenAIResponsesProvider
 from strategy_brain.retrieval import build_strategy_tool_registry
 from youtube_strategy_context import (
     YouTubeStrategyContextService,
+    format_compact_strategy_data_context,
     format_strategy_data_context,
 )
 
@@ -52,6 +53,7 @@ class MarkdownFeedbackResult:
     markdown: str
     retrieval_summary: dict[str, Any]
     provider: str
+    feedback: dict[str, Any]
 
 
 def _compact(value: Any, limit: int) -> str:
@@ -63,14 +65,16 @@ def _items(title: str, values: list[str]) -> str:
     return f"## {title}\n\n" + "\n".join(f"- {value}" for value in values)
 
 
-def render_markdown(payload: dict[str, Any], summary: dict[str, Any]) -> str:
+def render_markdown(
+    payload: dict[str, Any], summary: dict[str, Any], *, title: str = "영상 피드백"
+) -> str:
     header_order = (
         "provider", "youtube_analytics_applied", "channel_snapshot_sample_size",
         "recent_video_sample_size", "retention_sample_size", "ctr_available",
         "business_pt_applied", "low_data_applied", "brand_strategy_applied",
         "applied_sources", "missing_sources",
     )
-    lines = ["# 이태원 영상 피드백 — YouTube 데이터 적용", ""]
+    lines = [f"# {title} — YouTube 데이터 적용", ""]
     for key in header_order:
         value = summary.get(key)
         if isinstance(value, (dict, list)):
@@ -108,9 +112,13 @@ async def generate_markdown_feedback(
     topic: str = "이태원 좁은 갈빗집 주방 설계·납품 현장",
     brain_factory: Callable[[Any], StrategyBrain] | None = None,
     strategy_context_service: Any | None = None,
+    strategy_context: Any | None = None,
 ) -> MarkdownFeedbackResult:
-    context_service = strategy_context_service or YouTubeStrategyContextService()
-    context = await context_service.collect()
+    if strategy_context is not None:
+        context = strategy_context
+    else:
+        context_service = strategy_context_service or YouTubeStrategyContextService()
+        context = await context_service.collect()
     registry = build_strategy_tool_registry()
     if brain_factory:
         brain = brain_factory(registry)
@@ -126,36 +134,47 @@ async def generate_markdown_feedback(
         )
         brain = StrategyBrain(OpenAIResponsesProvider(settings), registry)
 
-    source = {
-        "business_review": {
-            key: (source_analysis.get("business_review") or {}).get(key)
-            for key in (
-                "business_completeness_score", "overall_diagnosis", "good_points",
-                "weak_flow_points", "boring_for_founders", "messages_to_emphasize",
-                "must_keep", "safe_to_reduce", "dangerous_to_delete",
-                "applied_business_principles", "data_limitations",
-            )
-        },
-        "transcript": {
-            "text": str((source_analysis.get("transcript") or {}).get("text") or "")[:24000],
-            "segments": (source_analysis.get("transcript") or {}).get("segments", [])[:80],
-        },
-        "visual_analysis": {
-            "status": (source_analysis.get("visual_analysis") or {}).get("status"),
-            "segments": (source_analysis.get("visual_analysis") or {}).get("segments", [])[:50],
-            "frame_results": (source_analysis.get("visual_analysis") or {}).get("frame_results", [])[:40],
-        },
-        "retrieval_trace": source_analysis.get("retrieval_trace") or [],
-    }
-    source["business_review"]["segments"] = (
-        (source_analysis.get("business_review") or {}).get("segments") or []
-    )[:45]
+    if source_analysis.get("compact_transcript") is not None:
+        source = {
+            "media": source_analysis.get("media") or {},
+            "transcript_summary": source_analysis.get("compact_transcript") or {},
+            "selected_frame_summary": source_analysis.get("selected_frame_summary") or {},
+        }
+        source_limit = 24000
+        strategy_prompt_context = format_compact_strategy_data_context(context)
+    else:
+        source = {
+            "business_review": {
+                key: (source_analysis.get("business_review") or {}).get(key)
+                for key in (
+                    "business_completeness_score", "overall_diagnosis", "good_points",
+                    "weak_flow_points", "boring_for_founders", "messages_to_emphasize",
+                    "must_keep", "safe_to_reduce", "dangerous_to_delete",
+                    "applied_business_principles", "data_limitations",
+                )
+            },
+            "transcript": {
+                "text": str((source_analysis.get("transcript") or {}).get("text") or "")[:24000],
+                "segments": (source_analysis.get("transcript") or {}).get("segments", [])[:80],
+            },
+            "visual_analysis": {
+                "status": (source_analysis.get("visual_analysis") or {}).get("status"),
+                "segments": (source_analysis.get("visual_analysis") or {}).get("segments", [])[:50],
+                "frame_results": (source_analysis.get("visual_analysis") or {}).get("frame_results", [])[:40],
+            },
+            "retrieval_trace": source_analysis.get("retrieval_trace") or [],
+        }
+        source["business_review"]["segments"] = (
+            (source_analysis.get("business_review") or {}).get("segments") or []
+        )[:45]
+        source_limit = 42000
+        strategy_prompt_context = format_strategy_data_context(context)
     prompt = f"""주제: {topic}
 
 [재사용할 기존 transcript + visual analysis + business review]
-{_compact(source, 42000)}
+{_compact(source, source_limit)}
 
-{format_strategy_data_context(context)}
+{strategy_prompt_context}
 
 새 영상 렌더링이나 자동편집을 하지 말고 업로드 전 피드백만 작성하세요.
 실제 화면 분석이 있는 구간만 화면을 봤다고 표현하고, 없는 CTR/retention 수치는 만들지 마세요.
@@ -176,9 +195,68 @@ async def generate_markdown_feedback(
     if not isinstance(response.parsed, dict):
         raise RuntimeError("영상 피드백 리포트를 생성하지 못했습니다.")
     return MarkdownFeedbackResult(
-        render_markdown(response.parsed, context.retrieval_summary),
+        render_markdown(
+            response.parsed,
+            context.retrieval_summary,
+            title=topic or "영상 피드백",
+        ),
         context.retrieval_summary,
         "openai",
+        response.parsed,
+    )
+
+
+def partial_feedback(
+    *,
+    topic: str,
+    transcript_summary: dict[str, Any],
+    frame_summary: dict[str, Any],
+    retrieval_summary: dict[str, Any],
+    failed_reason: str,
+) -> MarkdownFeedbackResult:
+    frames = frame_summary.get("frames") or []
+    strongest = sorted(
+        frames, key=lambda row: float(row.get("selection_score") or 0), reverse=True
+    )[:3]
+    windows = transcript_summary.get("window_summaries") or []
+    frame_lines = [
+        f"{row.get('timecode')} — {row.get('summary')}" for row in frames[:12]
+    ]
+    payload = {
+        "overall": (
+            "AI 종합 판단은 완료되지 않았습니다. 다만 대본 요약과 대표 화면 품질 분석은 "
+            "보존했으며 아래 항목으로 재시도할 수 있습니다."
+        ),
+        "biggest_problem": "GPT 분석 실패로 최종 우선순위를 확정하지 못했습니다.",
+        "strongest_scene": (
+            " / ".join(row.get("summary", "") for row in strongest)
+            or "대표 화면에서 강한 장면을 확정하지 못했습니다."
+        ),
+        "intro_feedback": (
+            str(windows[0].get("summary") or "")
+            if windows else "도입부 대본 데이터가 없습니다."
+        ),
+        "retention_feedback": "실제 retention 데이터와 연결된 video_id가 있을 때 재평가합니다.",
+        "conversion_feedback": "문제→현장 증거→해결 결과→CTA 구조를 우선 확인하십시오.",
+        "visual_feedback": "대표 프레임 통계는 저장됐지만 AI 화면 해석은 완료되지 않았습니다.",
+        "speech_structure_feedback": "30초 단위 대본 요약은 저장되어 재시도 시 재사용됩니다.",
+        "timecode_feedback": frame_lines or ["대표 프레임 데이터가 없습니다."],
+        "must_keep": [row.get("summary", "") for row in strongest] or ["사용자 확인 필요"],
+        "safe_to_reduce": ["AI 재시도 후 확정"],
+        "dangerous_to_delete": ["현장 증거 장면은 AI 재시도 전 삭제하지 마십시오."],
+        "title_candidates": [topic or "현장형 주방 솔루션 영상"],
+        "thumbnail_copy": ["현장 증거 확인 필요"],
+        "short_topics": ["AI 재시도 후 확정"],
+        "priorities": ["AI 피드백 분석 다시 시도"],
+    }
+    summary = dict(retrieval_summary)
+    summary["partial"] = True
+    summary["failed_reason"] = failed_reason
+    return MarkdownFeedbackResult(
+        render_markdown(payload, summary, title=topic or "영상 피드백"),
+        summary,
+        "openai",
+        payload,
     )
 
 

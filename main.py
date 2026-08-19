@@ -54,7 +54,7 @@ from edit_learning_service import (
 )
 from viewtrap_service import ViewTrapService
 from worksheet_ai_service import WorksheetAIService
-from video_feedback_service import VideoFeedbackService
+from video_feedback_jobs import VideoFeedbackJobManager
 from heatmap_service import fetch_heatmap, summarize_for_prompt
 from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
 from database import (init_db, save_history, list_history, get_history, delete_history,
@@ -103,6 +103,7 @@ EDIT_RENDERING_LOCK = threading.Lock()
 EDIT_RENDER_TASKS: dict[int, asyncio.Task] = {}
 EDIT_JOB_QUEUE = EditJobQueue()
 EDIT_PIPELINE = EditPipeline()
+VIDEO_FEEDBACK_JOBS = VideoFeedbackJobManager()
 EDIT_JOB_WORKER = EditJobWorker(
     EDIT_JOB_QUEUE,
     {
@@ -118,6 +119,7 @@ EDIT_JOB_WORKER = EditJobWorker(
 async def app_lifespan(_app: FastAPI):
     COLLECTION_SCHEDULER.start()
     EDIT_JOB_WORKER.start()
+    VIDEO_FEEDBACK_JOBS.start()
     cleanup_task = asyncio.create_task(_edit_storage_cleanup_loop())
     try:
         yield
@@ -133,6 +135,7 @@ async def app_lifespan(_app: FastAPI):
         if render_tasks:
             await asyncio.gather(*render_tasks, return_exceptions=True)
         await EDIT_JOB_WORKER.stop()
+        await VIDEO_FEEDBACK_JOBS.stop()
         await COLLECTION_SCHEDULER.stop()
 
 
@@ -1630,133 +1633,56 @@ async def blog(req: BlogRequest):
 
 @app.post("/api/video-feedback")
 async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
-    # 파일을 청크 단위로 임시 파일에 저장 (대용량 파일 메모리 문제 방지)
-    uid = uuid.uuid4().hex
-    video_path = f"/tmp/vf_{uid}.mp4"
-    audio_path = f"/tmp/vf_{uid}.mp3"
     filename = file.filename or "영상 피드백"
-
-    def cleanup_temp_files():
-        for path in (video_path, audio_path):
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except Exception:
-                pass
-
-    with open(video_path, "wb") as f_out:
-        while True:
-            chunk = await file.read(1024 * 1024)  # 1MB씩 읽기
-            if not chunk:
-                break
-            f_out.write(chunk)
-
-    async def stream():
-        try:
-            # 1. 파일 저장 완료 알림
-            yield sse({"step": "uploading", "message": "영상 파일 저장 완료, 파일 검사 중..."})
-            await asyncio.sleep(0)
-
-            # 1b. 파일 유효성 빠른 검사 (ffprobe ~1초)
-            try:
-                probe = subprocess.run(
-                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                     "-of", "default=noprint_wrappers=1:nokey=1", video_path],
-                    capture_output=True, text=True, timeout=15
-                )
-            except subprocess.TimeoutExpired:
-                raise RuntimeError("파일 검사 시간이 초과되었습니다. 파일이 손상되었을 수 있습니다.")
-            if probe.returncode != 0:
-                raise RuntimeError(
-                    "유효하지 않은 파일입니다. mp4, mov, avi 등 동영상 파일을 업로드해주세요.\n"
-                    f"상세: {probe.stderr.strip()[-200:]}"
-                )
-
-            loop = asyncio.get_event_loop()
-
-            # 2. 오디오 추출 (executor로 비동기 처리 — 긴 영상도 ping 유지)
-            yield sse({"step": "extracting", "message": "오디오 추출 중..."})
-
-            def _run_ffmpeg():
-                # 16kHz 모노 48kbps — 받아쓰기엔 충분하고 파일이 작아 OpenAI 25MB 한도 여유(약 60분)
-                return subprocess.run(
-                    ["ffmpeg", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", audio_path, "-y"],
-                    capture_output=True, text=True, timeout=300
-                )
-
-            ffmpeg_future = loop.run_in_executor(None, _run_ffmpeg)
-            while not ffmpeg_future.done():
-                yield sse({"step": "ping"})
-                await asyncio.sleep(5)
-            try:
-                result = await ffmpeg_future
-            except subprocess.TimeoutExpired:
-                raise RuntimeError("오디오 추출 시간이 초과되었습니다 (5분). 파일이 너무 크거나 손상되었을 수 있습니다.")
-            if result.returncode != 0:
-                raise RuntimeError(f"ffmpeg 오류: {result.stderr[-500:]}")
-
-            # 3. 기본 OpenAI 받아쓰기, CNMAKER는 설정된 경우에만 외부 fallback
-            yield sse({"step": "transcribing", "message": "영상 음성을 타임코드별로 분석 중..."})
-            sz = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
-            if sz > 24 * 1024 * 1024:
-                raise RuntimeError(f"오디오가 너무 큽니다 ({sz//1024//1024}MB). 약 60분 이내로 나눠서 올려주세요.")
-            feedback_service = VideoFeedbackService(
-                legacy_factory=(lambda: Analyzer())
-                if os.getenv("ANTHROPIC_API_KEY", "").strip() else None
-            )
-            _tt = asyncio.create_task(feedback_service.transcribe(audio_path))
-            while not _tt.done():
-                yield sse({"step": "ping"})
-                await asyncio.sleep(5)
-            transcription = _tt.result()
-            transcript = transcription.text
-            timed = transcription.timed_text
-
-            # 4. 내부 GPT business review (채널 근거 + 지식 + 타임스탬프)
-            yield sse({"step": "analyzing", "message": "채널 성과·비즈니스PT 지식과 영상을 비교 중..."})
-            kb = list_knowledge(active_only=True)
-            _task = asyncio.create_task(
-                feedback_service.analyze(timed, topic=(topic or "").strip(), knowledge=kb)
-            )
-            waited = 0
-            while not _task.done():
-                # 경과 초를 계속 갱신해 '멈춘 것처럼' 보이지 않게
-                yield sse({"step": "analyzing", "message": f"AI 편집 피드백 분석 중... ({waited}초 · 보통 1분 내외, 지식탭 적용)"})
-                await asyncio.sleep(6)
-                waited += 6
-                if waited > 240:
-                    _task.cancel()
-                    raise RuntimeError("AI 편집 분석이 오래 걸려 중단했어요. 잠시 후 다시 시도해 주세요.")
-            analysis_result = _task.result()
-            feedback = analysis_result.feedback
-
-            _topic = (topic or "").strip()[:60]
-            save_history("video_feedback", _topic or filename,
-                         {"transcript": transcript, "feedback": feedback,
-                          "주제": _topic, "파일명": filename,
-                          "provider": analysis_result.provider,
-                          "transcription_provider": transcription.provider,
-                          "retrieval_trace": analysis_result.retrieval_trace,
-                          "retrieval_summary": analysis_result.retrieval_summary})
-            _vf_backup()   # /data/history.db가 원본이며 KV는 승인된 수동 복구용 보조 사본이다.
-            yield sse({
-                "step": "done", "transcript": transcript, "feedback": feedback,
-                "provider": analysis_result.provider,
-                "transcription_provider": transcription.provider,
-                "retrieval_trace": analysis_result.retrieval_trace,
-                "retrieval_summary": analysis_result.retrieval_summary,
-            })
-
-        except Exception as e:
-            yield sse({"step": "error", "message": str(e)})
-        finally:
-            cleanup_temp_files()
-
-    return StreamingResponse(
-        stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    job, source_path = VIDEO_FEEDBACK_JOBS.create_upload(
+        filename=filename, topic=(topic or "").strip()
     )
+    job_id = str(job["job_id"])
+    max_bytes = int(os.getenv("VIDEO_FEEDBACK_MAX_UPLOAD_BYTES", str(2 * 1024**3)))
+    written = 0
+    try:
+        with source_path.open("wb") as output:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    raise ValueError("upload_too_large")
+                output.write(chunk)
+        if written <= 0:
+            raise ValueError("empty_upload")
+        VIDEO_FEEDBACK_JOBS.finish_upload(job_id)
+    except Exception:
+        VIDEO_FEEDBACK_JOBS.fail_upload(job_id)
+        try:
+            source_path.unlink(missing_ok=True)
+            source_path.parent.rmdir()
+        except OSError:
+            pass
+        return JSONResponse(
+            {"error": "영상 업로드를 완료하지 못했습니다. 파일 크기와 형식을 확인해 주세요."},
+            status_code=400,
+        )
+    finally:
+        await file.close()
+    return JSONResponse(
+        {
+            "job_id": job_id,
+            "status": "queued",
+            "status_url": f"/api/video-feedback/jobs/{job_id}",
+            "message": "업로드를 완료했습니다. 백그라운드에서 글 피드백을 생성합니다.",
+        },
+        status_code=202,
+    )
+
+
+@app.get("/api/video-feedback/jobs/{job_id}")
+async def video_feedback_job_status(job_id: str):
+    job = VIDEO_FEEDBACK_JOBS.store.get(job_id)
+    if not job:
+        return JSONResponse({"error": "영상 피드백 작업을 찾지 못했습니다."}, status_code=404)
+    return JSONResponse(job, headers={"Cache-Control": "no-store"})
 
 
 # ===== AI 편집 디렉터 / 협업형 영상 편집 =====
