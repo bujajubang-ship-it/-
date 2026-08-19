@@ -111,6 +111,8 @@ class YouTubeStrategyContextService:
         cache_key = f"{video_id or '-'}:{recent_limit}"
         cached = _CACHE.get(cache_key)
         if use_cache and cached and time.monotonic() - cached[0] <= _CACHE_TTL_SECONDS:
+            if self._owns_analytics:
+                await self.analytics.close()
             return cached[1]
 
         knowledge_text, knowledge_flags, missing = load_strategy_knowledge()
@@ -176,7 +178,10 @@ class YouTubeStrategyContextService:
                     applied_sources.append("youtube_reporting_api:cached_reach_snapshot")
                 if not channel.get("sample_size"):
                     missing_sources.append(_missing_entry("channel_snapshot", "no_data"))
-                if not recent:
+                metric_sample_size = sum(
+                    1 for row in recent if int(row.get("sample_size") or 0) > 0
+                )
+                if not metric_sample_size:
                     missing_sources.append(_missing_entry("recent_videos", "no_data"))
                 if video_id:
                     retention_row = await self.analytics.get_video_retention(
@@ -193,7 +198,7 @@ class YouTubeStrategyContextService:
                     missing_sources.append(_missing_entry("retention", "video_id_required"))
                 if not ctr_available:
                     missing_sources.append(_missing_entry("ctr", "no_data"))
-                if not channel.get("sample_size") and not recent:
+                if not channel.get("sample_size") and not metric_sample_size:
                     status = "no_data"
             except AnalyticsApiError as exc:
                 status = exc.code
@@ -211,10 +216,15 @@ class YouTubeStrategyContextService:
 
         summary = {
             "provider": "openai",
-            "youtube_analytics_applied": bool(channel.get("sample_size") or recent),
+            "youtube_analytics_applied": bool(
+                channel.get("sample_size")
+                or any(int(row.get("sample_size") or 0) > 0 for row in recent)
+            ),
             "youtube_analytics_status": status,
             "channel_snapshot_sample_size": int(channel.get("sample_size") or 0),
-            "recent_video_sample_size": len(recent),
+            "recent_video_sample_size": sum(
+                1 for row in recent if int(row.get("sample_size") or 0) > 0
+            ),
             "retention_sample_size": len(retention),
             "ctr_available": ctr_available,
             "business_pt_applied": bool(knowledge_flags.get("business_pt")),
