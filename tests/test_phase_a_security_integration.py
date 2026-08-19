@@ -238,7 +238,10 @@ class PhaseASecurityIntegrationTests(unittest.TestCase):
         after = set(glob.glob("/tmp/vf_*.mp4"))
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
-        self.assertIn("ANTHROPIC_API_KEY", response.text)
+        self.assertNotIn("ANTHROPIC_API_KEY", response.text)
+        self.assertNotIn("CNMAKER_BASE", response.text)
+        self.assertNotIn("CNMAKER_SECRET", response.text)
+        self.assertIn('"step": "error"', response.text)
         self.assertEqual(after, before)
 
     def test_pipeline_remind_keeps_cookie_free_machine_auth(self):
