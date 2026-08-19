@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sqlite3
@@ -11,7 +12,8 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import main
-from edit_job_queue import EditJobQueue
+from edit_job_queue import EditJobQueue, EditJobWorker
+from edit_pipeline import EditPipeline
 from edit_project_store import EditProjectStore, migrate_project, transition_project
 from edit_quality_service import EditQualityError, EditQualityService
 from edit_storage import EditStorageService, ObjectStorageBackend
@@ -35,6 +37,7 @@ class MultipartS3:
         self.objects = {}
         self.parts = {}
         self.aborted = []
+        self.downloads = []
 
     def create_multipart_upload(self, **kwargs):
         self.parts[(kwargs["Key"], "upload-1")] = []
@@ -65,6 +68,13 @@ class MultipartS3:
 
     def list_objects_v2(self, **kwargs):
         return {"Contents": [{"Key": key, "Size": len(value)} for key, value in self.objects.items()], "IsTruncated": False}
+
+    def download_file(self, bucket, key, destination):
+        self.downloads.append(key)
+        Path(destination).write_bytes(self.objects[key])
+
+    def upload_file(self, source, bucket, key, ExtraArgs=None):
+        self.objects[key] = Path(source).read_bytes()
 
 
 class DurableQueueTests(unittest.TestCase):
@@ -112,6 +122,26 @@ class DurableQueueTests(unittest.TestCase):
         self.queue.finish(running["job_id"])
 
 
+class DurableWorkerHeartbeatTests(unittest.IsolatedAsyncioTestCase):
+    async def test_transient_heartbeat_failure_does_not_kill_liveness(self):
+        class FlakyQueue:
+            calls = 0
+
+            def heartbeat(self, _job_id):
+                self.calls += 1
+                if self.calls == 1:
+                    raise sqlite3.OperationalError("database is locked")
+
+        queue = FlakyQueue()
+        worker = EditJobWorker(queue, {}, heartbeat_seconds=0.01)
+        task = asyncio.create_task(worker._heartbeat(7))
+        await asyncio.sleep(0.08)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertGreaterEqual(queue.calls, 2)
+
+
 class LifecycleAndQualityTests(unittest.TestCase):
     def test_additive_lifecycle_migration_and_state_audit(self):
         legacy = migrate_project({"project_uuid": "a" * 32, "status": "completed", "custom": {"keep": True}})
@@ -134,6 +164,58 @@ class LifecycleAndQualityTests(unittest.TestCase):
             self.assertIn(report["status"], {"passed", "warning"})
             with self.assertRaises(EditQualityError):
                 EditQualityService().validate(source=str(output), plan=plan, output_kind="full", expected_duration=20, require_audio=True)
+
+
+@unittest.skipUnless(__import__("shutil").which("ffmpeg") and __import__("shutil").which("ffprobe"), "ffmpeg required")
+class ObjectWorkingCopyPipelineTests(unittest.TestCase):
+    def test_object_render_downloads_once_validates_uploads_and_cleans_working_copy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            connect = database(root / "history.db")
+            store = EditProjectStore(connect, storage_root=root / "managed")
+            source_file = root / "sample.mp4"
+            subprocess.run([
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=20",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
+                "-t", "3", "-c:v", "libx264", "-c:a", "aac", str(source_file), "-y",
+            ], check=True)
+            s3 = MultipartS3()
+            backend = ObjectStorageBackend(bucket="videos", prefix="ed", client=s3)
+            project_uuid = os.urandom(16).hex()
+            source_key = backend.key(project_uuid, "source.mp4")
+            s3.objects[source_key] = source_file.read_bytes()
+            plan = {
+                "render_timeline": [{"source_start": 0.0, "source_end": 2.5, "action": "keep", "reason": "test"}],
+                "short_timeline": [{"source_start": 0.0, "source_end": 1.5, "action": "short_highlight", "reason": "test"}],
+                "estimated_output_duration": 2.5, "estimated_short_duration": 1.5,
+                "create_short_highlight": True, "enhancements": [],
+            }
+            project_id = store.create(keyword="object staged render", project={
+                "project_uuid": project_uuid, "status": "approved", "approved_version": 1,
+                "source": {
+                    "filename": "source.mp4", "size_bytes": source_file.stat().st_size,
+                    "storage_backend": "object", "object_key": source_key,
+                    "media": {"duration": 3.0, "has_audio": True},
+                },
+                "plan_versions": [{"version": 1, "status": "approved", "plan": plan}],
+            })
+            pipeline = EditPipeline(store)
+            with patch("edit_pipeline.object_storage_from_env", return_value=backend), patch(
+                "edit_pipeline.tempfile.gettempdir", return_value=str(root)
+            ):
+                result = asyncio.run(pipeline.rendering({"job_id": 999, "project_id": project_id}))
+            saved = store.get(project_id)["report"]
+            self.assertEqual(saved["status"], "completed")
+            self.assertGreater(result["render_seconds"], 0)
+            self.assertEqual(set(saved["outputs"]), {"full", "short", "decision"})
+            self.assertTrue(all(value["storage_backend"] == "object" for value in saved["outputs"].values()))
+            self.assertEqual(saved["quality_assurance"]["full"]["status"], "passed")
+            self.assertIn("render_source_download_seconds", saved["timings"])
+            self.assertIn("render_encode_seconds", saved["timings"])
+            self.assertIn("render_storage_upload_seconds", saved["timings"])
+            self.assertEqual(s3.downloads, [source_key])
+            self.assertFalse(list(root.glob("edit-work-*")))
 
 
 class MultipartAndPurgeApiTests(unittest.TestCase):

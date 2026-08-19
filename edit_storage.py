@@ -131,9 +131,17 @@ class ObjectStorageBackend:
             raise ValueError("invalid object filename")
         return "/".join(part for part in (self.prefix, project_uuid, safe_name) if part)
 
-    def upload(self, path: Path, *, project_uuid: str, filename: str) -> str:
+    def upload(
+        self, path: Path, *, project_uuid: str, filename: str,
+        content_type: str | None = None,
+    ) -> str:
         key = self.key(project_uuid, filename)
-        self.client.upload_file(str(path), self.bucket, key)
+        if content_type:
+            self.client.upload_file(
+                str(path), self.bucket, key, ExtraArgs={"ContentType": content_type}
+            )
+        else:
+            self.client.upload_file(str(path), self.bucket, key)
         return key
 
     def upload_bytes(self, data: bytes, *, project_uuid: str, filename: str, content_type: str) -> str:
