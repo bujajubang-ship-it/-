@@ -17,6 +17,10 @@ from strategy_brain.context_builder import (
 )
 from strategy_brain.providers import OpenAIResponsesProvider
 from strategy_brain.retrieval import build_strategy_tool_registry
+from youtube_strategy_context import (
+    YouTubeStrategyContextService,
+    format_strategy_data_context,
+)
 
 
 WORKSHEET_SCHEMA: dict[str, Any] = {
@@ -48,6 +52,7 @@ class WorksheetGenerationResult:
     data: dict[str, Any]
     provider: str
     retrieval_trace: list[dict[str, Any]]
+    retrieval_summary: dict[str, Any]
 
 
 def _openai_settings() -> BrainSettings:
@@ -75,9 +80,13 @@ class WorksheetAIService:
         *,
         brain_factory: Callable[[Any], StrategyBrain] | None = None,
         legacy_factory: Callable[[], Any] | None = None,
+        strategy_context_service: Any | None = None,
     ) -> None:
         self._brain_factory = brain_factory
         self._legacy_factory = legacy_factory
+        self._strategy_context_service = (
+            strategy_context_service or YouTubeStrategyContextService()
+        )
 
     async def generate(
         self,
@@ -95,6 +104,9 @@ class WorksheetAIService:
             f"{keyword} 영상 기획. 외식창업자 고객 문제, low data 검증, "
             "비즈니스PT 원칙, 부자주방 브랜드 전략, 과거 유사 영상과 워크시트"
         )
+
+        strategy_context = await self._strategy_context_service.collect()
+        live_context = format_strategy_data_context(strategy_context)
 
         try:
             intent, prefetched = await prefetch_strategy_evidence(
@@ -150,6 +162,8 @@ ViewTrap: {_compact(viewtrap_refs or {}, 7000)}
 
 {evidence_context}
 
+{live_context}
+
 확인된 자료만 근거로 부자주방 촬영 워크시트를 작성하세요. 부자주방은 단순 제품 판매가 아니라
 주방 설계·동선·납품·시공·A/S까지 보는 현장형 주방 솔루션 브랜드입니다.
 low data 원칙에 따라 표본이 작거나 데이터가 없으면 그 사실을 memo에 명시하고 숫자를 만들지 마세요.
@@ -193,7 +207,12 @@ introScript는 첫 30초 안에 제목·썸네일 약속을 회수하고, bodySc
                 raise RuntimeError("GPT worksheet output was not valid structured data")
             data = dict(response.parsed)
             data["keyword"] = data.get("keyword") or keyword
-            return WorksheetGenerationResult(data, "openai", list(registry.trace))
+            return WorksheetGenerationResult(
+                data,
+                "openai",
+                list(registry.trace),
+                strategy_context.retrieval_summary,
+            )
         except Exception:
             if self._legacy_factory is None:
                 raise RuntimeError("워크시트 AI 작성에 실패했습니다. 잠시 후 다시 시도해 주세요.")
@@ -202,4 +221,11 @@ introScript는 첫 30초 안에 제목·썸네일 약속을 회수하고, bodySc
                 keyword, ref_videos or None, naver or None, viewtrap_refs,
                 knowledge or None, brief,
             )
-            return WorksheetGenerationResult(data, "anthropic_legacy_fallback", list(registry.trace))
+            summary = dict(strategy_context.retrieval_summary)
+            summary["provider"] = "anthropic_legacy_fallback"
+            return WorksheetGenerationResult(
+                data,
+                "anthropic_legacy_fallback",
+                list(registry.trace),
+                summary,
+            )

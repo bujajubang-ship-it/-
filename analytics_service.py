@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import re
 from datetime import date
 from typing import Any, Dict, Iterable, List, Sequence
 
@@ -14,6 +15,8 @@ import httpx
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 ANALYTICS_URL = "https://youtubeanalytics.googleapis.com/v2/reports"
 YOUTUBE_CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
+YOUTUBE_PLAYLIST_ITEMS_URL = "https://www.googleapis.com/youtube/v3/playlistItems"
+YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 
 STATUS_AVAILABLE = "available"
 STATUS_PENDING = "pending"
@@ -78,6 +81,34 @@ FLAT_NAMES = {
 
 class AnalyticsApiError(RuntimeError):
     """Sanitized Analytics failure that never includes tokens or response bodies."""
+
+    def __init__(self, message: str, *, code: str = "api_error") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _env_first(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _duration_seconds(value: str) -> int | None:
+    match = re.fullmatch(
+        r"P(?:(?P<days>\d+)D)?(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?",
+        str(value or ""),
+    )
+    if not match:
+        return None
+    parts = {key: int(raw or 0) for key, raw in match.groupdict().items()}
+    return (
+        parts["days"] * 86400
+        + parts["hours"] * 3600
+        + parts["minutes"] * 60
+        + parts["seconds"]
+    )
 
 
 def metric_value(
@@ -355,15 +386,47 @@ def chunked(values: Sequence[str], size: int) -> Iterable[Sequence[str]]:
 
 class AnalyticsService:
     def __init__(self, *, http: httpx.AsyncClient | None = None):
-        self.client_id = os.getenv("OAUTH_CLIENT_ID", "")
-        self.client_secret = os.getenv("OAUTH_CLIENT_SECRET", "")
-        self.refresh_token = os.getenv("OAUTH_REFRESH_TOKEN", "")
+        # The channel-analysis flow historically used OAUTH_*. Render's
+        # dedicated Analytics connector uses the clearer GOOGLE_*/YOUTUBE_*
+        # names. Both are accepted without ever logging the resolved values.
+        self.client_id = _env_first("GOOGLE_CLIENT_ID", "OAUTH_CLIENT_ID")
+        self.client_secret = _env_first("GOOGLE_CLIENT_SECRET", "OAUTH_CLIENT_SECRET")
+        self.refresh_token = _env_first(
+            "YOUTUBE_ANALYTICS_REFRESH_TOKEN", "OAUTH_REFRESH_TOKEN"
+        )
+        self.scopes = {
+            item.strip()
+            for item in re.split(
+                r"[\s,]+", os.getenv("YOUTUBE_ANALYTICS_SCOPES", "").strip()
+            )
+            if item.strip()
+        }
         self._access_token = ""
         self.http = http or httpx.AsyncClient(timeout=30.0)
         self._owns_http = http is None
 
     def is_configured(self) -> bool:
         return bool(self.client_id and self.client_secret and self.refresh_token)
+
+    def configuration_status(self) -> Dict[str, Any]:
+        missing = []
+        if not self.client_id:
+            missing.append("client_id")
+        if not self.client_secret:
+            missing.append("client_secret")
+        if not self.refresh_token:
+            missing.append("refresh_token")
+        return {
+            "configured": not missing,
+            "missing": missing,
+            "analytics_scope_declared": any(
+                "yt-analytics.readonly" in scope for scope in self.scopes
+            ),
+            "youtube_readonly_scope_declared": any(
+                scope.endswith("/youtube.readonly") or scope == "youtube.readonly"
+                for scope in self.scopes
+            ),
+        }
 
     async def _get_access_token(self) -> str:
         if self._access_token:
@@ -378,8 +441,24 @@ class AnalyticsService:
                     "grant_type": "refresh_token",
                 },
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                error_name = ""
+                try:
+                    error_name = str(response.json().get("error") or "")
+                except (ValueError, AttributeError):
+                    pass
+                code = (
+                    "invalid_refresh_token"
+                    if error_name in {"invalid_grant", "invalid_token"}
+                    or response.status_code == 401
+                    else "api_error"
+                )
+                raise AnalyticsApiError(
+                    "OAuth access token request failed", code=code
+                )
             token = response.json().get("access_token")
+        except AnalyticsApiError:
+            raise
         except (httpx.HTTPError, ValueError) as exc:
             raise AnalyticsApiError("OAuth access token request failed") from exc
         if not token:
@@ -411,7 +490,8 @@ class AnalyticsService:
                     await asyncio.sleep(0.5 * (2**attempt))
                     continue
                 raise AnalyticsApiError(
-                    f"YouTube Analytics query failed with HTTP {status_code}"
+                    f"YouTube Analytics query failed with HTTP {status_code}",
+                    code="insufficient_scope" if status_code in {401, 403} else "api_error",
                 ) from exc
             except (httpx.HTTPError, ValueError) as exc:
                 raise AnalyticsApiError("YouTube Analytics query failed") from exc
@@ -432,14 +512,95 @@ class AnalyticsService:
             response.raise_for_status()
             items = response.json().get("items") or []
         except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
             raise AnalyticsApiError(
-                f"YouTube owner channel lookup failed with HTTP {exc.response.status_code}"
+                f"YouTube owner channel lookup failed with HTTP {status}",
+                code="insufficient_scope" if status in {401, 403} else "api_error",
             ) from exc
         except (httpx.HTTPError, ValueError, AttributeError) as exc:
             raise AnalyticsApiError("YouTube owner channel lookup failed") from exc
         if not items or not items[0].get("id"):
             raise AnalyticsApiError("OAuth account did not return an owned YouTube channel")
         return str(items[0]["id"])
+
+    async def get_recent_upload_videos(self, *, limit: int = 30) -> List[Dict[str, Any]]:
+        """Return the OAuth owner's newest uploads without requiring an API key."""
+
+        limit = max(1, min(int(limit), 50))
+        token = await self._get_access_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            channel_response = await self.http.get(
+                YOUTUBE_CHANNELS_URL,
+                params={"part": "contentDetails", "mine": "true", "maxResults": 1},
+                headers=headers,
+            )
+            channel_response.raise_for_status()
+            channel_items = channel_response.json().get("items") or []
+            uploads_id = (
+                (((channel_items[0] if channel_items else {}).get("contentDetails") or {})
+                 .get("relatedPlaylists") or {})
+                .get("uploads")
+            )
+            if not uploads_id:
+                return []
+            playlist_response = await self.http.get(
+                YOUTUBE_PLAYLIST_ITEMS_URL,
+                params={
+                    "part": "contentDetails,snippet",
+                    "playlistId": uploads_id,
+                    "maxResults": limit,
+                },
+                headers=headers,
+            )
+            playlist_response.raise_for_status()
+            playlist_items = playlist_response.json().get("items") or []
+            ordered_ids = [
+                str((item.get("contentDetails") or {}).get("videoId") or "")
+                for item in playlist_items
+            ]
+            ordered_ids = [video_id for video_id in ordered_ids if video_id]
+            if not ordered_ids:
+                return []
+            videos_response = await self.http.get(
+                YOUTUBE_VIDEOS_URL,
+                params={
+                    "part": "snippet,contentDetails",
+                    "id": ",".join(ordered_ids),
+                    "maxResults": len(ordered_ids),
+                },
+                headers=headers,
+            )
+            videos_response.raise_for_status()
+            details = {
+                str(item.get("id") or ""): item
+                for item in (videos_response.json().get("items") or [])
+            }
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            raise AnalyticsApiError(
+                f"YouTube uploads lookup failed with HTTP {status}",
+                code="insufficient_scope" if status in {401, 403} else "api_error",
+            ) from exc
+        except (httpx.HTTPError, ValueError, AttributeError) as exc:
+            raise AnalyticsApiError("YouTube uploads lookup failed") from exc
+
+        result = []
+        for video_id in ordered_ids:
+            item = details.get(video_id) or {}
+            snippet = item.get("snippet") or {}
+            result.append(
+                {
+                    "video_id": video_id,
+                    "title": str(snippet.get("title") or ""),
+                    "published_at": str(snippet.get("publishedAt") or "")[:10] or None,
+                    "duration_seconds": _duration_seconds(
+                        str((item.get("contentDetails") or {}).get("duration") or "")
+                    ),
+                    "source": "youtube_data_api_v3:oauth_uploads",
+                }
+            )
+        return result
 
     async def _query_all_rows(
         self, params: Dict[str, Any], *, page_size: int = 200
@@ -619,6 +780,24 @@ class AnalyticsService:
                 ),
                 "dimensions": "month",
                 "sort": "month",
+            }
+        )
+
+    async def get_channel_snapshot(
+        self, *, start_date: str, end_date: str | None = None
+    ) -> Dict[str, Any]:
+        """One aggregate channel row for an arbitrary rolling date range."""
+
+        return await self._query(
+            {
+                "ids": "channel==MINE",
+                "startDate": start_date,
+                "endDate": end_date or date.today().isoformat(),
+                "metrics": (
+                    "views,estimatedMinutesWatched,averageViewDuration,"
+                    "averageViewPercentage,likes,comments,shares,"
+                    "subscribersGained"
+                ),
             }
         )
 

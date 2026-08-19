@@ -1736,13 +1736,15 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
                           "주제": _topic, "파일명": filename,
                           "provider": analysis_result.provider,
                           "transcription_provider": transcription.provider,
-                          "retrieval_trace": analysis_result.retrieval_trace})
+                          "retrieval_trace": analysis_result.retrieval_trace,
+                          "retrieval_summary": analysis_result.retrieval_summary})
             _vf_backup()   # /data/history.db가 원본이며 KV는 승인된 수동 복구용 보조 사본이다.
             yield sse({
                 "step": "done", "transcript": transcript, "feedback": feedback,
                 "provider": analysis_result.provider,
                 "transcription_provider": transcription.provider,
                 "retrieval_trace": analysis_result.retrieval_trace,
+                "retrieval_summary": analysis_result.retrieval_summary,
             })
 
         except Exception as e:
@@ -3413,6 +3415,7 @@ async def worksheet_autofill(request: Request):
                 "step": "done", "id": row_id, "data": data, "keyword": kw,
                 "provider": generation.provider,
                 "retrieval_trace": generation.retrieval_trace,
+                "retrieval_summary": generation.retrieval_summary,
             })
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})

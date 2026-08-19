@@ -18,6 +18,10 @@ from strategy_brain import BrainSettings, StrategyBrain, StrategyMode
 from strategy_brain.context_builder import format_prefetched_evidence, prefetch_strategy_evidence
 from strategy_brain.providers import OpenAIResponsesProvider
 from strategy_brain.retrieval import build_strategy_tool_registry
+from youtube_strategy_context import (
+    YouTubeStrategyContextService,
+    format_strategy_data_context,
+)
 
 
 VIDEO_FEEDBACK_SCHEMA: dict[str, Any] = {
@@ -82,6 +86,7 @@ class VideoFeedbackResult:
     feedback: dict[str, Any]
     provider: str
     retrieval_trace: list[dict[str, Any]]
+    retrieval_summary: dict[str, Any]
 
 
 def _mmss(seconds: Any) -> str:
@@ -118,11 +123,15 @@ class VideoFeedbackService:
         http_client_factory: Callable[..., Any] | None = None,
         brain_factory: Callable[[Any], StrategyBrain] | None = None,
         legacy_factory: Callable[[], Any] | None = None,
+        strategy_context_service: Any | None = None,
     ) -> None:
         self._openai_client = openai_client
         self._http_client_factory = http_client_factory or httpx.AsyncClient
         self._brain_factory = brain_factory
         self._legacy_factory = legacy_factory
+        self._strategy_context_service = (
+            strategy_context_service or YouTubeStrategyContextService()
+        )
 
     async def transcribe(self, audio_path: str | Path) -> TranscriptionResult:
         direct_error: Exception | None = None
@@ -178,6 +187,8 @@ class VideoFeedbackService:
             f"{topic or '업로드 영상'} 영상 피드백. 부자주방 브랜드 신뢰, 첫 30초 retention, "
             "과거 유사 영상, 비즈니스PT 지식, 제목 썸네일 약속"
         )
+        strategy_context = await self._strategy_context_service.collect()
+        live_context = format_strategy_data_context(strategy_context)
         try:
             intent, prefetched = await prefetch_strategy_evidence(query, [], registry)
             evidence_context = format_prefetched_evidence(intent, prefetched)
@@ -206,6 +217,8 @@ class VideoFeedbackService:
 
 {evidence_context}
 
+{live_context}
+
 이 화면은 기존 영상 피드백 탭이므로 현재 제공된 자막과 확인된 채널 근거만 사용하세요.
 없는 화면을 봤다고 주장하지 말고, 화면 확인이 필요한 판단은 명시하세요.
 일반적인 조언보다 실제 부자주방 retention, 유사 영상 성과, CTR/제목 약속,
@@ -224,10 +237,22 @@ cuts는 삭제 확정이 아니라 검토할 축약 후보로 표현하고, titl
             response = await brain.run(request)
             if not isinstance(response.parsed, dict):
                 raise RuntimeError("invalid structured feedback")
-            return VideoFeedbackResult(response.parsed, "openai_internal", list(registry.trace))
+            return VideoFeedbackResult(
+                response.parsed,
+                "openai",
+                list(registry.trace),
+                strategy_context.retrieval_summary,
+            )
         except Exception:
             if self._legacy_factory is None:
                 raise RuntimeError("AI 영상 피드백 생성에 실패했습니다. 잠시 후 다시 시도해 주세요.")
             legacy = self._legacy_factory()
             feedback = await legacy.analyze_video_feedback(timed_transcript, knowledge or None)
-            return VideoFeedbackResult(feedback, "anthropic_legacy_fallback", list(registry.trace))
+            summary = dict(strategy_context.retrieval_summary)
+            summary["provider"] = "anthropic_legacy_fallback"
+            return VideoFeedbackResult(
+                feedback,
+                "anthropic_legacy_fallback",
+                list(registry.trace),
+                summary,
+            )
