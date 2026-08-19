@@ -248,11 +248,13 @@ class EditJobWorker:
     def __init__(
         self, queue: EditJobQueue, handlers: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any] | None]]],
         *, allowed_types: set[str] | None = None, poll_seconds: float = 2.0,
+        heartbeat_seconds: float = 15.0,
     ) -> None:
         self.queue = queue
         self.handlers = handlers
         self.allowed_types = allowed_types
         self.poll_seconds = max(0.1, poll_seconds)
+        self.heartbeat_seconds = max(0.01, heartbeat_seconds)
         self.worker_id = f"{socket.gethostname()}:{os.getpid()}:media"
         self._task: asyncio.Task | None = None
 
@@ -303,5 +305,14 @@ class EditJobWorker:
 
     async def _heartbeat(self, job_id: int) -> None:
         while True:
-            await asyncio.sleep(15)
-            await asyncio.to_thread(self.queue.heartbeat, job_id)
+            await asyncio.sleep(self.heartbeat_seconds)
+            try:
+                await asyncio.to_thread(self.queue.heartbeat, job_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A short SQLite lock or disk hiccup must not permanently kill
+                # the liveness task.  The next interval repairs the heartbeat,
+                # preventing a healthy long render from being recovered twice
+                # after a deploy.
+                continue
