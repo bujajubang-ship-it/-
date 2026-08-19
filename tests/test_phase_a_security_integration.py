@@ -1,4 +1,3 @@
-import glob
 import importlib
 import os
 import sys
@@ -40,6 +39,7 @@ class PhaseASecurityIntegrationTests(unittest.TestCase):
                 "OPENAI_API_KEY": "",
                 "DB_BACKEND": "sqlite",
                 "DB_PATH": str(Path(cls.temp_dir.name) / "phase-a.db"),
+                "VIDEO_FEEDBACK_ROOT": str(Path(cls.temp_dir.name) / "video-feedback"),
             },
             clear=False,
         )
@@ -227,22 +227,33 @@ class PhaseASecurityIntegrationTests(unittest.TestCase):
         self.assertIn('"provider": "anthropic"', response.text)
         self.assertIn('"token": "fallback-ok"', response.text)
 
-    def test_authenticated_multipart_video_upload_reaches_stream_and_cleans_temp_file(self):
+    def test_authenticated_multipart_video_upload_returns_background_job(self):
         client, _ = self.authenticated_client()
-        before = set(glob.glob("/tmp/vf_*.mp4"))
         response = client.post(
             "/api/video-feedback",
             data={"topic": "인증 테스트"},
             files={"file": ("sample.mp4", b"test-video-body", "video/mp4")},
         )
-        after = set(glob.glob("/tmp/vf_*.mp4"))
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.headers["content-type"].startswith("application/json"))
         self.assertNotIn("ANTHROPIC_API_KEY", response.text)
         self.assertNotIn("CNMAKER_BASE", response.text)
         self.assertNotIn("CNMAKER_SECRET", response.text)
-        self.assertIn('"step": "error"', response.text)
-        self.assertEqual(after, before)
+        payload = response.json()
+        self.assertTrue(payload["job_id"])
+        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(
+            payload["status_url"],
+            f"/api/video-feedback/jobs/{payload['job_id']}",
+        )
+        job = self.main.VIDEO_FEEDBACK_JOBS.store.get(
+            payload["job_id"], include_private=True
+        )
+        self.assertEqual(job["status"], "queued")
+        source_path = Path(job["source_path"])
+        self.assertEqual(source_path.read_bytes(), b"test-video-body")
+        source_path.unlink()
+        source_path.parent.rmdir()
 
     def test_pipeline_remind_keeps_cookie_free_machine_auth(self):
         client = self.client()
