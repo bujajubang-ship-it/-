@@ -9,6 +9,11 @@ from ..config import BrainSettings
 from ..contracts import BrainRequest, BrainResult, EvidenceEnvelope, ToolExecutor
 
 
+_PROMPT_CACHE_REQUEST_KEYS = frozenset(
+    {"prompt_cache_key", "prompt_cache_options", "prompt_cache_retention", "ttl"}
+)
+
+
 def _dump_output_item(item: Any) -> dict[str, Any]:
     if isinstance(item, dict):
         return item
@@ -92,6 +97,60 @@ class OpenAIResponsesProvider:
         return kwargs
 
     @staticmethod
+    def _sanitize_request_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Keep explicit prompt-cache controls out of every Responses call.
+
+        The OpenAI SDK exposes cache arguments and merges ``extra_body`` after
+        normal parameters.  This application relies on implicit caching, so
+        neither surface is allowed to add model-specific cache controls.
+        """
+
+        sanitized = {
+            key: value
+            for key, value in kwargs.items()
+            if key not in _PROMPT_CACHE_REQUEST_KEYS
+        }
+        extra_body = sanitized.get("extra_body")
+        if isinstance(extra_body, dict):
+            def strip_cache_fields(value: Any) -> Any:
+                if isinstance(value, dict):
+                    return {
+                        key: strip_cache_fields(item)
+                        for key, item in value.items()
+                        if key not in _PROMPT_CACHE_REQUEST_KEYS
+                        and not key.startswith("prompt_cache_")
+                    }
+                if isinstance(value, list):
+                    return [strip_cache_fields(item) for item in value]
+                return value
+
+            cleaned_extra = strip_cache_fields(extra_body)
+            if cleaned_extra:
+                sanitized["extra_body"] = cleaned_extra
+            else:
+                sanitized.pop("extra_body", None)
+        return sanitized
+
+    def _final_request_kwargs(
+        self,
+        request: BrainRequest,
+        input_items: str | list[dict[str, Any]],
+        *,
+        stream: bool = False,
+    ) -> dict[str, Any]:
+        """Build the exact kwargs passed to ``responses.create``.
+
+        This is deliberately the last merge point before the SDK call so a
+        wrapper, test hook, or future request builder cannot reintroduce cache
+        fields after sanitization.
+        """
+
+        kwargs = self._request_kwargs(request, input_items)
+        if stream:
+            kwargs["stream"] = True
+        return self._sanitize_request_kwargs(kwargs)
+
+    @staticmethod
     def _normalise_input(value: str | list[dict[str, Any]]) -> list[dict[str, Any]]:
         if isinstance(value, str):
             return [{"role": "user", "content": value}]
@@ -138,9 +197,8 @@ class OpenAIResponsesProvider:
         total_tool_calls = 0
 
         for _ in range(self.settings.max_tool_rounds):
-            response = await self.client.responses.create(
-                **self._request_kwargs(request, input_items)
-            )
+            request_kwargs = self._final_request_kwargs(request, input_items)
+            response = await self.client.responses.create(**request_kwargs)
             calls = self._function_calls(response)
             if not calls:
                 status = getattr(response, "status", "completed")
@@ -180,9 +238,10 @@ class OpenAIResponsesProvider:
 
         input_items = self._normalise_input(request.input)
         for _ in range(self.settings.max_tool_rounds):
-            stream = await self.client.responses.create(
-                **self._request_kwargs(request, input_items), stream=True
+            request_kwargs = self._final_request_kwargs(
+                request, input_items, stream=True
             )
+            stream = await self.client.responses.create(**request_kwargs)
             completed = None
             visible_parts: list[str] = []
             async for event in stream:

@@ -95,6 +95,46 @@ class ToolRegistryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OpenAIProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prompt_cache_controls_are_never_sent(self):
+        response = SimpleNamespace(
+            id="resp_cache_safe", output=[], output_text="ok", usage={}
+        )
+        client = FakeClient([response])
+        provider = OpenAIResponsesProvider(
+            settings=BrainSettings(provider="openai"), client=client
+        )
+        original_builder = provider._request_kwargs
+
+        def injected(request, input_items):
+            kwargs = original_builder(request, input_items)
+            kwargs["prompt_cache_retention"] = "24h"
+            kwargs["prompt_cache_key"] = "test-key"
+            kwargs["prompt_cache_options"] = {"ttl": "24h"}
+            kwargs["ttl"] = "24h"
+            kwargs["extra_body"] = {
+                "prompt_cache_retention": "24h",
+                "prompt_cache_key": "test-key",
+                "prompt_cache_options": {"ttl": "24h"},
+                "cache_wrapper": {"ttl": "24h", "safe_nested": True},
+                "safe_extension": True,
+            }
+            return kwargs
+
+        provider._request_kwargs = injected
+        request = StrategyBrain(provider).build_request(
+            StrategyMode.STRATEGY_CHAT, "test", "reply"
+        )
+        result = await provider.generate(request)
+
+        call = client.responses.calls[0]
+        self.assertEqual(result.text, "ok")
+        for key in ("prompt_cache_retention", "prompt_cache_key", "prompt_cache_options", "ttl"):
+            self.assertNotIn(key, call)
+            self.assertNotIn(key, call["extra_body"])
+        self.assertNotIn("ttl", call["extra_body"]["cache_wrapper"])
+        self.assertTrue(call["extra_body"]["cache_wrapper"]["safe_nested"])
+        self.assertTrue(call["extra_body"]["safe_extension"])
+
     async def test_structured_request_uses_model_effort_and_schema(self):
         response = SimpleNamespace(
             id="resp_1",

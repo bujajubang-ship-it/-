@@ -53,6 +53,8 @@ from edit_learning_service import (
     record_approved_edit_memory,
 )
 from viewtrap_service import ViewTrapService
+from worksheet_ai_service import WorksheetAIService
+from video_feedback_service import VideoFeedbackService
 from heatmap_service import fetch_heatmap, summarize_for_prompt
 from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
 from database import (init_db, save_history, list_history, get_history, delete_history,
@@ -1650,11 +1652,6 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
             f_out.write(chunk)
 
     async def stream():
-        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-            yield sse({"step": "error", "message": ".env 파일에 ANTHROPIC_API_KEY를 설정해주세요."})
-            cleanup_temp_files()
-            return
-
         try:
             # 1. 파일 저장 완료 알림
             yield sse({"step": "uploading", "message": "영상 파일 저장 완료, 파일 검사 중..."})
@@ -1698,45 +1695,29 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
             if result.returncode != 0:
                 raise RuntimeError(f"ffmpeg 오류: {result.stderr[-500:]}")
 
-            # 3. OpenAI 받아쓰기 API (로컬 Whisper 대신 — 메모리 OOM 없이 안정적, 타임스탬프 확보)
-            yield sse({"step": "transcribing", "message": "자막 추출 중... (OpenAI 받아쓰기)"})
+            # 3. 기본 OpenAI 받아쓰기, CNMAKER는 설정된 경우에만 외부 fallback
+            yield sse({"step": "transcribing", "message": "영상 음성을 타임코드별로 분석 중..."})
             sz = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
             if sz > 24 * 1024 * 1024:
                 raise RuntimeError(f"오디오가 너무 큽니다 ({sz//1024//1024}MB). 약 60분 이내로 나눠서 올려주세요.")
-            # cnmaker(Lightsail)의 OpenAI 키로 받아쓰기 — 키를 Render로 옮기지 않고 Lightsail이 대신 호출
-            async def _transcribe():
-                if not _KV_BASE or not _KV_SECRET:
-                    raise RuntimeError("CNMAKER_BASE 또는 CNMAKER_SECRET이 설정되지 않았습니다.")
-                with open(audio_path, "rb") as af:
-                    data = af.read()
-                async with httpx.AsyncClient(timeout=600) as c:
-                    return await c.post(
-                        f"{_KV_BASE}/transcribe",
-                        headers={"x-secret": _KV_SECRET, "Content-Type": "application/octet-stream"},
-                        content=data,
-                    )
-            _tt = asyncio.create_task(_transcribe())
+            feedback_service = VideoFeedbackService(
+                legacy_factory=(lambda: Analyzer())
+                if os.getenv("ANTHROPIC_API_KEY", "").strip() else None
+            )
+            _tt = asyncio.create_task(feedback_service.transcribe(audio_path))
             while not _tt.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(5)
-            r_tr = _tt.result()
-            if r_tr.status_code != 200:
-                raise RuntimeError(f"받아쓰기 오류: {r_tr.text[:200]}")
-            tj = r_tr.json()
-            transcript = (tj.get("text") or "").strip()
-            if not transcript:
-                raise RuntimeError("자막을 추출하지 못했어요. 음성이 없는 영상일 수 있습니다.")
-            # 타임스탬프 자막(편집 가이드용): [분:초] 대사
-            def _mmss(s):
-                s = int(s or 0); return f"{s//60}:{s%60:02d}"
-            segs = tj.get("segments") or []
-            timed = "\n".join(f"[{_mmss(sg.get('start'))}] {(sg.get('text') or '').strip()}" for sg in segs) if segs else transcript
+            transcription = _tt.result()
+            transcript = transcription.text
+            timed = transcription.timed_text
 
-            # 4. Claude AI 분석 (지식탭 강의 적용 + 타임스탬프 기반 편집 가이드)
-            yield sse({"step": "analyzing", "message": "AI 편집 피드백 분석 중... (지식탭 적용)"})
-            analyzer = Analyzer()
+            # 4. 내부 GPT business review (채널 근거 + 지식 + 타임스탬프)
+            yield sse({"step": "analyzing", "message": "채널 성과·비즈니스PT 지식과 영상을 비교 중..."})
             kb = list_knowledge(active_only=True)
-            _task = asyncio.create_task(analyzer.analyze_video_feedback(timed, kb))
+            _task = asyncio.create_task(
+                feedback_service.analyze(timed, topic=(topic or "").strip(), knowledge=kb)
+            )
             waited = 0
             while not _task.done():
                 # 경과 초를 계속 갱신해 '멈춘 것처럼' 보이지 않게
@@ -1746,14 +1727,23 @@ async def video_feedback(file: UploadFile = File(...), topic: str = Form("")):
                 if waited > 240:
                     _task.cancel()
                     raise RuntimeError("AI 편집 분석이 오래 걸려 중단했어요. 잠시 후 다시 시도해 주세요.")
-            feedback = _task.result()
+            analysis_result = _task.result()
+            feedback = analysis_result.feedback
 
             _topic = (topic or "").strip()[:60]
             save_history("video_feedback", _topic or filename,
                          {"transcript": transcript, "feedback": feedback,
-                          "주제": _topic, "파일명": filename})
+                          "주제": _topic, "파일명": filename,
+                          "provider": analysis_result.provider,
+                          "transcription_provider": transcription.provider,
+                          "retrieval_trace": analysis_result.retrieval_trace})
             _vf_backup()   # /data/history.db가 원본이며 KV는 승인된 수동 복구용 보조 사본이다.
-            yield sse({"step": "done", "transcript": transcript, "feedback": feedback})
+            yield sse({
+                "step": "done", "transcript": transcript, "feedback": feedback,
+                "provider": analysis_result.provider,
+                "transcription_provider": transcription.provider,
+                "retrieval_trace": analysis_result.retrieval_trace,
+            })
 
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
@@ -3327,7 +3317,7 @@ def _yt_video_id(url: str) -> str:
 @app.post("/api/worksheet/autofill")
 async def worksheet_autofill(request: Request):
     """레퍼런스 영상(링크+사용자가 붙여넣은 스크립트) + 댓글·썸네일(비전)·카페·ViewTrap →
-    Opus 4.8가 워크시트 카드 자동 작성. (서버 스크래핑 없음 — 사용자가 스크립트 제공)"""
+    GPT Strategy Brain이 워크시트 카드를 자동 작성한다. (사용자가 스크립트 제공)"""
     body = await request.json()
     keyword = (body.get("keyword") or "").strip()
     brief = (body.get("brief") or "").strip()  # 이번 영상 핵심 내용
@@ -3337,8 +3327,11 @@ async def worksheet_autofill(request: Request):
     naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
 
     async def stream():
-        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-            yield sse({"step": "error", "message": ".env에 ANTHROPIC_API_KEY를 설정해주세요."})
+        if not (
+            os.getenv("OPENAI_API_KEY", "").strip()
+            or os.getenv("ANTHROPIC_API_KEY", "").strip()
+        ):
+            yield sse({"step": "error", "message": "AI provider 연결이 설정되어 있지 않습니다."})
             return
 
         ref_videos = []
@@ -3361,6 +3354,18 @@ async def worksheet_autofill(request: Request):
                     v["script"] = id_to_script.get(v["id"], "")
                 ref_videos = vids
                 yield sse({"step": "fetched", "message": f"레퍼런스 {len(ref_videos)}개 수집 완료 (스크립트 {sum(1 for v in ref_videos if v.get('script'))}개 포함)"})
+            # Data API가 설정되지 않았거나 메타데이터 조회가 비어도 사용자가
+            # 직접 제공한 레퍼런스 스크립트는 GPT 기획 근거에서 잃지 않는다.
+            fetched_ids = {str(video.get("id") or "") for video in ref_videos}
+            for source in refs_in:
+                vid = _yt_video_id(source.get("url", ""))
+                script = (source.get("script") or "").strip()
+                if vid and vid not in fetched_ids and script:
+                    ref_videos.append({
+                        "id": vid, "title": "(사용자 제공 레퍼런스)",
+                        "url": source.get("url", ""), "script": script,
+                        "comments": [],
+                    })
 
             # 키워드 미지정 시 첫 레퍼런스 영상 제목에서 보완
             kw = keyword or (ref_videos[0]["title"] if ref_videos else "")
@@ -3385,21 +3390,30 @@ async def worksheet_autofill(request: Request):
                 except Exception:
                     pass
 
-            # 4) AI 작성 (썸네일 비전 + 실제 스크립트 + 키컨텐츠 강의 지식)
-            knowledge = [k for k in list_knowledge(active_only=True)
-                         if k.get("category") in ("키컨텐츠", "원고작성")]
-            yield sse({"step": "writing", "message": "Opus 4.8가 썸네일 분석 + 워크시트 작성 중... (30~60초)"})
-            analyzer = Analyzer()
-            _task = asyncio.create_task(analyzer.autofill_worksheet(
-                kw, ref_videos or None, naver_results or None, viewtrap_refs, knowledge or None, brief))
+            # 4) OpenAI Strategy Brain 작성. CNMAKER와 완전히 분리된 경로다.
+            knowledge = list_knowledge(active_only=True)
+            yield sse({"step": "writing", "message": "GPT가 채널 데이터·비즈니스PT·레퍼런스를 연결해 워크시트를 작성 중..."})
+            service = WorksheetAIService(
+                legacy_factory=(lambda: Analyzer())
+                if os.getenv("ANTHROPIC_API_KEY", "").strip() else None
+            )
+            _task = asyncio.create_task(service.generate(
+                kw, ref_videos or None, naver_results or None, viewtrap_refs,
+                knowledge or None, brief,
+            ))
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)
-            data = _task.result()
+            generation = _task.result()
+            data = generation.data
             if "keyword" not in data:
                 data["keyword"] = kw
             row_id = create_worksheet_row(json.dumps(data, ensure_ascii=False))
-            yield sse({"step": "done", "id": row_id, "data": data, "keyword": kw})
+            yield sse({
+                "step": "done", "id": row_id, "data": data, "keyword": kw,
+                "provider": generation.provider,
+                "retrieval_trace": generation.retrieval_trace,
+            })
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
         finally:
