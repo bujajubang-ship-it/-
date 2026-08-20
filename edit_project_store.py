@@ -245,6 +245,12 @@ def public_project(row: dict[str, Any]) -> dict[str, Any]:
     transcript = project.get("transcript") or {}
     text = str(transcript.pop("text", "") or "")
     transcript["preview"] = text[:4000]
+    for chunk in project.get("transcript_chunks") or []:
+        if not isinstance(chunk, dict):
+            continue
+        chunk_transcript = chunk.get("transcript") or {}
+        chunk_transcript.pop("text", None)
+        chunk_transcript.pop("segments", None)
     project.pop("evidence_snapshot", None)
     project.pop("strategy_snapshot", None)
     upload = project.get("upload") or {}

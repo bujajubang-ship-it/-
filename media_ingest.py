@@ -8,8 +8,9 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 
@@ -347,7 +348,9 @@ class MediaIngestService:
         return {"text": text[:200_000], "segments": segments[:5000], "provider": provider}
 
     async def inspect_and_transcribe(
-        self, path: str | Path, media: dict[str, Any], *, work_dir: Path | None = None
+        self, path: str | Path, media: dict[str, Any], *, work_dir: Path | None = None,
+        existing_chunks: list[dict[str, Any]] | None = None,
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, float]], list[float]]:
         if not media.get("has_audio"):
             raise TranscriptionError("오디오 트랙이 없어 대화 기반 편집 분석을 진행할 수 없습니다.")
@@ -357,15 +360,46 @@ class MediaIngestService:
         silence_task = asyncio.to_thread(self.detect_silences_chunked, path, duration)
         scene_task = asyncio.to_thread(self.detect_scenes, path, duration)
         chunk_seconds = max(600, min(1800, int(os.getenv("EDIT_TRANSCRIPT_CHUNK_SECONDS", "1200"))))
-        transcripts = []
+        chunk_ranges = [
+            (index, float(start), min(float(chunk_seconds), duration - start))
+            for index, start in enumerate(range(0, max(1, int(duration)), chunk_seconds))
+            if min(float(chunk_seconds), duration - start) > 0
+        ]
+        cached = {
+            int(item.get("chunk_index") or 0): item
+            for item in (existing_chunks or [])
+            if item.get("status") == "completed" and (item.get("transcript") or {}).get("segments")
+        }
+        transcripts: list[dict[str, Any]] = []
+
+        async def report(**values: Any) -> None:
+            if on_progress is not None:
+                await on_progress({
+                    "total_chunks": len(chunk_ranges),
+                    "completed_chunks": len(cached),
+                    **values,
+                })
+
+        await report(
+            stage="transcribing", current_chunk=None,
+            pending_operation=None, checkpoint="TRANSCRIPT_PLANNED",
+        )
         try:
-            for index, start in enumerate(range(0, max(1, int(duration)), chunk_seconds)):
-                length = min(float(chunk_seconds), duration - start)
-                if length <= 0:
-                    break
+            for index, start, length in chunk_ranges:
+                if index in cached:
+                    transcripts.append(dict(cached[index]["transcript"]))
+                    continue
                 audio_path = directory / f"analysis_audio_{index:03d}.mp3"
+                await report(
+                    current_chunk=index + 1, pending_operation="ffmpeg_audio_extract",
+                    checkpoint=None,
+                )
                 await asyncio.to_thread(self.extract_audio, path, audio_path, length, start=float(start))
                 try:
+                    await report(
+                        current_chunk=index + 1, pending_operation="openai_transcription",
+                        checkpoint="AUDIO_EXTRACTED",
+                    )
                     part = await self.transcribe(audio_path)
                 finally:
                     audio_path.unlink(missing_ok=True)
@@ -376,10 +410,28 @@ class MediaIngestService:
                         "start": round(float(segment.get("start") or 0) + start, 3),
                         "end": round(float(segment.get("end") or 0) + start, 3),
                     })
-                transcripts.append({**part, "segments": adjusted})
+                completed = {**part, "segments": adjusted}
+                transcripts.append(completed)
+                cached[index] = {
+                    "chunk_index": index,
+                    "start": round(start, 3),
+                    "end": round(start + length, 3),
+                    "status": "completed",
+                    "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "transcript": completed,
+                }
+                await report(
+                    completed_chunks=len(cached), current_chunk=None,
+                    pending_operation=None, checkpoint="TRANSCRIPT_CHUNK_COMPLETED",
+                    completed_chunk=cached[index],
+                )
         finally:
             for temp in directory.glob("analysis_audio_*.mp3"):
                 temp.unlink(missing_ok=True)
+        await report(
+            completed_chunks=len(cached), current_chunk=None,
+            pending_operation="ffmpeg_signal_analysis", checkpoint="TRANSCRIPT_COMPLETE",
+        )
         silences, scenes = await asyncio.gather(silence_task, scene_task)
         transcript = {
             "text": " ".join(str(item.get("text") or "") for item in transcripts).strip()[:500_000],
