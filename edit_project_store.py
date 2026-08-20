@@ -21,7 +21,7 @@ from database import get_db
 
 
 PROJECT_TYPE = "edit_project"
-CURRENT_PROJECT_SCHEMA = 2
+CURRENT_PROJECT_SCHEMA = 3
 _UUID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 LIFECYCLE_BY_STATUS = {
@@ -31,6 +31,7 @@ LIFECYCLE_BY_STATUS = {
     "analysis_failed": "FAILED_ANALYSIS", "proposed": "AWAITING_REVIEW",
     "revised": "AWAITING_REVIEW", "approved": "APPROVED",
     "queued": "QUEUED", "rendering": "RENDERING",
+    "final_queued": "QUEUED", "final_rendering": "RENDERING",
     "render_failed": "FAILED_RENDER", "completed": "COMPLETED",
     "published_or_downloaded": "PUBLISHED_OR_DOWNLOADED",
     "media_purged": "MEDIA_PURGED",
@@ -157,6 +158,7 @@ class EditProjectStore:
                     "target_format": (report.get("settings") or {}).get("target_format"),
                     "duration": (source.get("media") or {}).get("duration"),
                     "version": len(report.get("plan_versions") or []),
+                    "source_count": len(report.get("sources") or []) or (1 if source else 0),
                 }
             )
         return projects
@@ -223,6 +225,22 @@ def public_project(row: dict[str, Any]) -> dict[str, Any]:
     project["id"] = row.get("id")
     source = project.get("source") or {}
     source.pop("storage_name", None)
+    for item in project.get("sources") or []:
+        if isinstance(item, dict):
+            item.pop("storage_key", None)
+            upload = item.get("upload") or {}
+            upload.pop("multipart_upload_id", None)
+            upload.pop("object_key", None)
+            source_transcript = item.get("transcript") or {}
+            source_text = str(source_transcript.pop("text", "") or "")
+            source_transcript["preview"] = source_text[:1200]
+            for chunk in item.get("transcript_chunks") or []:
+                if not isinstance(chunk, dict):
+                    continue
+                chunk_transcript = chunk.get("transcript") or {}
+                chunk_transcript.pop("text", None)
+                chunk_transcript.pop("segments", None)
+                chunk.pop("segments", None)
     transcript = project.get("transcript") or {}
     text = str(transcript.pop("text", "") or "")
     transcript["preview"] = text[:4000]
@@ -250,7 +268,17 @@ def migrate_project(project: dict[str, Any]) -> dict[str, Any]:
     payload.setdefault("jobs", [])
     payload.setdefault("media_state", "available")
     payload.setdefault("quality_assurance", {})
+    payload.setdefault("visual_analysis", {"status": "not_run", "fallback_used": False})
+    payload.setdefault("preview_state", "not_requested")
+    payload.setdefault("final_render_state", "not_requested")
     payload.setdefault("observability", {})
+    # Multi-source rough-cut fields are purely additive.  Legacy single-source
+    # projects keep their existing shape and are lazily exposed as one source
+    # only when the new workflow is opened.
+    payload.setdefault("sources", [])
+    payload.setdefault("uploads_finalized", False)
+    payload.setdefault("duplicate_groups", [])
+    payload.setdefault("story_plan_state", "not_requested")
     return payload
 
 

@@ -16,7 +16,10 @@ from edit_job_queue import EditJobQueue, EditJobWorker
 from edit_pipeline import EditPipeline
 from edit_project_store import EditProjectStore, migrate_project, transition_project
 from edit_quality_service import EditQualityError, EditQualityService
+from edit_render_contract import build_final_render_payload, render_profile, requires_external_final
+from edit_render_service import EditRenderService
 from edit_storage import EditStorageService, ObjectStorageBackend
+from media_ingest import MediaIngestService
 
 
 def database(path: Path):
@@ -38,6 +41,7 @@ class MultipartS3:
         self.parts = {}
         self.aborted = []
         self.downloads = []
+        self.fail_copy_key = None
 
     def create_multipart_upload(self, **kwargs):
         self.parts[(kwargs["Key"], "upload-1")] = []
@@ -75,6 +79,12 @@ class MultipartS3:
 
     def upload_file(self, source, bucket, key, ExtraArgs=None):
         self.objects[key] = Path(source).read_bytes()
+
+    def copy_object(self, **kwargs):
+        if kwargs["Key"] == self.fail_copy_key:
+            raise RuntimeError("temporary copy failure")
+        self.objects[kwargs["Key"]] = self.objects[kwargs["CopySource"]["Key"]]
+        return {"CopyObjectResult": {"ETag": '"copied"'}}
 
 
 class DurableQueueTests(unittest.TestCase):
@@ -121,6 +131,55 @@ class DurableQueueTests(unittest.TestCase):
         self.assertEqual([row["queue_position"] for row in snapshot["active"] if row["status"] == "queued"], [1, 2, 3, 4])
         self.queue.finish(running["job_id"])
 
+    def test_external_final_payload_is_self_contained_and_not_claimed_by_embedded_worker(self):
+        self.assertEqual(
+            {render_profile(name).name for name in ("preview_720p", "preview_1080p", "final_original")},
+            {"preview_720p", "preview_1080p", "final_original"},
+        )
+        backend = ObjectStorageBackend(bucket="videos", prefix="ed", client=MultipartS3())
+        project = {
+            "project_uuid": "a" * 32,
+            "source": {
+                "storage_backend": "object", "object_key": "ed/" + "a" * 32 + "/source.mp4",
+                "filename": "source.mp4", "size_bytes": 292 * 1024 * 1024,
+                "media": {"width": 3840, "height": 2160, "duration": 300, "has_audio": True},
+            },
+        }
+        plan = {
+            "render_timeline": [{"source_start": 0, "source_end": 20}],
+            "short_timeline": [], "create_short_highlight": False,
+            "estimated_output_duration": 20, "enhancements": [],
+        }
+        self.assertTrue(requires_external_final(project))
+        payload = build_final_render_payload(project, approved_version=2, plan=plan, backend=backend)
+        job = self.queue.enqueue(9, "final_rendering", payload=payload, idempotency_key="final:9:v2")
+        self.assertEqual(job["payload"]["job_id"], job["job_id"])
+        self.assertEqual(job["payload"]["source"]["object_key"], project["source"]["object_key"])
+        self.assertEqual(job["payload"]["edl"]["render_timeline"], plan["render_timeline"])
+        self.assertEqual(job["payload"]["render_profile"]["name"], "final_original")
+        self.assertIn("staging_key", job["payload"]["output_target"]["objects"]["full"])
+        self.assertIsNone(self.queue.claim("api-worker", allowed_types={"analysis", "rendering", "preview_rendering"}))
+
+    def test_atomic_object_publish_cleans_partial_final_on_failure(self):
+        s3 = MultipartS3()
+        backend = ObjectStorageBackend(bucket="videos", prefix="ed", client=s3)
+        targets = {
+            "full": {"staging_key": "ed/p/.stage-full", "final_key": "ed/p/full.mp4", "content_type": "video/mp4"},
+            "decision": {"staging_key": "ed/p/.stage-edl", "final_key": "ed/p/edl.json", "content_type": "application/json"},
+        }
+        s3.objects["ed/p/.stage-full"] = b"video"
+        s3.objects["ed/p/.stage-edl"] = b"{}"
+        s3.fail_copy_key = "ed/p/edl.json"
+        with self.assertRaisesRegex(RuntimeError, "copy failure"):
+            backend.publish_staged(targets)
+        self.assertNotIn("ed/p/full.mp4", s3.objects)
+        self.assertNotIn("ed/p/edl.json", s3.objects)
+        self.assertIn("ed/p/.stage-full", s3.objects)
+        s3.fail_copy_key = None
+        published = backend.publish_staged(targets)
+        self.assertEqual(set(published), {"full", "decision"})
+        self.assertNotIn("ed/p/.stage-full", s3.objects)
+
 
 class DurableWorkerHeartbeatTests(unittest.IsolatedAsyncioTestCase):
     async def test_transient_heartbeat_failure_does_not_kill_liveness(self):
@@ -145,7 +204,7 @@ class DurableWorkerHeartbeatTests(unittest.IsolatedAsyncioTestCase):
 class LifecycleAndQualityTests(unittest.TestCase):
     def test_additive_lifecycle_migration_and_state_audit(self):
         legacy = migrate_project({"project_uuid": "a" * 32, "status": "completed", "custom": {"keep": True}})
-        self.assertEqual(legacy["schema_version"], 2)
+        self.assertEqual(legacy["schema_version"], 3)
         self.assertEqual(legacy["lifecycle_status"], "COMPLETED")
         changed = transition_project(legacy, "published_or_downloaded", reason="owner link")
         self.assertTrue(changed["custom"]["keep"])
@@ -164,6 +223,23 @@ class LifecycleAndQualityTests(unittest.TestCase):
             self.assertIn(report["status"], {"passed", "warning"})
             with self.assertRaises(EditQualityError):
                 EditQualityService().validate(source=str(output), plan=plan, output_kind="full", expected_duration=20, require_audio=True)
+
+    @unittest.skipUnless(__import__("shutil").which("ffmpeg"), "ffmpeg required")
+    def test_analysis_proxy_is_fast_1080p_bounded_and_atomic(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "source.mp4"
+            proxy = Path(td) / "proxy.mp4"
+            subprocess.run([
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=20",
+                "-f", "lavfi", "-i", "sine=frequency=440", "-t", "2",
+                "-c:v", "libx264", "-c:a", "aac", str(source), "-y",
+            ], check=True)
+            MediaIngestService.create_analysis_proxy(source, proxy, 2)
+            metadata = MediaIngestService.probe(proxy)
+            self.assertLessEqual(metadata["width"], 1920)
+            self.assertLessEqual(metadata["height"], 1080)
+            self.assertFalse(list(Path(td).glob(".*.part.mp4")))
 
 
 @unittest.skipUnless(__import__("shutil").which("ffmpeg") and __import__("shutil").which("ffprobe"), "ffmpeg required")
@@ -217,6 +293,21 @@ class ObjectWorkingCopyPipelineTests(unittest.TestCase):
             self.assertEqual(s3.downloads, [source_key])
             self.assertFalse(list(root.glob("edit-work-*")))
 
+            with patch("edit_pipeline.object_storage_from_env", return_value=backend), patch(
+                "edit_pipeline.tempfile.gettempdir", return_value=str(root)
+            ):
+                preview = asyncio.run(pipeline.preview_rendering({
+                    "job_id": 1000, "project_id": project_id,
+                    "payload": {"profile": "preview_1080p"},
+                }))
+            saved = store.get(project_id)["report"]
+            self.assertGreater(preview["preview_render_seconds"], 0)
+            self.assertEqual(saved["preview_state"], "succeeded")
+            self.assertEqual(saved["outputs"]["preview"]["render_profile"], "preview_1080p")
+            self.assertEqual(saved["status"], "completed")
+            self.assertEqual(s3.downloads, [source_key, source_key])
+            self.assertFalse(list(root.glob("edit-work-*")))
+
 
 class MultipartAndPurgeApiTests(unittest.TestCase):
     def setUp(self):
@@ -259,6 +350,80 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             self.assertEqual(done.status_code, 200)
             self.assertEqual(done.json()["project"]["lifecycle_status"], "UPLOADED")
             self.assertEqual(self.queue.list(project_id=project_id)[0]["type"], "analysis")
+
+    def test_multisource_project_queues_each_source_independently(self):
+        patches = (
+            patch.object(main, "EditProjectStore", lambda: self.store),
+            patch.object(main, "EDIT_JOB_QUEUE", self.queue),
+            patch.object(main, "object_storage_configured", return_value=True),
+            patch.object(main, "object_storage_from_env", return_value=self.backend),
+        )
+        with patches[0], patches[1], patches[2], patches[3]:
+            created = self.client.post("/api/edit-projects/multisource", json={
+                "topic": "초음파세척기", "purpose": "브랜드신뢰형",
+                "target_length_seconds": 480, "strategy_id": None,
+            })
+            self.assertEqual(created.status_code, 200)
+            project_id = created.json()["project"]["id"]
+            source_ids = []
+            for index in range(2):
+                started = self.client.post(
+                    f"/api/edit-projects/{project_id}/sources/multipart/start",
+                    json={
+                        "client_upload_id": f"source-upload-{index}",
+                        "filename": f"source-{index}.mp4", "file_size": 16,
+                        "content_type": "video/mp4", "speaker": f"speaker-{index}",
+                    },
+                )
+                self.assertEqual(started.status_code, 200)
+                source_id = started.json()["source_id"]
+                source_ids.append(source_id)
+                completed = self.client.post(
+                    f"/api/edit-projects/{project_id}/sources/{source_id}/complete",
+                    json={"parts": [{"part_number": 1, "etag": "one"}, {"part_number": 2, "etag": "two"}]},
+                )
+                self.assertEqual(completed.status_code, 200)
+            finalized = self.client.post(f"/api/edit-projects/{project_id}/sources/finalize")
+            self.assertEqual(finalized.status_code, 200)
+            saved = self.store.get(project_id)["report"]
+            self.assertEqual(len(saved["sources"]), 2)
+            self.assertTrue(saved["uploads_finalized"])
+            jobs = self.queue.list(project_id=project_id)
+            self.assertEqual({job["payload"]["source_id"] for job in jobs}, set(source_ids))
+            self.assertTrue(all(job["type"] == "source_analysis" for job in jobs))
+
+    def test_4k_final_is_deferred_with_worker_payload_and_never_claimed_by_api(self):
+        project_uuid = os.urandom(16).hex()
+        source_key = self.backend.key(project_uuid, "source.mp4")
+        self.s3.objects[source_key] = b"preserved-original"
+        plan = {
+            "render_timeline": [{"source_start": 0.0, "source_end": 60.0, "action": "keep"}],
+            "short_timeline": [], "create_short_highlight": False,
+            "estimated_output_duration": 60.0, "enhancements": [],
+        }
+        project_id = self.store.create(keyword="4k", project={
+            "project_uuid": project_uuid, "status": "approved", "approved_version": 1,
+            "source": {
+                "filename": "source.mp4", "size_bytes": 291 * 1024 * 1024,
+                "storage_backend": "object", "object_key": source_key,
+                "media": {"width": 3840, "height": 2160, "duration": 300, "has_audio": True},
+            },
+            "plan_versions": [{"version": 1, "status": "approved", "plan": plan}],
+            "outputs": {}, "render_runs": [],
+        })
+        with patch.object(main, "EditProjectStore", lambda: self.store), patch.object(
+            main, "EDIT_JOB_QUEUE", self.queue
+        ), patch.object(main, "object_storage_from_env", return_value=self.backend):
+            response = self.client.post(f"/api/edit-projects/{project_id}/render")
+        self.assertEqual(response.status_code, 202)
+        body = response.json()
+        self.assertTrue(body["deferred"])
+        self.assertEqual(body["job"]["type"], "final_rendering")
+        self.assertEqual(body["job"]["payload"]["job_id"], body["job"]["job_id"])
+        self.assertEqual(body["job"]["payload"]["source"]["object_key"], source_key)
+        self.assertEqual(self.store.get(project_id)["report"]["final_render_state"], "queued")
+        self.assertEqual(self.s3.objects[source_key], b"preserved-original")
+        self.assertIsNone(self.queue.claim("api", allowed_types={"analysis", "rendering", "preview_rendering"}))
 
     def test_media_purge_requires_confirmation_and_preserves_decision_audit(self):
         project_uuid = os.urandom(16).hex()

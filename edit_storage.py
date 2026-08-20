@@ -144,6 +144,17 @@ class ObjectStorageBackend:
             self.client.upload_file(str(path), self.bucket, key)
         return key
 
+    def upload_key(self, path: Path, key: str, *, content_type: str | None = None) -> str:
+        """Upload to an exact worker-contract key (normally a staging key)."""
+        if not key.startswith((self.prefix + "/") if self.prefix else ""):
+            raise ValueError("object key escaped managed prefix")
+        extra = {"ContentType": content_type} if content_type else None
+        if extra:
+            self.client.upload_file(str(path), self.bucket, key, ExtraArgs=extra)
+        else:
+            self.client.upload_file(str(path), self.bucket, key)
+        return key
+
     def upload_bytes(self, data: bytes, *, project_uuid: str, filename: str, content_type: str) -> str:
         key = self.key(project_uuid, filename)
         self.client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
@@ -156,6 +167,62 @@ class ObjectStorageBackend:
 
     def delete(self, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=key)
+
+    def copy(self, source_key: str, destination_key: str, *, content_type: str | None = None) -> dict[str, Any]:
+        """Atomically publish one complete S3/R2 object under its final key."""
+        if self.prefix and (
+            not source_key.startswith(self.prefix + "/")
+            or not destination_key.startswith(self.prefix + "/")
+        ):
+            raise ValueError("object key escaped managed prefix")
+        args: dict[str, Any] = {
+            "Bucket": self.bucket,
+            "Key": destination_key,
+            "CopySource": {"Bucket": self.bucket, "Key": source_key},
+        }
+        if content_type:
+            args.update({"ContentType": content_type, "MetadataDirective": "REPLACE"})
+        self.client.copy_object(**args)
+        return self.head(destination_key)
+
+    def publish_staged(self, targets: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        """Publish a complete output set or remove every newly copied final.
+
+        Workers upload only ``staging_key`` objects. The API/worker completion
+        boundary calls this method after QA, so failed encodes are never exposed
+        under stable final keys.
+        """
+        if not targets:
+            raise ValueError("publish targets are empty")
+        for target in targets.values():
+            metadata = self.head(str(target["staging_key"]))
+            if int(metadata.get("size_bytes") or 0) <= 0:
+                raise RuntimeError("staged render output is empty")
+        published: dict[str, dict[str, Any]] = {}
+        copied: list[str] = []
+        try:
+            for kind, target in targets.items():
+                final_key = str(target["final_key"])
+                published[kind] = self.copy(
+                    str(target["staging_key"]), final_key,
+                    content_type=str(target.get("content_type") or "") or None,
+                )
+                copied.append(final_key)
+        except Exception:
+            for key in copied:
+                try:
+                    self.delete(key)
+                except Exception:
+                    pass
+            raise
+        for target in targets.values():
+            try:
+                self.delete(str(target["staging_key"]))
+            except Exception:
+                # A staging orphan is safe and can be removed by lifecycle
+                # cleanup; the published final set is already complete.
+                pass
+        return published
 
     def head(self, key: str) -> dict[str, Any]:
         value = self.client.head_object(Bucket=self.bucket, Key=key)
@@ -535,24 +602,38 @@ class EditStorageService:
         object_backend = self._object_backend()
 
         def delete_ref(value: dict[str, Any]) -> int:
-            if value.get("storage_backend") == "object" and value.get("object_key"):
+            remote_key = value.get("object_key") or value.get("storage_key")
+            if value.get("storage_backend") == "object" and remote_key:
                 if object_backend is None:
                     raise RuntimeError("Object Storage가 연결되지 않아 원격 미디어를 정리할 수 없습니다.")
                 size = int(value.get("size_bytes") or 0)
-                object_backend.delete(str(value["object_key"]))
+                object_backend.delete(str(remote_key))
                 return size
             name = str(value.get("storage_name") or "")
             return self._delete(directory / name, dry_run=False) if name else 0
 
         if scope in {"source", "media", "all"}:
             deleted += delete_ref(project.get("source") or {})
+            for source in project.get("sources") or []:
+                if not isinstance(source, dict) or source.get("media_purged"):
+                    continue
+                deleted += delete_ref(source)
+                source["media_purged"] = True
+                source["media_purged_at"] = utc_now()
+                source.pop("storage_key", None)
+                source.pop("storage_name", None)
             project.setdefault("storage_state", {})["source_deleted_at"] = utc_now()
             project.setdefault("source", {})["media_purged"] = True
+        if scope in {"media", "all"} and isinstance(project.get("proxy"), dict):
+            deleted += delete_ref(project.get("proxy") or {})
+            project.setdefault("proxy", {})["media_purged"] = True
+            project.setdefault("proxy", {}).pop("object_key", None)
+            project.setdefault("storage_state", {})["proxy_deleted_at"] = utc_now()
         if scope in {"outputs", "media", "all"}:
             # EDL/decision data is permanent learning evidence. Only playable
             # full/short media is purged; the immutable decision artifact and
             # complete plan/log in SQLite remain.
-            for kind in ("full", "short", "proxy"):
+            for kind in ("full", "short", "preview", "proxy", "rough_cut"):
                 value = (project.get("outputs") or {}).get(kind)
                 if isinstance(value, dict):
                     deleted += delete_ref(value)
