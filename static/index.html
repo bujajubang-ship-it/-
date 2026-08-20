@@ -1142,6 +1142,13 @@
             </label>
           </div>
           <button class="analyze-btn" id="ed-analyze-btn" onclick="edAnalyze()" disabled>AI 분석 제안 만들기</button>
+          <details class="ed-transcript" style="margin-top:14px">
+            <summary><b>여러 촬영 원본으로 러프컷 만들기</b></summary>
+            <p class="upload-hint">여러 인터뷰·설명 영상을 한 프로젝트로 분석하고 중복 발언을 제거한 구성안을 만듭니다.</p>
+            <input type="file" id="ed-multi-file-input" accept="video/*" multiple onchange="edMultiFilesSelected()">
+            <div id="ed-multi-source-list" class="ed-version-list"></div>
+            <button class="analyze-btn" id="ed-multi-start-btn" onclick="edStartMultiSource()">멀티소스 업로드·분석 시작</button>
+          </details>
           <div id="ed-progress" class="hidden ed-progress">
             <div class="step-indicator" id="ed-progress-message">업로드 준비 중...</div>
             <div class="progress-bar"><div class="progress-fill" id="ed-progress-fill"></div></div>
@@ -1162,6 +1169,7 @@
           <div class="section-card">
             <div class="ed-section-head"><h3>1. AI 편집 진단</h3><span id="ed-media-meta"></span></div>
             <div id="ed-diagnosis"></div>
+            <details class="ed-transcript" open><summary>화면 분석 결과</summary><div id="ed-visual-analysis"></div></details>
             <details class="ed-transcript"><summary>받아쓰기 미리보기</summary><pre id="ed-transcript-preview"></pre></details>
           </div>
 
@@ -1184,12 +1192,13 @@
 
           <div class="section-card ed-action-card">
             <div>
-              <h3>4. 승인 후 실제 편집</h3>
-              <p>승인 전에는 원본을 분석만 하며 ffmpeg 편집은 실행되지 않습니다.</p>
+              <h3>4. 승인 후 실제 러프컷</h3>
+              <p>승인 전에는 원본을 분석만 하며 ffmpeg 편집은 실행되지 않습니다. 멀티소스는 1080p 기본 컷 연결만 만듭니다.</p>
             </div>
             <div class="ed-action-buttons">
               <button id="ed-approve-btn" class="ed-approve-btn" onclick="edApprove()">이 편집안 승인</button>
-              <button id="ed-render-btn" class="ed-render-btn" onclick="edRender()" disabled>승인안으로 편집 실행</button>
+              <button id="ed-preview-render-btn" class="secondary-btn" onclick="edPreviewRender()" disabled>1080p 검토본 만들기</button>
+              <button id="ed-render-btn" class="ed-render-btn" onclick="edRender()" disabled>최종 원본 화질 렌더 요청</button>
             </div>
             <div id="ed-render-progress" class="hidden ed-render-progress"><div id="ed-render-message"></div><div class="progress-bar"><div class="progress-fill" id="ed-render-fill"></div></div></div>
           </div>
@@ -1498,7 +1507,7 @@
 
   </main>
 
-  <script src="app.js?v=20260819-production-video-pipeline"></script>
+  <script src="app.js?v=20260820-multisource-roughcut"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

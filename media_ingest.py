@@ -190,6 +190,35 @@ class MediaIngestService:
         return output
 
     @staticmethod
+    def create_analysis_proxy(path: str | Path, output: Path, duration: float) -> Path:
+        """Create a lightweight 1080p review/analysis master from a 4K source."""
+        if not shutil.which("ffmpeg"):
+            raise RuntimeError("ffmpeg가 설치되어 있지 않습니다.")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        part = output.with_name(f".{output.stem}.part{output.suffix}")
+        part.unlink(missing_ok=True)
+        command = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+            "-vf", "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart", str(part), "-y",
+        ]
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True,
+                timeout=max(600, min(10800, int(max(0, duration) * 3) + 300)),
+            )
+        except subprocess.TimeoutExpired as exc:
+            part.unlink(missing_ok=True)
+            raise RuntimeError("1080p 분석 proxy 생성 시간이 초과됐습니다.") from exc
+        if result.returncode != 0 or not part.is_file() or part.stat().st_size <= 0:
+            part.unlink(missing_ok=True)
+            raise RuntimeError("1080p 분석 proxy를 만들지 못했습니다.")
+        os.replace(part, output)
+        return output
+
+    @staticmethod
     def detect_silences(
         path: str | Path, duration: float, *, start_offset: float = 0.0
     ) -> list[dict[str, float]]:

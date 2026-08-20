@@ -12,12 +12,20 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import main
+from business_edit_review import _preview_plan
 from edit_analysis_service import EditAnalysisService
 from edit_learning_service import EditFeedbackService, build_editing_benchmarks
 from edit_job_queue import EditJobQueue
+from edit_pipeline import EditPipeline
 from edit_plan_service import build_render_timeline, plan_diff, prepare_plan
 from edit_project_store import EditProjectStore, public_project
 from edit_render_service import EditRenderError, EditRenderService
+from edit_visual_service import (
+    VISUAL_FALLBACK_MESSAGE,
+    TimecodedFrameExtractor,
+    build_audio_visual_segments,
+    fuse_plan_with_visual,
+)
 from media_ingest import MediaIngestService, MediaValidationError, TranscriptionError
 from strategy_brain.brain import StrategyBrain
 from strategy_brain.contracts import BrainResult, EvidenceEnvelope
@@ -142,6 +150,31 @@ class FakeProvider:
             yield ""
 
 
+class VisualFakeProvider(FakeProvider):
+    async def generate(self, request, _executor=None):
+        self.requests.append(request)
+        if request.output_schema_name != "edit_visual_frames":
+            return BrainResult(text=json.dumps(self.parsed), parsed=self.parsed)
+        frames = []
+        content = request.input[0]["content"]
+        for item in content:
+            if item.get("type") != "input_text" or not str(item.get("text") or "").startswith("FRAME "):
+                continue
+            _, frame_id, _, clock = item["text"].split(" ", 3)
+            hours, minutes, seconds = clock.split(":")
+            at = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+            frames.append({
+                "frame_id": frame_id, "timecode_seconds": at,
+                "description": "주방 바닥 공사 장면", "shaking_score": 0.1,
+                "focus_score": 0.9, "brightness_score": 0.8, "occlusion_score": 0.1,
+                "site_value_tags": ["바닥공사", "철거"], "speech_alignment_score": 0.85,
+                "thumbnail_candidate": True, "visual_score": 0.9,
+                "edit_decision": "highlight", "reason": "바닥 철거 작업이 명확함",
+            })
+        parsed = {"frames": frames}
+        return BrainResult(text=json.dumps(parsed), parsed=parsed)
+
+
 class FakeRetrieval:
     def _value(self, name):
         return EvidenceEnvelope(data=[{"name": name}], source=name, sample_size=1)
@@ -156,6 +189,19 @@ class FakeRetrieval:
 
 
 class EditDirectorUnitTests(unittest.TestCase):
+    def test_business_preview_respects_keep_seconds_and_review_gate(self):
+        review = {"revised_edl": [
+            {"start_time": 0, "end_time": 20, "action": "shorten_candidate", "suggested_keep_seconds": 5, "requires_user_review": False, "reason": "repeat"},
+            {"start_time": 20, "end_time": 50, "action": "cut_candidate", "suggested_keep_seconds": 3, "requires_user_review": True, "reason": "important"},
+            {"start_time": 50, "end_time": 60, "action": "highlight", "suggested_keep_seconds": 10, "requires_user_review": False, "reason": "proof"},
+        ]}
+        safe = _preview_plan(review, 60, apply_review_candidates=False)
+        proposal = _preview_plan(review, 60, apply_review_candidates=True)
+        self.assertEqual(safe["estimated_output_duration"], 45)
+        self.assertEqual(proposal["estimated_output_duration"], 18)
+        self.assertTrue(any(item["action"] == "protected_user_review" for item in safe["render_timeline"]))
+        self.assertTrue(proposal["contains_unapproved_review_simulation"])
+
     def test_store_is_additive_and_redacts_paths(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -256,6 +302,45 @@ class EditDirectorUnitTests(unittest.TestCase):
         self.assertIsNone(empty["retention_30s_median"])
         self.assertFalse(empty["decision_rules"])
         self.assertEqual(len(empty["limitations"]), 3)
+
+    def test_responses_visual_input_and_original_timecodes_are_grounded(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            frames = []
+            for index, at in enumerate((2.0, 4.0), start=1):
+                path = root / f"frame-{index}.jpg"
+                path.write_bytes(b"small-jpeg-payload")
+                frames.append({
+                    "frame_id": f"frame-{index:04d}", "timecode_seconds": at,
+                    "timecode": f"00:00:0{int(at)}.000", "kind": "periodic", "path": str(path),
+                })
+            provider = VisualFakeProvider(sample_diagnosis())
+            service = EditAnalysisService(brain=StrategyBrain(provider, ReadOnlyToolRegistry()))
+            result = asyncio.run(service.analyze_visual_frames(
+                manifest={
+                    "schema_version": 1, "status": "extracted", "frames": frames,
+                    "frame_count": 2, "effective_interval_seconds": 2.0, "duration_seconds": 6.0,
+                },
+                transcript={"segments": [{"start": 1, "end": 5, "text": "바닥 타일을 철거합니다"}]},
+                media={"duration": 6.0},
+            ))
+            self.assertEqual(result["status"], "succeeded")
+            self.assertEqual([item["timecode_seconds"] for item in result["frame_results"]], [2.0, 4.0])
+            request_content = provider.requests[0].input[0]["content"]
+            self.assertEqual(sum(item.get("type") == "input_image" for item in request_content), 2)
+            self.assertNotIn("path", result["frames"][0])
+            self.assertEqual(result["segments"][0]["edit_decision"], "highlight")
+
+    def test_visual_failure_has_explicit_audio_only_fallback(self):
+        with tempfile.TemporaryDirectory() as td:
+            pipeline = EditPipeline(EditProjectStore(make_database(Path(td) / "h.db")))
+            result = asyncio.run(pipeline._run_visual_analysis(
+                source=Path("/definitely/missing.mp4"), transcript={"segments": []},
+                media={"duration": 60}, scenes=[], analysis=EditAnalysisService(brain=StrategyBrain(FakeProvider({}), ReadOnlyToolRegistry())),
+            ))
+            self.assertEqual(result["status"], "failed")
+            self.assertTrue(result["fallback_used"])
+            self.assertEqual(result["message"], VISUAL_FALLBACK_MESSAGE)
 
 
 class FakeFeedbackAnalytics:
@@ -368,6 +453,72 @@ class EditDirectorRenderTests(unittest.TestCase):
         for index in range(len(prepared["render_timeline"])):
             self.assertIn(f"[{index}:v]", expression)
             self.assertIn(f"[{index}:a]", expression)
+
+    def test_sixty_second_visual_smoke_manifest_scores_and_edl(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "visual-60s.mp4"
+            subprocess.run([
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=1",
+                "-t", "60", "-c:v", "libx264", "-preset", "ultrafast", str(source), "-y",
+            ], check=True)
+            manifest = TimecodedFrameExtractor().extract(
+                source=source, output_dir=root / "frames", duration=60,
+                scene_times=[7.5, 35.5], interval_seconds=1,
+            )
+            self.assertGreaterEqual(manifest["frame_count"], 60)
+            self.assertTrue(any(item["timecode_seconds"] == 8.0 for item in manifest["frames"]))
+            results = []
+            for frame in manifest["frames"]:
+                at = frame["timecode_seconds"]
+                if at < 8:
+                    decision, score, reason = "cut", 0.15, "이동 중 화면 흔들림, 설명 없음, 현장 정보 낮음"
+                elif at < 25:
+                    decision, score, reason = "keep", 0.82, "주방 바닥 타일 철거 장면이 명확하고 설명도 일치함"
+                elif at < 36:
+                    decision, score, reason = "shorten", 0.68, "화면은 좋지만 설명이 반복됨"
+                elif at < 53:
+                    decision, score, reason = "highlight", 0.94, "작업자가 바닥을 깨는 장면이 강하고 썸네일 후보 가능"
+                else:
+                    decision, score, reason = "keep", 0.65, "현장 흐름 유지"
+                results.append({
+                    **{key: frame[key] for key in ("frame_id", "timecode_seconds", "timecode")},
+                    "visual_score": score, "speech_alignment_score": 0.8 if at >= 8 else 0.1,
+                    "edit_decision": decision, "reason": reason,
+                    "thumbnail_candidate": decision == "highlight", "site_value_tags": ["바닥공사"],
+                })
+            transcript = {"segments": [
+                {"start": 8, "end": 24, "text": "바닥 타일을 철거합니다"},
+                {"start": 25, "end": 52, "text": "같은 설명 뒤 작업자가 바닥을 깨고 있습니다"},
+            ]}
+            scored = build_audio_visual_segments(
+                results, transcript, duration=60, interval_seconds=1,
+            )
+            self.assertEqual([item["edit_decision"] for item in scored[:4]], ["cut", "keep", "shorten", "highlight"])
+            raw_plan = sample_plan(short=False)
+            raw_plan["segments"] = [
+                {"id": f"smoke-{i}", "start_time": item["start_time"], "end_time": item["end_time"],
+                 "action": item["edit_decision"], "reason": item["reason"], "confidence": item["context_score"],
+                 "expected_effect": "multimodal smoke", "destination": ""}
+                for i, item in enumerate(scored)
+            ]
+            fused = fuse_plan_with_visual(raw_plan, {"status": "succeeded", "segments": scored})
+            prepared = prepare_plan(fused, 60)
+            self.assertEqual(prepared["decision_basis"], "audio_transcript+visual_frames")
+            self.assertTrue(any(item["action"] == "highlight" for item in prepared["segments"]))
+            self.assertTrue(any(item["action"] == "visual_highlight" for item in prepared["render_timeline"]))
+            self.assertFalse(any(item["source_start"] < 7.9 and item["source_end"] > 0.1 for item in prepared["render_timeline"]))
+            preview = root / "visual-preview-720p.mp4"
+            EditRenderService().render_timeline(
+                source=source, output=preview,
+                timeline=prepared["render_timeline"], duration=60,
+                has_audio=False, profile="preview_720p",
+            )
+            rendered = MediaIngestService.probe(preview)
+            self.assertTrue(preview.exists())
+            self.assertGreater(rendered["duration"], 47)
+            self.assertLess(rendered["duration"], 49)
 
 
 class FakeIngest(MediaIngestService):

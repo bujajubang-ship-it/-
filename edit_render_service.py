@@ -11,6 +11,8 @@ from typing import Any
 
 from edit_plan_service import validate_approved_timeline
 from edit_project_store import utc_now
+from edit_render_contract import RenderProfile, render_profile
+from multisource_roughcut import validate_timeline as validate_multisource_timeline
 
 
 class EditRenderError(RuntimeError):
@@ -49,13 +51,23 @@ class EditRenderService:
             return 1
 
     @staticmethod
-    def _filter(timeline: list[dict[str, Any]], *, has_audio: bool) -> str:
+    def _filter(
+        timeline: list[dict[str, Any]], *, has_audio: bool,
+        profile: RenderProfile | None = None,
+    ) -> str:
         """Join seek-bounded inputs without buffering the full source."""
         filters = []
         video_labels = []
         audio_labels = []
         for index, _item in enumerate(timeline):
-            filters.append(f"[{index}:v]setpts=PTS-STARTPTS[v{index}]")
+            video_filter = "setpts=PTS-STARTPTS"
+            if profile and profile.max_width and profile.max_height:
+                video_filter = (
+                    f"scale=w='min({profile.max_width},iw)':h='min({profile.max_height},ih)':"
+                    "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+                    + video_filter
+                )
+            filters.append(f"[{index}:v]{video_filter}[v{index}]")
             video_labels.append(f"[v{index}]")
             if has_audio:
                 filters.append(f"[{index}:a]asetpts=PTS-STARTPTS[a{index}]")
@@ -79,6 +91,7 @@ class EditRenderService:
         timeline: list[dict[str, Any]],
         duration: float,
         has_audio: bool,
+        profile: str | RenderProfile = "final_original",
     ) -> dict[str, Any]:
         if not self.ffmpeg:
             raise EditRenderError("ffmpeg가 설치되어 있지 않습니다.")
@@ -88,6 +101,7 @@ class EditRenderService:
             float(item["source_end"]) - float(item["source_start"])
             for item in timeline
         )
+        selected = render_profile(profile) if isinstance(profile, str) else profile
         if self._valid_existing_output(output):
             return {
                 "storage_name": output.name,
@@ -96,17 +110,18 @@ class EditRenderService:
                 "size_bytes": output.stat().st_size,
                 "created_at": utc_now(),
                 "codec": "h264+aac" if has_audio else "h264",
+                "render_profile": selected.name,
                 "reused": True,
             }
         part = output.with_name(f".{output.stem}.part{output.suffix}")
         part.unlink(missing_ok=True)
-        filter_complex = self._filter(timeline, has_audio=has_audio)
         threads = str(self._thread_count())
         command = self._command(
             source=str(source), timeline=timeline, has_audio=has_audio,
-            threads=threads, output=["-movflags", "+faststart", str(part), "-y"],
+            threads=threads, profile=selected,
+            output=["-movflags", "+faststart", str(part), "-y"],
         )
-        timeout = max(300, min(21600, int(output_duration * 8) + 300))
+        timeout = max(300, min(selected.timeout_seconds, int(output_duration * (2 if selected.name.startswith("preview") else 30)) + 300))
         try:
             result = subprocess.run(
                 command,
@@ -132,13 +147,91 @@ class EditRenderService:
             "size_bytes": output.stat().st_size,
             "created_at": utc_now(),
             "codec": "h264+aac" if has_audio else "h264",
+            "render_profile": selected.name,
+        }
+
+    def render_multisource_timeline(
+        self, *, sources: dict[str, Path], source_rows: list[dict[str, Any]],
+        output: Path, timeline: list[dict[str, Any]],
+        profile: str | RenderProfile = "preview_1080p",
+    ) -> dict[str, Any]:
+        """Render an approved interview timeline with one seek-bounded input per cut."""
+
+        if not self.ffmpeg:
+            raise EditRenderError("ffmpeg가 설치되어 있지 않습니다.")
+        validate_multisource_timeline(timeline, source_rows)
+        selected = render_profile(profile) if isinstance(profile, str) else profile
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if self._valid_existing_output(output):
+            return {
+                "storage_name": output.name, "filename": output.name,
+                "duration": round(sum(float(row["source_end"]) - float(row["source_start"]) for row in timeline), 3),
+                "size_bytes": output.stat().st_size, "created_at": utc_now(),
+                "codec": "h264+aac", "render_profile": selected.name, "reused": True,
+            }
+        source_meta = {str(row.get("source_id")): row for row in source_rows}
+        for row in timeline:
+            sid = str(row.get("source_id") or "")
+            if sid not in sources or not sources[sid].is_file():
+                raise EditRenderError("러프컷 원본 작업 파일이 없습니다.")
+            if not bool((source_meta[sid].get("media") or {}).get("has_audio")):
+                raise EditRenderError("대사 러프컷에 오디오가 없는 원본이 포함됐습니다.")
+        filters = []
+        labels = []
+        command = [
+            self.ffmpeg, "-hide_banner", "-loglevel", "error",
+            "-filter_complex_threads", str(self._thread_count()),
+        ]
+        for index, row in enumerate(timeline):
+            start = float(row["source_start"])
+            length = float(row["source_end"]) - start
+            command.extend([
+                "-threads:v", str(self._thread_count()), "-ss", f"{start:.3f}",
+                "-t", f"{length:.3f}", "-i", str(sources[str(row["source_id"])]),
+            ])
+            scale = (
+                f"scale=w='min({selected.max_width},iw)':h='min({selected.max_height},ih)':"
+                "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+                if selected.max_width and selected.max_height else ""
+            )
+            filters.append(f"[{index}:v]{scale}setpts=PTS-STARTPTS[v{index}]")
+            filters.append(f"[{index}:a]asetpts=PTS-STARTPTS[a{index}]")
+            labels.append(f"[v{index}][a{index}]")
+        filters.append(f"{''.join(labels)}concat=n={len(timeline)}:v=1:a=1[vout][aout]")
+        part = output.with_name(f".{output.stem}.part{output.suffix}")
+        part.unlink(missing_ok=True)
+        command.extend([
+            "-filter_complex", ";".join(filters), "-map", "[vout]", "-map", "[aout]",
+            "-c:v", "libx264", "-threads:v", str(self._thread_count()),
+            "-preset", selected.preset, "-crf", str(selected.crf), "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", selected.audio_bitrate, "-movflags", "+faststart",
+            str(part), "-y",
+        ])
+        output_duration = sum(float(row["source_end"]) - float(row["source_start"]) for row in timeline)
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True,
+                timeout=max(300, min(selected.timeout_seconds, int(output_duration * 3) + 300)),
+            )
+        except subprocess.TimeoutExpired as exc:
+            part.unlink(missing_ok=True)
+            raise EditRenderError("러프컷 렌더링 시간이 초과됐습니다. 마지막 checkpoint에서 재시도할 수 있습니다.") from exc
+        if result.returncode != 0 or not part.is_file() or part.stat().st_size <= 0:
+            part.unlink(missing_ok=True)
+            raise EditRenderError(f"러프컷을 만들지 못했습니다: {(result.stderr or '')[-600:]}")
+        os.replace(part, output)
+        return {
+            "storage_name": output.name, "filename": output.name,
+            "duration": round(output_duration, 3), "size_bytes": output.stat().st_size,
+            "created_at": utc_now(), "codec": "h264+aac", "render_profile": selected.name,
         }
 
     def _command(
         self, *, source: str, timeline: list[dict[str, Any]], has_audio: bool,
-        threads: str, output: list[str],
+        threads: str, output: list[str], profile: RenderProfile | None = None,
     ) -> list[str]:
-        filter_complex = self._filter(timeline, has_audio=has_audio)
+        selected = profile or render_profile("final_original")
+        filter_complex = self._filter(timeline, has_audio=has_audio, profile=selected)
         command = [
             self.ffmpeg,
             "-hide_banner",
@@ -162,12 +255,12 @@ class EditRenderService:
         command.extend(
             [
                 "-c:v", "libx264", "-threads:v", threads,
-                "-preset", "veryfast", "-crf", "22",
+                "-preset", selected.preset, "-crf", str(selected.crf),
                 "-pix_fmt", "yuv420p",
             ]
         )
         if has_audio:
-            command.extend(["-c:a", "aac", "-b:a", "160k"])
+            command.extend(["-c:a", "aac", "-b:a", selected.audio_bitrate])
         command.extend(output)
         return command
 
@@ -193,6 +286,7 @@ class EditRenderService:
         threads = str(self._thread_count())
         command = self._command(
             source=source_url, timeline=timeline, has_audio=has_audio, threads=threads,
+            profile=render_profile("final_original"),
             output=["-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"],
         )
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -302,6 +396,7 @@ class EditRenderService:
         plan: dict[str, Any],
         media: dict[str, Any],
         version: int,
+        profile: str | RenderProfile = "final_original",
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         outputs: dict[str, Any] = {}
         edit_log = []
@@ -314,6 +409,7 @@ class EditRenderService:
             timeline=plan.get("render_timeline") or [],
             duration=duration,
             has_audio=has_audio,
+            profile=profile,
         )
         for order, item in enumerate(plan.get("render_timeline") or [], start=1):
             edit_log.append(
@@ -335,6 +431,7 @@ class EditRenderService:
                 timeline=short_timeline,
                 duration=duration,
                 has_audio=has_audio,
+                profile=profile,
             )
             for order, item in enumerate(short_timeline, start=1):
                 edit_log.append(

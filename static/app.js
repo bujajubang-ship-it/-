@@ -197,13 +197,14 @@ async function edFetchJson(input, init, fallback) {
 const ED_STATUS_LABELS = {
   uploading: '직접 업로드 중', upload_failed: '업로드 실패', uploaded: '업로드 완료', transcribing: '받아쓰기 중', retrieving_context: '채널 근거 조회 중',
   diagnosing: 'AI 진단 중', proposed: '최초 제안', revised: '수정안 확인 필요',
-  approved: '편집안 승인됨', queued: '안전 작업 큐 대기', rendering: '편집 렌더링 중', completed: '편집 완료',
+  approved: '편집안 승인됨', queued: '안전 작업 큐 대기', rendering: '편집 렌더링 중',
+  final_queued: '4K 최종 렌더 대기', final_rendering: '4K 최종 렌더 중', completed: '편집 완료',
   published_or_downloaded: '업로드/다운로드 확인', media_purged: '미디어 정리 완료',
   analysis_failed: '분석 실패', render_failed: '렌더링 실패'
 };
 
 const ED_STEP_PROGRESS = {
-  uploading: 7, validating: 12, signals: 22, transcribing: 46,
+  uploading: 7, validating: 12, signals: 22, transcribing: 46, visual: 58,
   retrieving: 66, diagnosing: 84, revising: 70, done: 100, error: 100
 };
 
@@ -266,6 +267,93 @@ function edUploadPart(url, blob, onProgress) {
     xhr.onerror = () => reject(new Error('Object Storage 연결이 끊겼습니다.'));
     xhr.send(blob);
   });
+}
+
+function edMultiFilesSelected() {
+  const files = [...(document.getElementById('ed-multi-file-input')?.files || [])];
+  const target = document.getElementById('ed-multi-source-list');
+  if (!target) return;
+  target.innerHTML = files.map((file, index) => `
+    <div class="ed-version-item"><b>${escHtml(file.name)}</b> · ${edFormatBytes(file.size)}<br>
+      <input id="ed-multi-speaker-${index}" maxlength="160" placeholder="화자 (예: 실사용자, 공장 부장님, 대표)">
+    </div>`).join('');
+}
+
+async function edUploadMultiSourceFile(projectId, file, fileIndex, totalFiles, speaker) {
+  const clientId = `edms-${projectId}-${file.size}-${file.lastModified}-${file.name}`.slice(0, 155);
+  const started = await edFetchJson(`/api/edit-projects/${projectId}/sources/multipart/start`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      client_upload_id: clientId, filename: file.name, file_size: file.size,
+      content_type: file.type || 'video/mp4', speaker: speaker || '', recorded_at: null,
+    })
+  }, `${file.name} 업로드를 시작하지 못했습니다.`);
+  if (started.status !== 'UPLOADING') return started;
+  const partSize = Number(started.part_size);
+  const totalParts = Math.ceil(file.size / partSize);
+  const completed = new Map((started.uploaded_parts || []).map(row => [Number(row.part_number), row]));
+  for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+    if (completed.has(partNumber)) continue;
+    const begin = (partNumber - 1) * partSize;
+    const blob = file.slice(begin, Math.min(file.size, begin + partSize));
+    let lastError;
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      try {
+        const signed = await edFetchJson(
+          `/api/edit-projects/${projectId}/sources/${started.source_id}/parts/sign`,
+          {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({part_number: partNumber})},
+          '업로드 URL을 만들지 못했습니다.'
+        );
+        const etag = await edUploadPart(signed.url, blob, bytes => {
+          const overall = ((fileIndex + (partNumber - 1 + bytes / blob.size) / totalParts) / totalFiles) * 60;
+          edSetProgress('uploading', `${fileIndex + 1}/${totalFiles} ${file.name} · ${Math.round((partNumber - 1 + bytes / blob.size) / totalParts * 100)}%`, overall);
+        });
+        completed.set(partNumber, {part_number: partNumber, etag});
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** (attempt - 1))));
+      }
+    }
+    if (lastError) throw lastError;
+  }
+  return edFetchJson(`/api/edit-projects/${projectId}/sources/${started.source_id}/complete`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({parts: [...completed.values()].sort((a, b) => a.part_number - b.part_number)})
+  }, `${file.name} 완료 상태를 저장하지 못했습니다. R2 원본은 보존됩니다.`);
+}
+
+async function edStartMultiSource() {
+  if (edBusy) return;
+  const files = [...(document.getElementById('ed-multi-file-input')?.files || [])];
+  if (!files.length) return edSetProgress('error', '원본 영상을 하나 이상 선택해주세요.', 100);
+  edBusy = true;
+  const button = document.getElementById('ed-multi-start-btn');
+  if (button) button.disabled = true;
+  try {
+    const created = await edFetchJson('/api/edit-projects/multisource', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({
+        topic: document.getElementById('ed-topic').value.trim(),
+        purpose: document.getElementById('ed-purpose').value,
+        target_length_seconds: Number(document.getElementById('ed-target-length').value || 0),
+        strategy_id: Number(document.getElementById('ed-strategy-id').value) || null,
+      })
+    }, '멀티소스 러프컷 프로젝트를 만들지 못했습니다.');
+    const projectId = Number(created.project.id);
+    for (let index = 0; index < files.length; index++) {
+      const speaker = document.getElementById(`ed-multi-speaker-${index}`)?.value?.trim() || '';
+      await edUploadMultiSourceFile(projectId, files[index], index, files.length, speaker);
+    }
+    await edFetchJson(`/api/edit-projects/${projectId}/sources/finalize`, {method: 'POST'}, '원본 묶음을 확정하지 못했습니다.');
+    edSetProgress('transcribing', '모든 원본을 보존했습니다. 소스별 checkpoint 분석을 진행합니다.', 62);
+    await edPollAnalysis(projectId);
+  } catch (error) {
+    edSetProgress('error', error.message, 100);
+  } finally {
+    edBusy = false;
+    if (button) button.disabled = false;
+  }
 }
 
 async function edAnalyzeDirect() {
@@ -615,15 +703,24 @@ async function edOpenProject(id) {
 
 function edRenderProject(project) {
   edCurrentProject = project;
+  const isMulti = project.project_mode === 'multisource_roughcut';
+  const sources = project.sources || [];
+  const versions = project.plan_versions || [];
+  const latest = versions[versions.length - 1] || {};
+  const plan = latest.plan || {};
   const workspace = document.getElementById('ed-workspace');
   workspace.classList.remove('hidden');
-  document.getElementById('ed-project-title').textContent = project.settings?.topic || project.source?.filename || `프로젝트 #${project.id}`;
+  document.getElementById('ed-project-title').textContent = project.settings?.topic || project.source?.filename || (isMulti ? `멀티소스 러프컷 #${project.id}` : `프로젝트 #${project.id}`);
   const status = document.getElementById('ed-project-status');
   status.className = `ed-status ${project.status || ''}`;
   status.textContent = ED_STATUS_LABELS[project.status] || project.status || '-';
-  const media = project.source?.media || {};
-  document.getElementById('ed-media-meta').textContent = `${edTime(media.duration)} · ${media.width || '-'}×${media.height || '-'} · ${project.settings?.video_type || '-'}`;
-  document.getElementById('ed-transcript-preview').textContent = project.transcript?.preview || '받아쓰기 없음';
+  const media = project.source?.media || sources[0]?.media || {};
+  document.getElementById('ed-media-meta').textContent = isMulti
+    ? `${sources.length}개 원본 · ${edTime(sources.reduce((sum, row) => sum + Number(row.duration || row.media?.duration || 0), 0))} · ${escHtml(project.story_plan_state || '-')}`
+    : `${edTime(media.duration)} · ${media.width || '-'}×${media.height || '-'} · ${project.settings?.video_type || '-'}`;
+  document.getElementById('ed-transcript-preview').textContent = isMulti
+    ? sources.map(row => `${row.filename} · ${row.status} · transcript ${(row.transcript_chunks || []).filter(chunk => chunk.status === 'completed').length}/${(row.transcript_chunks || []).length}\n${row.transcript?.preview || ''}`).join('\n\n')
+    : (project.transcript?.preview || '받아쓰기 없음');
 
   const diagnosis = project.diagnosis || {};
   const alignment = diagnosis.strategy_alignment || {};
@@ -631,7 +728,9 @@ function edRenderProject(project) {
   const basis = (diagnosis.channel_basis || []).map(item =>
     `<span class="ed-evidence-chip" title="${escHtml(item.insight || '')}">${escHtml(item.source || '근거')} · ${escHtml(item.confidence || '')}</span>`
   ).join('');
-  document.getElementById('ed-diagnosis').innerHTML = diagnosis.overall_summary ? `
+  document.getElementById('ed-diagnosis').innerHTML = isMulti ? `
+    <div class="ed-diagnosis-summary"><b>멀티소스 분석 상태</b><br>${sources.map(row => `${escHtml(row.filename || '')} · ${escHtml(row.status || '')}${row.error ? ` · ${escHtml(row.error)}` : ''}`).join('<br>')}</div>
+    ${latest?.plan?.recommended_direction ? `<div class="ed-diagnosis-summary"><b>스토리 방향</b><br>${escHtml(latest.plan.recommended_direction)}</div>` : ''}` : diagnosis.overall_summary ? `
     <div class="ed-diagnosis-summary"><b>결론</b><br>${escHtml(diagnosis.overall_summary)}</div>
     <div class="ed-diagnosis-grid">
       <div class="ed-diagnosis-box"><h4>강점</h4><ul>${list(diagnosis.strong_points)}</ul></div>
@@ -647,12 +746,20 @@ function edRenderProject(project) {
     ${(diagnosis.data_limitations || []).length ? `<div class="ed-plan-notes"><b>데이터 한계</b><br>${(diagnosis.data_limitations || []).map(escHtml).join('<br>')}</div>` : ''}` :
     `<div class="ed-diagnosis-summary">${escHtml(project.error || '분석 제안이 아직 없습니다.')}</div>`;
 
-  const versions = project.plan_versions || [];
-  const latest = versions[versions.length - 1] || {};
-  const plan = latest.plan || {};
+  const visual = isMulti ? (sources.find(row => row.visual_analysis?.status === 'succeeded')?.visual_analysis || {}) : (project.visual_analysis || {});
+  const visualSegments = visual.segments || [];
+  document.getElementById('ed-visual-analysis').innerHTML = visual.status === 'succeeded'
+    ? `<div class="ed-diagnosis-summary"><b>${Number(visual.analyzed_frame_count || 0)}개 프레임 분석 · ${Number(visual.effective_interval_seconds || 0).toFixed(1)}초 간격</b><br>${visualSegments.map(item => `${edTime(item.start_time)}~${edTime(item.end_time)} <b>${escHtml(item.edit_decision || '')}</b> · audio ${Math.round(Number(item.audio_score || 0) * 100)} / visual ${Math.round(Number(item.visual_score || 0) * 100)} / context ${Math.round(Number(item.context_score || 0) * 100)}<br>${escHtml(item.reason || '')}`).join('<br><br>')}</div>`
+    : `<div class="ed-diagnosis-summary">${escHtml(visual.message || 'visual analysis failed, audio-only fallback used')}</div>`;
+
   document.getElementById('ed-plan-duration').textContent = plan.estimated_output_duration != null ? `예상 ${edTime(plan.estimated_output_duration)}${plan.create_short_highlight ? ` · 쇼츠 ${edTime(plan.estimated_short_duration)}` : ''}` : '';
-  document.getElementById('ed-segments').innerHTML = (plan.segments || []).map(item => `
-    <tr><td>${edTime(item.start_time)}~${edTime(item.end_time)}</td><td><span class="ed-action-pill">${escHtml(item.action || '')}</span></td><td>${escHtml(item.reason || '')}<br><small>${escHtml(item.expected_effect || '')}</small></td><td>${Math.round(Number(item.confidence || 0) * 100)}%</td></tr>`
+  const planRows = isMulti ? (plan.timeline || []).map(item => ({
+    start_time: item.source_start, end_time: item.source_end,
+    action: item.role || 'keep', reason: `${item.filename || ''} · ${item.reason || ''}`,
+    expected_effect: item.speaker ? `화자: ${item.speaker}` : '', confidence: 1,
+  })) : (plan.segments || []);
+  document.getElementById('ed-segments').innerHTML = planRows.map(item => `
+    <tr><td>${edTime(item.start_time)}~${edTime(item.end_time)}</td><td><span class="ed-action-pill">${escHtml(item.action || '')}</span></td><td>${escHtml(item.reason || '')}<br><small>${escHtml(item.expected_effect || '')}${item.visual_score != null ? ` · A ${Math.round(Number(item.audio_score || 0) * 100)} / V ${Math.round(Number(item.visual_score || 0) * 100)} / C ${Math.round(Number(item.context_score || 0) * 100)}` : ''}</small></td><td>${Math.round(Number(item.confidence || 0) * 100)}%</td></tr>`
   ).join('') || '<tr><td colspan="4">타임코드 제안이 없습니다.</td></tr>';
   document.getElementById('ed-enhancements').innerHTML = (plan.enhancements || []).length ? `
     <h4>B-roll·자막 강조 지시 <small>현재 자동 합성하지 않음</small></h4>
@@ -663,7 +770,7 @@ function edRenderProject(project) {
       ${(item.asset_requirements || []).length ? `<small>필요 소스: ${(item.asset_requirements || []).map(escHtml).join(' · ')}</small>` : ''}
       <small>${escHtml(item.reason || '')} · 신뢰도 ${Math.round(Number(item.confidence || 0) * 100)}%</small>
     </div>`).join('')}` : '';
-  const timeline = (plan.render_timeline || []).map((item, i) => `${i + 1}. ${edTime(item.source_start)}~${edTime(item.source_end)} (${item.action})`).join('<br>');
+  const timeline = (plan.render_timeline || []).map((item, i) => `${i + 1}. ${escHtml(item.filename || '')} ${edTime(item.source_start)}~${edTime(item.source_end)} (${escHtml(item.role || item.action || 'keep')})`).join('<br>');
   document.getElementById('ed-plan-notes').innerHTML = `<b>실제 승인 시 출력 순서</b><br>${timeline || '출력 구간 없음'}${(plan.editor_notes || []).length ? `<br><br><b>편집자 지시</b><br>${plan.editor_notes.map(escHtml).join('<br>')}` : ''}`;
 
   document.getElementById('ed-conversation').innerHTML = (project.conversation || []).map(item =>
@@ -682,8 +789,15 @@ function edRenderProject(project) {
   approve.textContent = approved ? `v${latest.version} 승인 완료` : '이 편집안 승인';
   document.getElementById('ed-revise-btn').disabled = runtimeRendering || !latest.version;
   const render = document.getElementById('ed-render-btn');
-  render.disabled = !approved || runtimeRendering;
-  render.textContent = runtimeRendering ? '편집 실행 중...' : (interruptedRender ? '중단된 편집 안전하게 다시 실행' : '승인안으로 편집 실행');
+  render.disabled = !approved || runtimeRendering || ['queued', 'rendering'].includes(project.final_render_state);
+  render.textContent = isMulti
+    ? (runtimeRendering ? '러프컷 생성 중...' : '승인 구성으로 1080p 러프컷 생성')
+    : (project.final_render_state === 'queued' ? '최종 렌더 대기 중' : (runtimeRendering ? '편집 실행 중...' : '최종 원본 화질 렌더 요청'));
+  const previewRender = document.getElementById('ed-preview-render-btn');
+  if (previewRender) {
+    previewRender.disabled = isMulti || !approved || runtimeRendering || project.preview_state === 'rendering' || project.preview_state === 'queued';
+    previewRender.textContent = isMulti ? '멀티소스는 승인 후 러프컷 생성' : (project.preview_state === 'succeeded' ? '1080p 검토본 다시 만들기' : '1080p 검토본 만들기');
+  }
   if (project.queue_position) {
     document.getElementById('ed-render-message').textContent = `안전 작업 큐 ${Number(project.queue_position)}번째에서 기다리고 있습니다.`;
     document.getElementById('ed-render-progress').classList.remove('hidden');
@@ -694,12 +808,15 @@ function edRenderProject(project) {
 
   const outputs = project.outputs || {};
   const outputCard = document.getElementById('ed-output-card');
-  if (outputs.full) {
+  if (outputs.full || outputs.preview || outputs.rough_cut) {
     outputCard.classList.remove('hidden');
     const video = document.getElementById('ed-output-video');
-    video.src = outputs.full.download_url + `?v=${encodeURIComponent(outputs.full.created_at || '')}`;
+    const primaryOutput = outputs.rough_cut || outputs.full || outputs.preview;
+    video.src = primaryOutput.download_url + `?v=${encodeURIComponent(primaryOutput.created_at || '')}`;
     document.getElementById('ed-output-links').innerHTML = `
-      <a href="${outputs.full.download_url}" download>전체 편집본 다운로드</a>
+      ${outputs.preview ? `<a href="${outputs.preview.download_url}" download>1080p 검토본 다운로드</a>` : ''}
+      ${outputs.rough_cut ? `<a href="${outputs.rough_cut.download_url}" download>멀티소스 러프컷 다운로드</a>` : ''}
+      ${outputs.full ? `<a href="${outputs.full.download_url}" download>전체 편집본 다운로드</a>` : ''}
       ${outputs.short ? `<a href="${outputs.short.download_url}" download>쇼츠 하이라이트 다운로드</a>` : ''}
       ${outputs.decision ? `<a href="${outputs.decision.download_url}" download>편집 결정 JSON</a>` : ''}`;
     const qaRows = Object.entries(project.quality_assurance || {});
@@ -793,6 +910,30 @@ async function edRender() {
   let renderCompleted = false;
   try {
     const response = await fetch(`/api/edit-projects/${edCurrentProject.id}/render`, {method: 'POST'});
+    const contentType = response.headers.get('content-type') || '';
+    if (edIsJsonContentType(contentType)) {
+      const data = await edParseJsonResponse(response, `최종 렌더 요청 실패 (${response.status})`);
+      document.getElementById('ed-render-message').textContent = data.message || '최종 렌더 대기열에 등록했습니다.';
+      document.getElementById('ed-render-fill').style.width = '5%';
+      if (data.project) edRenderProject(data.project);
+      if (data.job?.type === 'rough_cut_rendering') {
+        for (;;) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          const state = await edFetchJson(`/api/edit-projects/${edCurrentProject.id}`, undefined, '러프컷 상태를 확인하지 못했습니다.');
+          if (state.status === 'completed') {
+            edRenderProject(state);
+            document.getElementById('ed-render-message').textContent = '1080p 러프컷을 만들었습니다.';
+            document.getElementById('ed-render-fill').style.width = '100%';
+            break;
+          }
+          if (state.status === 'render_failed' && !state.current_job) throw new Error(state.error || '러프컷 생성에 실패했습니다.');
+          document.getElementById('ed-render-message').textContent = state.current_job?.status === 'queued'
+            ? `러프컷 작업 큐 ${state.queue_position || '-'}번째` : '승인된 여러 원본 구간을 연결하고 있습니다.';
+        }
+      }
+      await edLoadProjects();
+      return;
+    }
     await edReadSse(response, data => {
       document.getElementById('ed-render-message').textContent = data.message || '';
       document.getElementById('ed-render-fill').style.width = Math.max(0, Math.min(100, Number(data.percent || 0))) + '%';
@@ -811,6 +952,33 @@ async function edRender() {
     // The final SSE event already contains the complete project. Avoid a redundant
     // request exactly when Render may recycle the instance after a long render.
     if (edCurrentProject && !renderCompleted) await edOpenProject(edCurrentProject.id);
+  }
+}
+
+async function edPreviewRender() {
+  if (!edCurrentProject || edBusy) return;
+  edBusy = true;
+  const progress = document.getElementById('ed-render-progress');
+  progress.classList.remove('hidden');
+  const button = document.getElementById('ed-preview-render-btn');
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/edit-projects/${edCurrentProject.id}/render/preview`, {method: 'POST'});
+    await edReadSse(response, data => {
+      document.getElementById('ed-render-message').textContent = data.message || '';
+      document.getElementById('ed-render-fill').style.width = Math.max(0, Math.min(100, Number(data.percent || 0))) + '%';
+      if (data.step === 'done' && data.project) {
+        edRenderProject(data.project);
+        edLoadProjects();
+        edLoadStorage();
+      }
+      if (data.step === 'error') throw new Error(data.message);
+    });
+  } catch (e) {
+    document.getElementById('ed-render-message').textContent = '오류: ' + e.message;
+  } finally {
+    edBusy = false;
+    if (edCurrentProject) await edOpenProject(edCurrentProject.id);
   }
 }
 

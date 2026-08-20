@@ -16,6 +16,7 @@ EDIT_ACTIONS = {
     "use_as_short_clip",
     "add_broll",
     "add_caption_emphasis",
+    "highlight",
 }
 
 ENHANCEMENT_TYPES = {"broll", "caption_emphasis"}
@@ -61,6 +62,15 @@ def normalize_proposals(segments: list[dict[str, Any]], duration: float) -> list
                 "confidence": round(confidence, 3),
                 "expected_effect": str(raw.get("expected_effect") or "").strip()[:600],
                 "destination": str(raw.get("destination") or "").strip()[:80],
+                "audio_score": round(max(0.0, min(1.0, _number(raw.get("audio_score"), 0.5))), 3),
+                "visual_score": (
+                    round(max(0.0, min(1.0, _number(raw.get("visual_score"), 0.5))), 3)
+                    if raw.get("visual_score") is not None else None
+                ),
+                "context_score": round(max(0.0, min(1.0, _number(raw.get("context_score"), 0.5))), 3),
+                "visual_evidence": [
+                    str(item)[:80] for item in (raw.get("visual_evidence") or [])[:20]
+                ],
             }
         )
     return sorted(output, key=lambda item: (item["start_time"], item["end_time"], item["id"]))
@@ -128,7 +138,12 @@ def _fit_target(
     for index, item in enumerate(timeline):
         available = item["source_end"] - item["source_start"]
         future_min = sum(
-            min(8.0 if i == len(timeline) - 1 else 0.35, other["source_end"] - other["source_start"])
+            min(
+                (other["source_end"] - other["source_start"])
+                if other.get("action") in {"move_to_hook", "visual_highlight"}
+                else 8.0 if i == len(timeline) - 1 else 0.35,
+                other["source_end"] - other["source_start"],
+            )
             for i, other in enumerate(timeline[index + 1 :], start=index + 1)
         )
         take = min(available, max(0.0, remaining - future_min))
@@ -173,15 +188,31 @@ def build_render_timeline(plan: dict[str, Any], duration: float) -> list[dict[st
                 "reason": hook["reason"] or "가장 강한 문제·결과 장면을 오프닝으로 이동",
             }
         )
+    highlights = [item for item in proposals if item["action"] == "highlight"]
     for start, end in _subtract(duration, removals):
-        timeline.append(
-            {
-                "source_start": round(start, 3),
-                "source_end": round(end, 3),
-                "action": "keep",
-                "reason": "승인된 컷 지시를 제외한 원본 흐름 유지",
-            }
-        )
+        cursor = start
+        for highlight in highlights:
+            overlap_start = max(start, cursor, highlight["start_time"])
+            overlap_end = min(end, highlight["end_time"])
+            if overlap_end - overlap_start < 0.08:
+                continue
+            if overlap_start > cursor + 0.08:
+                timeline.append({
+                    "source_start": round(cursor, 3), "source_end": round(overlap_start, 3),
+                    "action": "keep", "reason": "승인된 컷 지시를 제외한 원본 흐름 유지",
+                })
+            timeline.append({
+                "source_start": round(overlap_start, 3), "source_end": round(overlap_end, 3),
+                "action": "visual_highlight", "reason": highlight["reason"] or "화면 가치가 높은 현장 장면 유지",
+                "audio_score": highlight.get("audio_score"), "visual_score": highlight.get("visual_score"),
+                "context_score": highlight.get("context_score"), "visual_evidence": highlight.get("visual_evidence") or [],
+            })
+            cursor = max(cursor, overlap_end)
+        if cursor < end - 0.08:
+            timeline.append({
+                "source_start": round(cursor, 3), "source_end": round(end, 3),
+                "action": "keep", "reason": "승인된 컷 지시를 제외한 원본 흐름 유지",
+            })
     target = _number(plan.get("target_length_seconds"))
     return _fit_target(timeline, target)
 
@@ -190,7 +221,7 @@ def build_short_timeline(plan: dict[str, Any], duration: float) -> list[dict[str
     proposals = normalize_proposals(plan.get("segments") or [], duration)
     selected = [item for item in proposals if item["action"] == "use_as_short_clip"]
     if not selected:
-        selected = [item for item in proposals if item["action"] == "use_as_hook"]
+        selected = [item for item in proposals if item["action"] in {"use_as_hook", "highlight"}]
     selected.sort(key=lambda item: (-item["confidence"], item["start_time"]))
     target = min(90.0, max(10.0, _number(plan.get("short_target_seconds"), 45.0)))
     output = []
@@ -280,6 +311,14 @@ def plan_diff(previous: dict[str, Any], current: dict[str, Any]) -> list[dict[st
                 "after": f"{len(current.get('enhancements') or [])}개",
             }
         )
+    before_timeline = previous.get("timeline") or []
+    after_timeline = current.get("timeline") or []
+    if before_timeline != after_timeline:
+        changes.append({
+            "field": "멀티소스 구성 순서",
+            "before": f"{len(before_timeline)}개 구간",
+            "after": f"{len(after_timeline)}개 구간",
+        })
     return changes
 
 

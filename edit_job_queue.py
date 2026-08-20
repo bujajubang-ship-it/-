@@ -22,6 +22,8 @@ from edit_project_store import utc_now
 JOB_TYPE = "edit_job"
 JOB_TYPES = {
     "ingest", "proxy", "transcription", "analysis", "rendering",
+    "preview_rendering", "final_rendering",
+    "source_analysis", "story_planning", "rough_cut_rendering",
     "short_render", "storage_upload", "cleanup", "performance_sync",
 }
 TERMINAL = {"completed", "failed", "cancelled"}
@@ -87,8 +89,12 @@ class EditJobQueue:
                 "INSERT INTO history(type,keyword,report) VALUES(?,?,?)",
                 (JOB_TYPE, f"{job_type}:{project_id}", json.dumps(job, ensure_ascii=False, sort_keys=True)),
             )
-            connection.commit()
             job["job_id"] = int(cursor.lastrowid)
+            # Worker payloads are self-contained audit artifacts. Injecting the
+            # durable id after INSERT avoids a second caller-side mutation.
+            job["payload"].setdefault("job_id", job["job_id"])
+            self._save(connection, job)
+            connection.commit()
             return job
 
     def _save(self, connection, job: dict[str, Any]) -> None:
