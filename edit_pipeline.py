@@ -165,8 +165,44 @@ class EditPipeline:
         project_id = int(job["project_id"])
         _, project = self._row(project_id)
         started = time.perf_counter()
+
+        def save_progress(
+            *, stage: str, label: str, percent: int,
+            pending_operation: str | None = None,
+            checkpoint_name: str | None = None,
+            total_chunks: int | None = None,
+            completed_chunks: int | None = None,
+            current_chunk: int | None = None,
+            last_error: str | None = None,
+        ) -> None:
+            previous = dict(project.get("analysis_progress") or {})
+            progress = {
+                **previous,
+                "stage": stage,
+                "label": label,
+                "percent": max(0, min(100, int(percent))),
+                "pending_operation": pending_operation,
+                "updated_at": utc_now(),
+                "last_error": last_error,
+            }
+            if total_chunks is not None:
+                progress["total_chunks"] = max(0, int(total_chunks))
+            if completed_chunks is not None:
+                progress["completed_chunks"] = max(0, int(completed_chunks))
+            progress["current_chunk"] = current_chunk
+            if checkpoint_name:
+                progress["last_success_checkpoint"] = checkpoint_name
+                progress["last_checkpoint_at"] = progress["updated_at"]
+            project["analysis_progress"] = progress
+            self.store.save(project_id, project)
+
         try:
             project = transition_project(project, "transcribing", lifecycle="ANALYZING", reason="durable analysis started", job_id=int(job["job_id"]))
+            save_progress(
+                stage="source_download", label="원본 작업 사본 준비", percent=2,
+                pending_operation="r2_download",
+                checkpoint_name="UPLOAD_COMPLETE",
+            )
             self.store.save(project_id, project)
             ingest = MediaIngestService(self.store)
             analysis = EditAnalysisService()
@@ -189,6 +225,10 @@ class EditPipeline:
                         project.setdefault("timings", {})[
                             "analysis_proxy_download_seconds" if proxy_meta.get("object_key") else "analysis_source_download_seconds"
                         ] = download_seconds
+                        save_progress(
+                            stage="media_inspection", label="미디어 정보 확인", percent=5,
+                            checkpoint_name="SOURCE_DOWNLOADED",
+                        )
                     if not media:
                         media = await asyncio.to_thread(ingest.probe, source)
                         project.setdefault("source", {})["media"] = media
@@ -202,15 +242,56 @@ class EditPipeline:
                     if not transcript.get("segments"):
                         media_started = time.perf_counter()
                         work_dir = self.store.project_dir(str(project["project_uuid"]), create=True)
-                        transcript, silences, scenes = await ingest.inspect_and_transcribe(source, media, work_dir=work_dir)
+
+                        async def transcript_progress(update: dict[str, Any]) -> None:
+                            completed_chunk = update.pop("completed_chunk", None)
+                            chunks = list(project.get("transcript_chunks") or [])
+                            if completed_chunk:
+                                index = int(completed_chunk["chunk_index"])
+                                chunks = [
+                                    row for row in chunks
+                                    if int(row.get("chunk_index") or 0) != index
+                                ]
+                                chunks.append(completed_chunk)
+                                chunks.sort(key=lambda row: int(row.get("chunk_index") or 0))
+                                project["transcript_chunks"] = chunks
+                            total = max(0, int(update.get("total_chunks") or 0))
+                            completed = max(0, int(update.get("completed_chunks") or 0))
+                            transcript_percent = round((completed / total) * 100) if total else 0
+                            checkpoint_name = str(update.get("checkpoint") or "")
+                            save_progress(
+                                stage=str(update.get("stage") or "transcribing"),
+                                label="음성 분석" if update.get("stage") == "transcribing" else "장면·정적 분석",
+                                percent=transcript_percent,
+                                pending_operation=update.get("pending_operation"),
+                                checkpoint_name=checkpoint_name or None,
+                                total_chunks=total,
+                                completed_chunks=completed,
+                                current_chunk=update.get("current_chunk"),
+                            )
+
+                        transcript, silences, scenes = await ingest.inspect_and_transcribe(
+                            source, media, work_dir=work_dir,
+                            existing_chunks=project.get("transcript_chunks") or [],
+                            on_progress=transcript_progress,
+                        )
                         project["transcript"] = transcript
                         project["analysis_signals"] = {"silences": silences, "scene_changes": scenes}
                         project.setdefault("timings", {})["media_and_transcript_seconds"] = round(time.perf_counter() - media_started, 3)
+                        save_progress(
+                            stage="visual_analysis", label="대표 화면 분석", percent=100,
+                            checkpoint_name="TRANSCRIPT_AND_SIGNALS_COMPLETE",
+                        )
                         self.store.save(project_id, project)
                     else:
                         silences = signals.get("silences") or []
                         scenes = signals.get("scene_changes") or []
                     if not visual_attempted:
+                        save_progress(
+                            stage="visual_analysis", label="대표 화면 분석", percent=100,
+                            pending_operation="visual_frame_analysis",
+                            checkpoint_name="TRANSCRIPT_AND_SIGNALS_COMPLETE",
+                        )
                         visual_analysis = await self._run_visual_analysis(
                             source=source, transcript=transcript, media=media,
                             scenes=scenes, analysis=analysis,
@@ -248,6 +329,11 @@ class EditPipeline:
             if not evidence:
                 retrieval_started = time.perf_counter()
                 project = transition_project(project, "retrieving_context", lifecycle="ANALYZING", reason="channel evidence retrieval", job_id=int(job["job_id"]))
+                save_progress(
+                    stage="retrieving_context", label="채널·비즈니스 근거 비교", percent=100,
+                    pending_operation="retrieval",
+                    checkpoint_name="VISUAL_ANALYSIS_COMPLETE",
+                )
                 self.store.save(project_id, project)
                 settings = project.get("settings") or {}
                 evidence, trace, strategy = await analysis.collect_evidence(
@@ -269,6 +355,11 @@ class EditPipeline:
                 project["evidence_trace"] = trace
                 self.store.save(project_id, project)
             project = transition_project(project, "diagnosing", lifecycle="ANALYZING", reason="channel-grounded AI diagnosis", job_id=int(job["job_id"]))
+            save_progress(
+                stage="diagnosing", label="AI 편집 제안 작성", percent=100,
+                pending_operation="openai_diagnosis",
+                checkpoint_name="EVIDENCE_RETRIEVAL_COMPLETE",
+            )
             self.store.save(project_id, project)
             diagnosis_started = time.perf_counter()
             diagnosis = await analysis.diagnose(
@@ -293,12 +384,23 @@ class EditPipeline:
             project.setdefault("timings", {})["analysis_total_seconds"] = round(time.perf_counter() - started, 3)
             project = transition_project(project, "proposed", lifecycle="AWAITING_REVIEW", reason="diagnosis ready", job_id=int(job["job_id"]))
             project["error"] = None
+            save_progress(
+                stage="completed", label="분석 완료", percent=100,
+                checkpoint_name="DIAGNOSIS_COMPLETE",
+            )
             self.store.save(project_id, project)
             return {"analysis_seconds": project["timings"]["analysis_total_seconds"]}
         except Exception as exc:
             _, latest = self._row(project_id)
             latest = transition_project(latest, "analysis_failed", lifecycle="FAILED_ANALYSIS", reason=type(exc).__name__, job_id=int(job["job_id"]))
             latest["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            progress = dict(latest.get("analysis_progress") or {})
+            progress.update({
+                "last_error": latest["error"],
+                "pending_operation": None,
+                "updated_at": utc_now(),
+            })
+            latest["analysis_progress"] = progress
             self.store.save(project_id, latest)
             raise
 

@@ -181,6 +181,65 @@ class DurableQueueTests(unittest.TestCase):
         self.assertNotIn("ed/p/.stage-full", s3.objects)
 
 
+class CheckpointedTranscriptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_completed_transcript_chunk_is_reused_and_progress_is_reported(self):
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ, {"EDIT_TRANSCRIPT_CHUNK_SECONDS": "600"}
+        ):
+            root = Path(td)
+            source = root / "source.mp4"
+            source.write_bytes(b"source")
+            ingest = MediaIngestService()
+            extract_starts = []
+            progress = []
+
+            def extract(_source, output, _duration, *, start=0.0):
+                extract_starts.append(start)
+                output.write_bytes(b"audio")
+                return output
+
+            async def transcribe(_audio):
+                return {
+                    "text": "두 번째 구간",
+                    "segments": [{"start": 1.0, "end": 4.0, "text": "두 번째 구간"}],
+                    "provider": "openai",
+                }
+
+            existing = [{
+                "chunk_index": 0, "start": 0.0, "end": 600.0,
+                "status": "completed",
+                "transcript": {
+                    "text": "첫 번째 구간",
+                    "segments": [{"start": 1.0, "end": 4.0, "text": "첫 번째 구간"}],
+                    "provider": "openai",
+                },
+            }]
+            with patch.object(ingest, "extract_audio", side_effect=extract), patch.object(
+                ingest, "transcribe", side_effect=transcribe
+            ), patch.object(ingest, "detect_silences_chunked", return_value=[]), patch.object(
+                ingest, "detect_scenes", return_value=[]
+            ):
+                transcript, silences, scenes = await ingest.inspect_and_transcribe(
+                    source,
+                    {"duration": 1200.0, "has_audio": True},
+                    work_dir=root,
+                    existing_chunks=existing,
+                    on_progress=lambda row: _capture_progress(progress, row),
+                )
+
+            self.assertEqual(extract_starts, [600.0])
+            self.assertIn("첫 번째 구간", transcript["text"])
+            self.assertIn("두 번째 구간", transcript["text"])
+            self.assertEqual((silences, scenes), ([], []))
+            completed = [row for row in progress if row.get("checkpoint") == "TRANSCRIPT_CHUNK_COMPLETED"]
+            self.assertEqual(completed[-1]["completed_chunks"], 2)
+            self.assertEqual(completed[-1]["total_chunks"], 2)
+
+
+async def _capture_progress(target, row):
+    target.append(dict(row))
+
+
 class DurableWorkerHeartbeatTests(unittest.IsolatedAsyncioTestCase):
     async def test_transient_heartbeat_failure_does_not_kill_liveness(self):
         class FlakyQueue:

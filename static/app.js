@@ -448,7 +448,28 @@ async function edPollAnalysis(projectId) {
       edRenderProject(project); throw new Error(project.error || 'AI 편집 분석에 실패했습니다. 다시 시도할 수 있습니다.');
     }
     const position = project.queue_position ? ` · 대기 ${project.queue_position}번째` : '';
-    edSetProgress(project.status === 'diagnosing' ? 'diagnosing' : 'transcribing', `${labels[project.status] || '안전한 작업 큐에서 처리 중'}${position}`, project.status === 'diagnosing' ? 85 : 65);
+    const progress = project.analysis_progress || {};
+    const total = Number(progress.total_chunks || 0);
+    const completed = Number(progress.completed_chunks || 0);
+    const percent = Math.max(0, Math.min(100, Number(progress.percent ?? (project.status === 'diagnosing' ? 85 : 0))));
+    const updatedAt = progress.updated_at || progress.last_checkpoint_at || project.current_job?.heartbeat_at;
+    const elapsedSeconds = updatedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(updatedAt)) / 1000)) : null;
+    const elapsedText = elapsedSeconds == null || !Number.isFinite(elapsedSeconds)
+      ? ''
+      : ` · 마지막 처리 ${elapsedSeconds < 60 ? `${elapsedSeconds}초 전` : `${Math.floor(elapsedSeconds / 60)}분 전`}`;
+    const chunkText = total > 0
+      ? `${progress.label || '음성 분석'} ${completed}/${total}${progress.current_chunk ? ` · 현재 ${progress.current_chunk}번째` : ''} · 현재 ${Math.round(percent)}%`
+      : (progress.label || labels[project.status] || '안전한 작업 큐에서 처리 중');
+    const heartbeatAt = project.current_job?.heartbeat_at;
+    const heartbeatAge = heartbeatAt ? Math.max(0, (Date.now() - Date.parse(heartbeatAt)) / 1000) : 0;
+    const recoveryText = project.current_job?.status === 'running' && heartbeatAge > 180
+      ? ' · worker 응답이 늦어 안전 복구를 확인 중'
+      : '';
+    edSetProgress(
+      progress.stage || (project.status === 'diagnosing' ? 'diagnosing' : 'transcribing'),
+      `${chunkText}${elapsedText}${position}${recoveryText}`,
+      percent,
+    );
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
 }

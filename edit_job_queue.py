@@ -280,7 +280,22 @@ class EditJobWorker:
         self._task = None
 
     async def _loop(self) -> None:
+        stale_seconds = int(os.getenv("EDIT_JOB_STALE_SECONDS", "180"))
+        recovery_interval = max(15.0, min(60.0, stale_seconds / 2))
+        last_recovery = 0.0
         while True:
+            # A replacement process can start before the previous worker's
+            # heartbeat has crossed the stale threshold.  Startup-only
+            # recovery would then leave the durable row marked ``running``
+            # forever.  Recheck while this worker is idle; an actively handled
+            # job never reaches this branch and its heartbeat remains the
+            # source of truth.
+            now = asyncio.get_running_loop().time()
+            if now - last_recovery >= recovery_interval:
+                await asyncio.to_thread(
+                    self.queue.recover_stale, stale_seconds=stale_seconds
+                )
+                last_recovery = now
             job = await asyncio.to_thread(self.queue.claim, self.worker_id, allowed_types=self.allowed_types)
             if not job:
                 await asyncio.sleep(self.poll_seconds)
