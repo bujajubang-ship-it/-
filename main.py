@@ -49,7 +49,7 @@ from edit_storage import EditStorageService, object_storage_configured, object_s
 from edit_job_queue import EditJobQueue, EditJobWorker
 from edit_pipeline import EditPipeline
 from multisource_roughcut import (
-    apply_story_reasoning, ensure_multisource, find_source, new_source,
+    apply_story_reasoning, bounded_story_candidates, ensure_multisource, find_source, new_source,
 )
 from edit_render_contract import build_final_render_payload, requires_external_final, validate_final_payload
 from edit_learning_service import (
@@ -2562,10 +2562,7 @@ async def edit_projects_revise(project_id: int, req: EditPlanRevisionRequest):
             try:
                 yield sse({"step": "revising", "message": "기존 분석 cache를 유지하고 구성 순서만 수정합니다."})
                 ready = [source for source in project.get("sources") or [] if source.get("status") == "SOURCE_ANALYZED"]
-                candidates = [
-                    {**segment, "filename": source.get("filename")}
-                    for source in ready for segment in (source.get("segments") or []) if segment.get("selected")
-                ]
+                candidates = bounded_story_candidates(ready)
                 current = versions[-1]["plan"]
                 reasoning = await EditAnalysisService().plan_multisource_story(
                     candidates=candidates, evidence=project.get("evidence_snapshot") or {},

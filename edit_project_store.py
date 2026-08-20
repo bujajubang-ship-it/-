@@ -233,6 +233,7 @@ def public_project(row: dict[str, Any]) -> dict[str, Any]:
             upload.pop("object_key", None)
             source_transcript = item.get("transcript") or {}
             source_text = str(source_transcript.pop("text", "") or "")
+            source_transcript.pop("segments", None)
             source_transcript["preview"] = source_text[:1200]
             for chunk in item.get("transcript_chunks") or []:
                 if not isinstance(chunk, dict):

@@ -12,9 +12,10 @@ from unittest.mock import AsyncMock, patch
 from edit_job_queue import EditJobQueue
 from edit_pipeline import EditPipeline, PermanentEditJobError
 from edit_project_store import EditProjectStore
+from edit_project_store import public_project
 from edit_render_service import EditRenderService
 from multisource_roughcut import (
-    apply_story_reasoning, apply_visual_quality, build_story_plan, deduplicate_segments,
+    apply_story_reasoning, apply_visual_quality, bounded_story_candidates, build_story_plan, deduplicate_segments,
     ensure_multisource, new_source, plan_transcript_chunks,
     semantic_segments, validate_timeline,
 )
@@ -113,6 +114,19 @@ class MultiSourceModelTests(unittest.TestCase):
         item["visual_analysis"] = {"status": "failed"}
         apply_visual_quality(item)
         self.assertEqual(item["segments"][0]["visual_evidence_status"], "audio_only_fallback")
+
+    def test_long_story_candidates_are_bounded_and_public_payload_hides_raw_segments(self):
+        item = source("hour.mp4", "대표", "구매 전 주의사항")
+        item["segments"] = [
+            {**item["segments"][0], "segment_id": f"s-{index}", "selected": True,
+             "role": "purchase_caution", "importance": index / 200}
+            for index in range(200)
+        ]
+        candidates = bounded_story_candidates([item], per_role=10, max_total=120)
+        self.assertEqual(len(candidates), 10)
+        public = public_project({"id": 1, "report": {"sources": [item]}})
+        self.assertNotIn("segments", public["sources"][0]["transcript"])
+        self.assertIn("preview", public["sources"][0]["transcript"])
 
 
 class MultiSourceRecoveryTests(unittest.TestCase):

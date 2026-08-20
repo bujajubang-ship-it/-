@@ -22,7 +22,7 @@ from edit_storage import object_storage_from_env
 from edit_visual_service import VISUAL_FALLBACK_MESSAGE, TimecodedFrameExtractor
 from media_ingest import MediaIngestService
 from multisource_roughcut import (
-    apply_story_reasoning, apply_visual_quality, checkpoint, deduplicate_segments, ensure_multisource,
+    apply_story_reasoning, apply_visual_quality, bounded_story_candidates, checkpoint, deduplicate_segments, ensure_multisource,
     find_source, plan_transcript_chunks, semantic_segments, validate_timeline,
 )
 
@@ -743,10 +743,7 @@ class EditPipeline:
             project["evidence_snapshot"], project["evidence_trace"] = evidence, trace
             project["strategy_snapshot"] = strategy
             self.store.save(project_id, project)
-        candidates = [
-            {**segment, "filename": source.get("filename")}
-            for source in ready for segment in (source.get("segments") or []) if segment.get("selected")
-        ]
+        candidates = bounded_story_candidates(ready)
         reasoning = await analysis.plan_multisource_story(
             candidates=candidates, evidence=project.get("evidence_snapshot") or {},
             strategy=project.get("strategy_snapshot"), settings=project.get("settings") or {},
