@@ -360,18 +360,39 @@ class MediaIngestService:
         silence_task = asyncio.to_thread(self.detect_silences_chunked, path, duration)
         scene_task = asyncio.to_thread(self.detect_scenes, path, duration)
         # Ten-minute checkpoints bound both retry cost and the amount of work
-        # lost when a media worker is replaced during a long source.
+        # lost when a media worker is replaced during a long source. Existing
+        # projects keep their first persisted boundary so a deployment cannot
+        # introduce overlapping ranges halfway through a resume.
         chunk_seconds = max(300, min(600, int(os.getenv("EDIT_TRANSCRIPT_CHUNK_SECONDS", "600"))))
+        completed_existing = [
+            item for item in (existing_chunks or [])
+            if item.get("status") == "completed"
+        ]
+        if completed_existing:
+            first = min(completed_existing, key=lambda item: float(item.get("start") or 0))
+            persisted_span = round(float(first.get("end") or 0) - float(first.get("start") or 0))
+            if persisted_span >= 300:
+                chunk_seconds = persisted_span
         chunk_ranges = [
             (index, float(start), min(float(chunk_seconds), duration - start))
             for index, start in enumerate(range(0, max(1, int(duration)), chunk_seconds))
             if min(float(chunk_seconds), duration - start) > 0
         ]
-        cached = {
-            int(item.get("chunk_index") or 0): item
-            for item in (existing_chunks or [])
-            if item.get("status") == "completed" and (item.get("transcript") or {}).get("segments")
-        }
+        ranges = {index: (start, start + length) for index, start, length in chunk_ranges}
+        cached = {}
+        for item in (existing_chunks or []):
+            index = int(item.get("chunk_index") or 0)
+            expected = ranges.get(index)
+            if (
+                item.get("status") != "completed"
+                or not (item.get("transcript") or {}).get("segments")
+                or expected is None
+            ):
+                continue
+            actual_start = float(item.get("start") or 0)
+            actual_end = float(item.get("end") or actual_start)
+            if abs(actual_start - expected[0]) <= 1.0 and abs(actual_end - expected[1]) <= 2.0:
+                cached[index] = item
         transcripts: list[dict[str, Any]] = []
 
         async def report(**values: Any) -> None:

@@ -235,6 +235,47 @@ class CheckpointedTranscriptTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(completed[-1]["completed_chunks"], 2)
             self.assertEqual(completed[-1]["total_chunks"], 2)
 
+    async def test_resume_keeps_persisted_chunk_boundaries_after_config_change(self):
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ, {"EDIT_TRANSCRIPT_CHUNK_SECONDS": "300"}
+        ):
+            root = Path(td)
+            source = root / "source.mp4"
+            source.write_bytes(b"source")
+            ingest = MediaIngestService()
+            starts = []
+            progress = []
+
+            def extract(_source, output, _duration, *, start=0.0):
+                starts.append(start)
+                output.write_bytes(b"audio")
+                return output
+
+            existing = [{
+                "chunk_index": 0, "start": 0.0, "end": 1200.0,
+                "status": "completed",
+                "transcript": {
+                    "text": "기존 20분 구간",
+                    "segments": [{"start": 1.0, "end": 4.0, "text": "기존 20분 구간"}],
+                    "provider": "openai",
+                },
+            }]
+            with patch.object(ingest, "extract_audio", side_effect=extract), patch.object(
+                ingest, "transcribe", return_value={
+                    "text": "남은 구간", "segments": [{"start": 1, "end": 3, "text": "남은 구간"}],
+                    "provider": "openai",
+                }
+            ), patch.object(ingest, "detect_silences_chunked", return_value=[]), patch.object(
+                ingest, "detect_scenes", return_value=[]
+            ):
+                await ingest.inspect_and_transcribe(
+                    source, {"duration": 1726.0, "has_audio": True}, work_dir=root,
+                    existing_chunks=existing,
+                    on_progress=lambda row: _capture_progress(progress, row),
+                )
+            self.assertEqual(starts, [1200.0])
+            self.assertEqual(progress[0]["total_chunks"], 2)
+
 
 async def _capture_progress(target, row):
     target.append(dict(row))
