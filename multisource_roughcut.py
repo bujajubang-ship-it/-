@@ -274,6 +274,53 @@ def apply_visual_quality(item: dict[str, Any]) -> None:
         )), 3)
 
 
+def bounded_story_candidates(
+    sources: list[dict[str, Any]], *, per_role: int = 10, max_total: int = 120,
+) -> list[dict[str, Any]]:
+    """Keep long interviews bounded while representing every semantic role/source."""
+
+    values = [
+        {**segment, "filename": source.get("filename")}
+        for source in sources for segment in (source.get("segments") or [])
+        if segment.get("selected")
+    ]
+    roles: dict[str, list[dict[str, Any]]] = {}
+    for row in values:
+        roles.setdefault(str(row.get("role") or "other"), []).append(row)
+    output: list[dict[str, Any]] = []
+    for role in STORY_ROLE_ORDER + tuple(sorted(set(roles) - set(STORY_ROLE_ORDER))):
+        ranked = sorted(
+            roles.get(role) or [],
+            key=lambda row: (
+                float(row.get("importance") or 0), float(row.get("quality") or 0),
+                float(row.get("confidence") or 0),
+            ),
+            reverse=True,
+        )
+        # First pass keeps the best statement from different source voices.
+        chosen, seen_sources = [], set()
+        for row in ranked:
+            source_id_value = str(row.get("source_id") or "")
+            if source_id_value in seen_sources:
+                continue
+            chosen.append(row)
+            seen_sources.add(source_id_value)
+            if len(chosen) >= per_role:
+                break
+        for row in ranked:
+            if row in chosen:
+                continue
+            chosen.append(row)
+            if len(chosen) >= per_role:
+                break
+        output.extend(chosen)
+    output.sort(key=lambda row: (
+        STORY_ROLE_ORDER.index(row.get("role")) if row.get("role") in STORY_ROLE_ORDER else 99,
+        -float(row.get("importance") or 0),
+    ))
+    return output[:max(20, min(240, int(max_total)))]
+
+
 def _natural_handles(segment: dict[str, Any], duration: float) -> tuple[float, float]:
     start = max(0.0, float(segment.get("start_time") or 0) - 0.18)
     end = min(duration, float(segment.get("end_time") or 0) + 0.55)

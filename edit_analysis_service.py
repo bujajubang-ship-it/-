@@ -466,6 +466,8 @@ class EditAnalysisService:
                 "duplicate_group", "selection_reason",
             )
         } for row in candidates]
+        for row in compact_candidates:
+            row["transcript"] = str(row.get("transcript") or "")[:700]
         return await self._structured(
             prompt=f"""[설정]\n{_compact_json(settings, 5000)}
 [사용자 수정 요청]\n{user_request[:3000] or '최초 구성'}
