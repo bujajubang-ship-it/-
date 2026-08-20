@@ -359,7 +359,9 @@ class MediaIngestService:
         directory.mkdir(parents=True, exist_ok=True)
         silence_task = asyncio.to_thread(self.detect_silences_chunked, path, duration)
         scene_task = asyncio.to_thread(self.detect_scenes, path, duration)
-        chunk_seconds = max(600, min(1800, int(os.getenv("EDIT_TRANSCRIPT_CHUNK_SECONDS", "1200"))))
+        # Ten-minute checkpoints bound both retry cost and the amount of work
+        # lost when a media worker is replaced during a long source.
+        chunk_seconds = max(300, min(600, int(os.getenv("EDIT_TRANSCRIPT_CHUNK_SECONDS", "600"))))
         chunk_ranges = [
             (index, float(start), min(float(chunk_seconds), duration - start))
             for index, start in enumerate(range(0, max(1, int(duration)), chunk_seconds))
@@ -391,13 +393,15 @@ class MediaIngestService:
                     continue
                 audio_path = directory / f"analysis_audio_{index:03d}.mp3"
                 await report(
-                    current_chunk=index + 1, pending_operation="ffmpeg_audio_extract",
+                    stage="transcribing", current_chunk=index + 1,
+                    pending_operation="ffmpeg_audio_extract",
                     checkpoint=None,
                 )
                 await asyncio.to_thread(self.extract_audio, path, audio_path, length, start=float(start))
                 try:
                     await report(
-                        current_chunk=index + 1, pending_operation="openai_transcription",
+                        stage="transcribing", current_chunk=index + 1,
+                        pending_operation="openai_transcription",
                         checkpoint="AUDIO_EXTRACTED",
                     )
                     part = await self.transcribe(audio_path)
@@ -421,7 +425,7 @@ class MediaIngestService:
                     "transcript": completed,
                 }
                 await report(
-                    completed_chunks=len(cached), current_chunk=None,
+                    stage="transcribing", completed_chunks=len(cached), current_chunk=None,
                     pending_operation=None, checkpoint="TRANSCRIPT_CHUNK_COMPLETED",
                     completed_chunk=cached[index],
                 )
@@ -429,7 +433,7 @@ class MediaIngestService:
             for temp in directory.glob("analysis_audio_*.mp3"):
                 temp.unlink(missing_ok=True)
         await report(
-            completed_chunks=len(cached), current_chunk=None,
+            stage="signal_analysis", completed_chunks=len(cached), current_chunk=None,
             pending_operation="ffmpeg_signal_analysis", checkpoint="TRANSCRIPT_COMPLETE",
         )
         silences, scenes = await asyncio.gather(silence_task, scene_task)
