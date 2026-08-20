@@ -301,6 +301,37 @@ class LifecycleAndQualityTests(unittest.TestCase):
             self.assertFalse(list(Path(td).glob(".*.part.mp4")))
 
 
+class LargeAnalysisSourceTests(unittest.TestCase):
+    def test_large_analysis_source_streams_from_r2_without_tmp_copy(self):
+        class Backend:
+            def __init__(self):
+                self.signed = []
+
+            def presigned_download(self, key, *, expires_seconds):
+                self.signed.append((key, expires_seconds))
+                return "https://objects.invalid/source.mp4?signed=redacted"
+
+        backend = Backend()
+        pipeline = EditPipeline()
+        project = {
+            "project_uuid": "f" * 32,
+            "source": {
+                "object_key": "edit/f/source.mp4",
+                "size_bytes": 2_205_946_289,
+            },
+        }
+        with patch.dict(os.environ, {"EDIT_ANALYSIS_STREAM_THRESHOLD_MB": "1024"}), patch.object(
+            pipeline, "_working_source", side_effect=AssertionError("must not copy large source to /tmp")
+        ):
+            temporary, source, _seconds, streamed = asyncio.run(
+                pipeline._analysis_source_access(project, backend)
+            )
+        self.assertIsNone(temporary)
+        self.assertTrue(streamed)
+        self.assertTrue(source.startswith("https://objects.invalid/"))
+        self.assertEqual(backend.signed, [("edit/f/source.mp4", 43200)])
+
+
 @unittest.skipUnless(__import__("shutil").which("ffmpeg") and __import__("shutil").which("ffprobe"), "ffmpeg required")
 class ObjectWorkingCopyPipelineTests(unittest.TestCase):
     def test_object_render_downloads_once_validates_uploads_and_cleans_working_copy(self):

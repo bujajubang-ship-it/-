@@ -84,6 +84,31 @@ class EditPipeline:
             await asyncio.to_thread(temporary.cleanup)
             raise
 
+    async def _analysis_source_access(
+        self, project: dict[str, Any], backend: Any,
+    ) -> tuple[tempfile.TemporaryDirectory[str] | None, str, float, bool]:
+        """Range-read large originals instead of overflowing Render /tmp."""
+
+        proxy_meta = project.get("proxy") or {}
+        object_meta = proxy_meta if proxy_meta.get("object_key") else (project.get("source") or {})
+        size = max(0, int(object_meta.get("size_bytes") or 0))
+        stream_threshold = max(
+            256 * 1024 * 1024,
+            int(os.getenv("EDIT_ANALYSIS_STREAM_THRESHOLD_MB", "1024")) * 1024 * 1024,
+        )
+        if size >= stream_threshold:
+            started = time.perf_counter()
+            url = await asyncio.to_thread(
+                backend.presigned_download,
+                str(object_meta["object_key"]),
+                expires_seconds=43200,
+            )
+            return None, str(url), round(time.perf_counter() - started, 3), True
+        temporary, local_source, seconds = await self._working_source(
+            project, backend, output_ratio=1.25, object_meta=object_meta,
+        )
+        return temporary, str(local_source), seconds, False
+
     @staticmethod
     async def _cleanup_working_copy(temporary: tempfile.TemporaryDirectory[str] | None) -> None:
         if temporary is not None:
@@ -217,23 +242,27 @@ class EditPipeline:
                 try:
                     if backend is not None:
                         proxy_meta = project.get("proxy") or {}
-                        temporary, local_source, download_seconds = await self._working_source(
-                            project, backend, output_ratio=1.25,
-                            object_meta=proxy_meta if proxy_meta.get("object_key") else None,
+                        temporary, source, access_seconds, streamed = await self._analysis_source_access(
+                            project, backend,
                         )
-                        source = str(local_source)
                         project.setdefault("timings", {})[
-                            "analysis_proxy_download_seconds" if proxy_meta.get("object_key") else "analysis_source_download_seconds"
-                        ] = download_seconds
+                            "analysis_source_stream_setup_seconds" if streamed else (
+                                "analysis_proxy_download_seconds" if proxy_meta.get("object_key") else "analysis_source_download_seconds"
+                            )
+                        ] = access_seconds
                         save_progress(
                             stage="media_inspection", label="미디어 정보 확인", percent=5,
-                            checkpoint_name="SOURCE_DOWNLOADED",
+                            checkpoint_name="SOURCE_STREAM_READY" if streamed else "SOURCE_DOWNLOADED",
                         )
                     if not media:
                         media = await asyncio.to_thread(ingest.probe, source)
                         project.setdefault("source", {})["media"] = media
                         self.store.save(project_id, project)
                     if backend is not None:
+                        if temporary is None and int(media.get("width") or 0) > 1920:
+                            temporary = tempfile.TemporaryDirectory(
+                                prefix=f"edit-proxy-{str(project.get('project_uuid') or '')[:8]}-"
+                            )
                         source = str(await self._ensure_analysis_proxy(
                             project_id, project, backend=backend,
                             local_source=Path(source), temporary=temporary,
