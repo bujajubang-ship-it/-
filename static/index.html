@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="style.css?v=20260819-production-video-pipeline" />
+  <link rel="stylesheet" href="style.css?v=20260821-preview-ready" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -1200,6 +1200,17 @@
               <button id="ed-preview-render-btn" class="secondary-btn" onclick="edPreviewRender()" disabled>1080p 검토본 만들기</button>
               <button id="ed-render-btn" class="ed-render-btn" onclick="edRender()" disabled>최종 원본 화질 렌더 요청</button>
             </div>
+            <div class="ed-render-state-grid">
+              <div class="ed-render-state-card">
+                <div><b>Preview</b><span id="ed-preview-status" class="ed-render-state-value">준비 전</span></div>
+                <small>빠른 확인용 1080p 영상</small>
+                <div id="ed-preview-actions" class="ed-preview-actions hidden"></div>
+              </div>
+              <div class="ed-render-state-card">
+                <div><b>Final 렌더 상태</b><span id="ed-final-status" class="ed-render-state-value">요청 전</span></div>
+                <small>원본 화질 최종 결과는 전용 worker에서 처리합니다.</small>
+              </div>
+            </div>
             <div id="ed-render-progress" class="hidden ed-render-progress"><div id="ed-render-message"></div><div class="progress-bar"><div class="progress-fill" id="ed-render-fill"></div></div></div>
           </div>
 
@@ -1507,7 +1518,7 @@
 
   </main>
 
-  <script src="app.js?v=20260820-multisource-roughcut"></script>
+  <script src="app.js?v=20260821-preview-ready"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');
