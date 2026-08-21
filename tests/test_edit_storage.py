@@ -234,6 +234,19 @@ class EditStorageTests(unittest.TestCase):
         with patch.dict(os.environ, {"EDIT_STORAGE_BACKEND": "object", "EDIT_OBJECT_BUCKET": "videos"}):
             self.assertIsInstance(object_storage_from_env(client=client), ObjectStorageBackend)
 
+    def test_presigned_preview_download_requests_attachment_disposition(self):
+        client = FakeS3()
+        backend = ObjectStorageBackend(bucket="videos", prefix="ed", client=client)
+        backend.presigned_download(
+            "ed/project/preview-v2.mp4",
+            download_filename="초음파세척기-preview.mp4",
+        )
+        _, _, kwargs = client.calls[-1]
+        disposition = kwargs["Params"]["ResponseContentDisposition"]
+        self.assertIn("attachment", disposition)
+        self.assertIn("preview.mp4", disposition)
+        self.assertNotIn("초음파세척기", disposition)
+
 
 class EditStorageApiTests(unittest.TestCase):
     def setUp(self):
@@ -304,6 +317,37 @@ class EditStorageApiTests(unittest.TestCase):
         self.assertIn("full", saved["outputs"])
         self.assertNotIn(project_id, main.EDIT_RENDERING)
         self.assertNotIn(project_id, main.EDIT_RENDER_TASKS)
+
+    def test_object_preview_download_uses_attachment_presign(self):
+        uuid_value = os.urandom(16).hex()
+        payload = project(uuid_value, status="final_queued")
+        payload["outputs"] = {
+            "preview": {
+                "storage_backend": "object",
+                "object_key": f"ed/{uuid_value}/preview-v2.mp4",
+                "filename": "preview-v2.mp4",
+            }
+        }
+        project_id = self.store.create(keyword="preview", project=payload)
+
+        class Backend:
+            def __init__(self):
+                self.options = None
+
+            def presigned_download(self, _key, **options):
+                self.options = options
+                return "https://object.invalid/signed"
+
+        backend = Backend()
+        with patch.object(main, "EditProjectStore", lambda *args, **kwargs: self.store), patch.object(
+            main, "object_storage_from_env", return_value=backend
+        ):
+            response = self.client.get(
+                f"/api/edit-projects/{project_id}/outputs/preview?download=1",
+                follow_redirects=False,
+            )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(backend.options["download_filename"], "preview-v2.mp4")
 
 
 if __name__ == "__main__":

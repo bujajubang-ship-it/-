@@ -614,6 +614,9 @@ class EditDirectorApiTests(unittest.TestCase):
         self.assertIn('id="pane-edit-director"', response.text)
         self.assertIn('value="raw_footage"', response.text)
         self.assertIn('value="rough_cut"', response.text)
+        self.assertIn('id="ed-preview-status"', response.text)
+        self.assertIn('id="ed-preview-actions"', response.text)
+        self.assertIn('id="ed-final-status"', response.text)
 
     def test_upload_diagnosis_revision_approval_gate_render_and_history(self):
         store_factory = lambda: self.store

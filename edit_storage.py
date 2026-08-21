@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote
 
 from edit_project_store import EditProjectStore, utc_now
 
@@ -293,9 +294,19 @@ class ObjectStorageBackend:
             token = value.get("NextContinuationToken")
         return {"objects": count, "bytes": total}
 
-    def presigned_download(self, key: str, *, expires_seconds: int = 3600) -> str:
+    def presigned_download(
+        self, key: str, *, expires_seconds: int = 3600,
+        download_filename: str | None = None,
+    ) -> str:
+        params = {"Bucket": self.bucket, "Key": key}
+        if download_filename:
+            safe_name = Path(download_filename).name.replace('"', "") or "download"
+            params["ResponseContentDisposition"] = (
+                f"attachment; filename=\"download{Path(safe_name).suffix}\"; "
+                f"filename*=UTF-8''{quote(safe_name)}"
+            )
         return self.client.generate_presigned_url(
-            "get_object", Params={"Bucket": self.bucket, "Key": key},
+            "get_object", Params=params,
             ExpiresIn=max(60, min(int(expires_seconds), 86400)),
         )
 

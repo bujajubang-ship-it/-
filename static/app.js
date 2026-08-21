@@ -198,7 +198,7 @@ const ED_STATUS_LABELS = {
   uploading: '직접 업로드 중', upload_failed: '업로드 실패', uploaded: '업로드 완료', transcribing: '받아쓰기 중', retrieving_context: '채널 근거 조회 중',
   diagnosing: 'AI 진단 중', proposed: '최초 제안', revised: '수정안 확인 필요',
   approved: '편집안 승인됨', queued: '안전 작업 큐 대기', rendering: '편집 렌더링 중',
-  final_queued: '4K 최종 렌더 대기', final_rendering: '4K 최종 렌더 중', completed: '편집 완료',
+  final_queued: '최종 고화질 렌더 대기 중', final_rendering: '최종 고화질 렌더 중', completed: '편집 완료',
   published_or_downloaded: '업로드/다운로드 확인', media_purged: '미디어 정리 완료',
   analysis_failed: '분석 실패', render_failed: '렌더링 실패'
 };
@@ -722,6 +722,48 @@ async function edOpenProject(id) {
   }
 }
 
+function edPlayPreview() {
+  const preview = edCurrentProject?.outputs?.preview;
+  if (!preview?.download_url) return;
+  const outputCard = document.getElementById('ed-output-card');
+  const video = document.getElementById('ed-output-video');
+  outputCard.classList.remove('hidden');
+  video.src = `${preview.download_url}?v=${encodeURIComponent(preview.created_at || '')}`;
+  video.load();
+  outputCard.scrollIntoView({behavior: 'smooth', block: 'start'});
+  video.play().catch(() => {});
+}
+
+function edRenderState(project) {
+  const outputs = project.outputs || {};
+  const previewState = outputs.preview ? 'succeeded' : (project.preview_state || 'not_requested');
+  const previewLabels = {
+    succeeded: 'Preview 완료 100%', queued: 'Preview 대기 중', rendering: 'Preview 생성 중',
+    failed: 'Preview 생성 실패', not_requested: '준비 전',
+  };
+  const previewStatus = document.getElementById('ed-preview-status');
+  previewStatus.className = `ed-render-state-value ${previewState}`;
+  previewStatus.textContent = previewLabels[previewState] || previewState;
+  const previewActions = document.getElementById('ed-preview-actions');
+  if (outputs.preview?.download_url) {
+    previewActions.classList.remove('hidden');
+    previewActions.innerHTML = `<button type="button" onclick="edPlayPreview()">Preview 재생</button><a href="${escHtml(outputs.preview.download_url)}?download=1" download>Preview 다운로드</a>`;
+  } else {
+    previewActions.classList.add('hidden');
+    previewActions.innerHTML = '';
+  }
+
+  let finalState = project.final_render_state || 'not_requested';
+  if (outputs.full) finalState = 'succeeded';
+  const finalLabels = {
+    succeeded: 'Final 완료 100%', queued: '최종 고화질 렌더 대기 중',
+    rendering: '최종 고화질 렌더 중', failed: 'Final 렌더 실패', not_requested: '요청 전',
+  };
+  const finalStatus = document.getElementById('ed-final-status');
+  finalStatus.className = `ed-render-state-value ${finalState}`;
+  finalStatus.textContent = finalLabels[finalState] || finalState;
+}
+
 function edRenderProject(project) {
   edCurrentProject = project;
   const isMulti = project.project_mode === 'multisource_roughcut';
@@ -813,15 +855,23 @@ function edRenderProject(project) {
   render.disabled = !approved || runtimeRendering || ['queued', 'rendering'].includes(project.final_render_state);
   render.textContent = isMulti
     ? (runtimeRendering ? '러프컷 생성 중...' : '승인 구성으로 1080p 러프컷 생성')
-    : (project.final_render_state === 'queued' ? '최종 렌더 대기 중' : (runtimeRendering ? '편집 실행 중...' : '최종 원본 화질 렌더 요청'));
+    : (project.final_render_state === 'queued' ? '최종 고화질 렌더 대기 중' : (runtimeRendering ? '편집 실행 중...' : '최종 원본 화질 렌더 요청'));
   const previewRender = document.getElementById('ed-preview-render-btn');
   if (previewRender) {
     previewRender.disabled = isMulti || !approved || runtimeRendering || project.preview_state === 'rendering' || project.preview_state === 'queued';
     previewRender.textContent = isMulti ? '멀티소스는 승인 후 러프컷 생성' : (project.preview_state === 'succeeded' ? '1080p 검토본 다시 만들기' : '1080p 검토본 만들기');
   }
-  if (project.queue_position) {
+  edRenderState(project);
+  const renderProgress = document.getElementById('ed-render-progress');
+  if (project.final_render_state === 'queued' || project.status === 'final_queued') {
+    document.getElementById('ed-render-message').textContent = '최종 고화질 렌더 대기 중 · 실패나 정지가 아니라 전용 worker 순서를 기다리고 있습니다.';
+    document.getElementById('ed-render-fill').style.width = '0%';
+    renderProgress.classList.remove('hidden');
+  } else if (project.queue_position) {
     document.getElementById('ed-render-message').textContent = `안전 작업 큐 ${Number(project.queue_position)}번째에서 기다리고 있습니다.`;
-    document.getElementById('ed-render-progress').classList.remove('hidden');
+    renderProgress.classList.remove('hidden');
+  } else {
+    renderProgress.classList.add('hidden');
   }
   if (project.failed_job) {
     document.getElementById('ed-plan-notes').innerHTML += `<br><button class="ed-retry-btn" onclick="edRetryJob(${Number(project.failed_job.job_id)})">실패 단계부터 다시 시도</button>`;
@@ -835,14 +885,14 @@ function edRenderProject(project) {
     const primaryOutput = outputs.rough_cut || outputs.full || outputs.preview;
     video.src = primaryOutput.download_url + `?v=${encodeURIComponent(primaryOutput.created_at || '')}`;
     document.getElementById('ed-output-links').innerHTML = `
-      ${outputs.preview ? `<a href="${outputs.preview.download_url}" download>1080p 검토본 다운로드</a>` : ''}
+      ${outputs.preview ? `<a href="${outputs.preview.download_url}?download=1" download>Preview 다운로드</a>` : ''}
       ${outputs.rough_cut ? `<a href="${outputs.rough_cut.download_url}" download>멀티소스 러프컷 다운로드</a>` : ''}
       ${outputs.full ? `<a href="${outputs.full.download_url}" download>전체 편집본 다운로드</a>` : ''}
       ${outputs.short ? `<a href="${outputs.short.download_url}" download>쇼츠 하이라이트 다운로드</a>` : ''}
       ${outputs.decision ? `<a href="${outputs.decision.download_url}" download>편집 결정 JSON</a>` : ''}`;
     const qaRows = Object.entries(project.quality_assurance || {});
     document.getElementById('ed-quality-assurance').innerHTML = qaRows.length
-      ? `<b>자동 품질 검사</b>${qaRows.map(([kind, qa]) => `<div>${kind === 'short' ? '쇼츠' : '전체'} · ${escHtml(qa.status || '-')} · ${edTime(qa.actual_duration)}${(qa.warnings || []).length ? `<br>⚠️ ${(qa.warnings || []).map(item => escHtml(item.message || item.code || '')).join(' · ')}` : ''}</div>`).join('')}`
+      ? `<b>자동 품질 검사</b>${qaRows.map(([kind, qa]) => `<div>${kind === 'short' ? '쇼츠' : (kind === 'preview' ? 'Preview' : (kind === 'rough_cut' ? '러프컷' : '전체'))} · ${escHtml(qa.status || '-')} · ${edTime(qa.actual_duration)}${(qa.warnings || []).length ? `<br>⚠️ ${(qa.warnings || []).map(item => escHtml(item.message || item.code || '')).join(' · ')}` : ''}</div>`).join('')}`
       : '<b>자동 품질 검사</b><div>이전 버전 결과에는 QA 기록이 없습니다.</div>';
     document.getElementById('ed-edit-log').innerHTML = (project.applied_edit_log || []).map(item =>
       `<div class="ed-log-row">${item.output === 'short' ? '쇼츠' : '전체'} #${Number(item.order)} · ${edTime(item.source_start)}~${edTime(item.source_end)} · ${escHtml(item.action || '')}<br>${escHtml(item.reason || '')}</div>`

@@ -3102,7 +3102,7 @@ async def edit_projects_media_purge(project_id: int, req: EditMediaPurgeRequest)
 
 
 @app.get("/api/edit-projects/{project_id}/outputs/{kind}")
-async def edit_projects_output(project_id: int, kind: str):
+async def edit_projects_output(project_id: int, kind: str, download: bool = False):
     if kind not in {"preview", "full", "short", "decision", "rough_cut"}:
         return JSONResponse({"error": "출력 파일을 찾지 못했습니다."}, status_code=404)
     try:
@@ -3115,8 +3115,13 @@ async def edit_projects_output(project_id: int, kind: str):
         if backend is None:
             return JSONResponse({"error": "Object Storage 연결을 확인해주세요."}, status_code=503)
         try:
+            download_options = {"expires_seconds": 3600}
+            if download:
+                download_options["download_filename"] = str(
+                    output.get("filename") or f"{kind}.mp4"
+                )
             url = await asyncio.to_thread(
-                backend.presigned_download, output["object_key"], expires_seconds=3600
+                backend.presigned_download, output["object_key"], **download_options
             )
         except Exception:
             return JSONResponse({"error": "다운로드 링크를 만들지 못했습니다."}, status_code=503)

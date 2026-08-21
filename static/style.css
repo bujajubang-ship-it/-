@@ -2089,6 +2089,17 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ed-render-btn { background: #ef4444; color: #fff; }
 .ed-approve-btn:disabled, .ed-render-btn:disabled, .ed-revision-row button:disabled { opacity: .4; cursor: not-allowed; }
 .ed-render-progress { width: 100%; }
+.ed-render-state-grid { width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ed-render-state-card { padding: 13px 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+.ed-render-state-card > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ed-render-state-card small { display: block; margin-top: 5px; color: #64748b; }
+.ed-render-state-value { color: #475569; font-size: 13px; font-weight: 800; }
+.ed-render-state-value.succeeded { color: #15803d; }
+.ed-render-state-value.queued, .ed-render-state-value.rendering { color: #7c3aed; }
+.ed-render-state-value.failed { color: #b91c1c; }
+.ed-preview-actions { display: flex !important; justify-content: flex-start !important; gap: 8px; margin-top: 10px; }
+.ed-preview-actions.hidden { display: none !important; }
+.ed-preview-actions button, .ed-preview-actions a { border: 0; border-radius: 8px; padding: 8px 11px; background: #111827; color: #fff; cursor: pointer; text-decoration: none; font-size: 13px; font-weight: 700; }
 .ed-output-video { width: 100%; max-height: 520px; margin: 14px 0; background: #111; border-radius: 12px; }
 .ed-output-links { display: flex; gap: 9px; flex-wrap: wrap; margin-bottom: 14px; }
 .ed-output-links a { padding: 9px 12px; border-radius: 8px; background: #111827; color: #fff; text-decoration: none; font-size: 13px; font-weight: 700; }
@@ -2117,6 +2128,7 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   .ed-form-grid { grid-template-columns: 1fr; }
   .ed-revision-row { grid-template-columns: 1fr; }
   .ed-action-buttons { width: 100%; flex-direction: column; }
+  .ed-render-state-grid { grid-template-columns: 1fr; }
 }
 
 /* 외부 링크 버튼 */
