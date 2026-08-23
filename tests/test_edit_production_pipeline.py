@@ -457,7 +457,7 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
     def test_multipart_complete_queues_a_new_analysis_job(self):
         payload = {
             "client_upload_id": "stable-upload-123", "filename": "long.mp4", "file_size": 16,
-            "force_new": True, "create_new_project": True, "reuse_existing": False,
+            "force_new": False, "create_new_project": False, "reuse_existing": True,
             "content_type": "video/mp4", "video_type": "raw_footage", "target_format": "long_form",
             "target_length_seconds": 0, "purpose": "현장기록형", "topic": "long", "strategy_id": None,
         }
@@ -470,6 +470,8 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
         with patches[0], patches[1], patches[2], patches[3]:
             started = self.client.post("/api/edit-uploads/multipart/start", json=payload)
             self.assertEqual(started.status_code, 200)
+            resumed = self.client.post("/api/edit-uploads/multipart/start", json=payload)
+            self.assertEqual(resumed.json()["project_id"], started.json()["project_id"])
             project_id = started.json()["project_id"]
             key = self.store.get(project_id)["report"]["source"]["object_key"]
             self.s3.objects[key] = b"x" * 16
@@ -502,9 +504,11 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             for _attempt in range(2):
                 started = self.client.post(
                     "/api/edit-uploads/multipart/start",
-                    # New-production semantics are the server default, even if
-                    # an older client omits both explicit flags.
-                    json={**base, "client_upload_id": "same-browser-request-marker"},
+                    json={
+                        **base, "client_upload_id": "same-browser-request-marker",
+                        "force_new": True, "create_new_project": True,
+                        "reuse_existing": False,
+                    },
                 )
                 self.assertEqual(started.status_code, 200)
                 upload_ids.append(started.json()["upload_id"])

@@ -145,9 +145,10 @@ let edActiveUploadId = null;
 let edActiveProjectId = null;
 let edActiveJobId = null;
 
-function edNewUploadRequestId(prefix = 'ed') {
+function edNewUploadRequestId(prefix = 'ed', file = null) {
   const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  return `${prefix}-${Date.now()}-${random}`.slice(0, 155);
+  const fileMarker = file ? `-${file.size}-${file.name}` : '';
+  return `${prefix}-${Date.now()}-${random}${fileMarker}`.slice(0, 155);
 }
 
 function edResetCurrentResultForNewUpload() {
@@ -670,7 +671,7 @@ async function edAnalyze() {
   if (!edCapacityOkay && !(await edCheckSelectedCapacity())) return;
   edBusy = true;
   const generation = edUploadGeneration;
-  const uploadRequestId = edNewUploadRequestId('ed');
+  const uploadRequestId = edNewUploadRequestId('ed', edSelectedFile);
   const button = document.getElementById('ed-analyze-btn');
   button.disabled = true;
   button.textContent = '분석 중...';

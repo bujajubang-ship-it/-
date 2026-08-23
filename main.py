@@ -1751,9 +1751,9 @@ class EditMediaPurgeRequest(BaseModel):
 
 class EditMultipartStartRequest(BaseModel):
     client_upload_id: str = Field(min_length=8, max_length=160)
-    force_new: bool = True
-    create_new_project: bool = True
-    reuse_existing: bool = False
+    force_new: bool = False
+    create_new_project: bool = False
+    reuse_existing: bool = True
     original_filename: str | None = Field(default=None, max_length=240)
     source_hash: str | None = Field(default=None, max_length=160)
     file_hash: str | None = Field(default=None, max_length=160)
@@ -2100,11 +2100,51 @@ async def edit_multipart_start(req: EditMultipartStartRequest):
     if suffix not in {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}:
         return JSONResponse({"error": "지원하지 않는 영상 형식입니다."}, status_code=400)
     store = EditProjectStore()
-    # A call to the new-upload endpoint always creates a project. Filename,
-    # hashes and client markers are audit metadata, never lookup keys. Multipart
-    # continuation uses the returned project_id and dedicated part endpoints.
-    create_new = True
+    # A deliberate new production run never looks up an earlier project.
+    # Existing lookup remains available only for explicit upload continuation.
+    create_new = bool(req.force_new or req.create_new_project or not req.reuse_existing)
+    existing = None if create_new else store.find_by_client_upload_id(req.client_upload_id)
     backend = object_storage_from_env()
+    if existing:
+        project = existing["report"]
+        upload = project.get("upload") or {}
+        parts = []
+        if upload.get("multipart_upload_id"):
+            try:
+                parts = await asyncio.to_thread(
+                    backend.list_parts, upload["object_key"], upload["multipart_upload_id"],
+                )
+            except Exception:
+                parts = []
+            return {
+                "project_id": existing["id"], "upload_id": upload.get("upload_id"),
+                "part_size": upload.get("part_size"), "uploaded_parts": parts,
+                "status": project.get("status"),
+            }
+        if project.get("status") != "upload_failed":
+            return {
+                "project_id": existing["id"], "upload_id": upload.get("upload_id"),
+                "part_size": upload.get("part_size"), "uploaded_parts": parts,
+                "status": project.get("status"),
+            }
+        try:
+            multipart_upload_id = await asyncio.to_thread(
+                backend.initiate_multipart, upload["object_key"], content_type=req.content_type,
+            )
+            upload["multipart_upload_id"] = multipart_upload_id
+            upload["restarted_at"] = utc_now()
+            project["upload"] = upload
+            project = transition_project(
+                project, "uploading", lifecycle="UPLOADING", reason="multipart upload resumed",
+            )
+            store.save(int(existing["id"]), project)
+            return {
+                "project_id": existing["id"], "upload_id": upload.get("upload_id"),
+                "part_size": upload.get("part_size"), "uploaded_parts": [],
+                "status": "uploading",
+            }
+        except Exception:
+            return JSONResponse({"error": "중단된 업로드를 재개하지 못했습니다."}, status_code=503)
     project_uuid = uuid.uuid4().hex
     settings = {
         "video_type": req.video_type, "target_format": req.target_format,
@@ -2123,7 +2163,7 @@ async def edit_multipart_start(req: EditMultipartStartRequest):
     project["upload"] = {
         "upload_id": upload_session_id, "client_upload_id": req.client_upload_id,
         "force_new": create_new, "create_new_project": create_new,
-        "reuse_existing": False,
+        "reuse_existing": not create_new,
         "original_filename": req.original_filename or req.filename,
         "source_hash": req.source_hash, "file_hash": req.file_hash,
         "object_key": object_key,
