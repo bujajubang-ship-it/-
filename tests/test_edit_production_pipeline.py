@@ -482,6 +482,47 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             self.assertEqual(done.json()["project"]["lifecycle_status"], "UPLOADED")
             self.assertEqual(self.queue.list(project_id=project_id)[0]["type"], "analysis")
 
+    def test_same_filename_in_two_upload_sessions_creates_fresh_projects_and_jobs(self):
+        base = {
+            "filename": "same-name.mp4", "file_size": 16,
+            "content_type": "video/mp4", "video_type": "rough_cut",
+            "target_format": "long_form", "target_length_seconds": 0,
+            "purpose": "브랜드신뢰형", "topic": "새 러프컷", "strategy_id": None,
+        }
+        patches = (
+            patch.object(main, "EditProjectStore", lambda: self.store),
+            patch.object(main, "EDIT_JOB_QUEUE", self.queue),
+            patch.object(main, "object_storage_configured", return_value=True),
+            patch.object(main, "object_storage_from_env", return_value=self.backend),
+        )
+        project_ids, job_ids = [], []
+        with patches[0], patches[1], patches[2], patches[3]:
+            for upload_id in ("fresh-upload-session-1", "fresh-upload-session-2"):
+                started = self.client.post(
+                    "/api/edit-uploads/multipart/start",
+                    json={**base, "client_upload_id": upload_id},
+                )
+                self.assertEqual(started.status_code, 200)
+                project_id = int(started.json()["project_id"])
+                key = self.store.get(project_id)["report"]["source"]["object_key"]
+                self.s3.objects[key] = b"x" * 16
+                completed = self.client.post(
+                    f"/api/edit-uploads/{project_id}/complete",
+                    json={"parts": [{"part_number": 1, "etag": "one"}, {"part_number": 2, "etag": "two"}]},
+                )
+                self.assertEqual(completed.status_code, 200)
+                project_ids.append(project_id)
+                job_ids.append(int(completed.json()["job"]["job_id"]))
+
+            self.assertEqual(len(set(project_ids)), 2)
+            self.assertEqual(len(set(job_ids)), 2)
+            fresh = self.store.get(project_ids[1])["report"]
+            self.assertEqual(fresh["source"]["filename"], "same-name.mp4")
+            self.assertEqual(fresh["transcript"], {})
+            self.assertEqual(fresh["plan_versions"], [])
+            self.assertEqual(fresh["outputs"], {})
+            self.assertNotIn("rough_cut_script_editor", fresh)
+
     def test_multisource_project_queues_each_source_independently(self):
         patches = (
             patch.object(main, "EditProjectStore", lambda: self.store),

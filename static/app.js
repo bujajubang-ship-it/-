@@ -140,6 +140,46 @@ let edCurrentProject = null;
 let edBusy = false;
 let edCapacityOkay = false;
 let edStorageState = null;
+let edUploadGeneration = 0;
+let edActiveProjectId = null;
+let edActiveJobId = null;
+
+function edNewUploadRequestId(prefix = 'ed') {
+  const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${Date.now()}-${random}`.slice(0, 155);
+}
+
+function edResetCurrentResultForNewUpload() {
+  edUploadGeneration += 1;
+  edActiveProjectId = null;
+  edActiveJobId = null;
+  edCurrentProject = null;
+  const workspace = document.getElementById('ed-workspace');
+  const outputCard = document.getElementById('ed-output-card');
+  const video = document.getElementById('ed-output-video');
+  if (workspace) workspace.classList.add('hidden');
+  if (outputCard) outputCard.classList.add('hidden');
+  if (video) {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+  [
+    'ed-diagnosis', 'ed-visual-analysis', 'ed-transcript-preview', 'ed-segments',
+    'ed-enhancements', 'ed-plan-notes', 'ed-conversation', 'ed-version-list',
+    'ed-output-links', 'ed-script-list', 'ed-quality-assurance', 'ed-edit-log',
+    'ed-advisory-log', 'ed-feedback-result',
+  ].forEach(id => {
+    const element = document.getElementById(id);
+    if (element) element.innerHTML = '';
+  });
+  ['ed-roughcut-summary', 'ed-script-controls', 'ed-script-warning', 'ed-script-panel'].forEach(id => {
+    document.getElementById(id)?.classList.add('hidden');
+  });
+  const progress = document.getElementById('ed-progress');
+  if (progress) progress.classList.add('hidden');
+  edRenderState({outputs: {}, preview_state: 'not_requested', final_render_state: 'not_requested'});
+}
 
 function edFormatBytes(value) {
   const bytes = Math.max(0, Number(value) || 0);
@@ -215,7 +255,12 @@ function edTime(sec) {
 }
 
 function edFileSelected(event) {
-  edSelectedFile = event.target.files[0] || null;
+  const selected = event.target.files[0] || null;
+  // The File object remains valid after clearing the native input. Clearing it
+  // lets mobile browsers dispatch change again when the same file is selected.
+  event.target.value = '';
+  if (selected) edResetCurrentResultForNewUpload();
+  edSelectedFile = selected;
   const name = document.getElementById('ed-file-name');
   const button = document.getElementById('ed-analyze-btn');
   if (!edSelectedFile) {
@@ -280,7 +325,7 @@ function edMultiFilesSelected() {
 }
 
 async function edUploadMultiSourceFile(projectId, file, fileIndex, totalFiles, speaker) {
-  const clientId = `edms-${projectId}-${file.size}-${file.lastModified}-${file.name}`.slice(0, 155);
+  const clientId = edNewUploadRequestId(`edms-${projectId}`);
   const started = await edFetchJson(`/api/edit-projects/${projectId}/sources/multipart/start`, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -356,11 +401,10 @@ async function edStartMultiSource() {
   }
 }
 
-async function edAnalyzeDirect() {
+async function edAnalyzeDirect(uploadRequestId, generation) {
   const file = edSelectedFile;
-  const clientId = `ed-${file.size}-${file.lastModified}-${file.name}`.slice(0, 155);
   const settings = {
-    client_upload_id: clientId, filename: file.name, file_size: file.size,
+    client_upload_id: uploadRequestId, filename: file.name, file_size: file.size,
     content_type: file.type || 'video/mp4', video_type: document.getElementById('ed-video-type').value,
     target_format: document.getElementById('ed-target-format').value,
     target_length_seconds: Number(document.getElementById('ed-target-length').value || 0),
@@ -372,14 +416,10 @@ async function edAnalyzeDirect() {
   const start = await edFetchJson('/api/edit-uploads/multipart/start', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(settings)
   }, '대용량 직접 업로드를 시작하지 못했습니다.');
+  if (generation !== edUploadGeneration) return {ignored: true};
+  edActiveProjectId = Number(start.project_id);
   if (start.status !== 'uploading') {
-    if (['uploaded', 'transcribing', 'retrieving_context', 'diagnosing'].includes(start.status)) {
-      await edPollAnalysis(start.project_id);
-    } else {
-      await edOpenProject(start.project_id);
-      edSetProgress('done', '같은 원본의 기존 프로젝트를 열었습니다.', 100);
-    }
-    return {project_id: start.project_id, reused: true};
+    throw new Error('새 업로드 세션을 만들지 못했습니다. 다시 파일을 선택해주세요.');
   }
   const partSize = Number(start.part_size);
   if (!partSize) throw new Error('업로드 파트 크기를 받지 못했습니다.');
@@ -422,19 +462,37 @@ async function edAnalyzeDirect() {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({parts: [...finished.values()].sort((a, b) => a.part_number - b.part_number)})
   }, '업로드 완료 상태를 저장하지 못했습니다. 원본 object는 보존됩니다.');
+  if (generation !== edUploadGeneration) return {ignored: true};
+  const jobId = Number(completed.job?.job_id || 0);
+  if (!jobId) throw new Error('새 분석 작업 ID를 받지 못했습니다. 업로드 원본은 보존됩니다.');
+  edActiveJobId = jobId;
   edSetProgress('validating', '원본을 안전하게 보관했습니다. 분석 작업 큐에 등록했습니다.', 58);
-  await edPollAnalysis(start.project_id);
+  await edPollAnalysis(start.project_id, jobId, generation);
   return completed;
 }
 
-async function edPollAnalysis(projectId) {
+async function edPollAnalysis(projectId, jobId = null, generation = null) {
   const labels = {
     uploaded: '분석 작업 대기 중', transcribing: '음성·장면·정적을 분석 중',
     retrieving_context: 'Retention·과거 영상·비즈니스PT 지식을 비교 중',
     diagnosing: '채널 전용 편집안을 작성 중',
   };
   for (;;) {
+    if (generation != null && (
+      generation !== edUploadGeneration
+      || Number(projectId) !== Number(edActiveProjectId)
+      || Number(jobId) !== Number(edActiveJobId)
+    )) return;
+    let watchedJob = null;
+    if (jobId) {
+      const jobState = await edFetchJson(`/api/edit-jobs?project_id=${Number(projectId)}`, undefined, '새 분석 작업 상태를 확인하지 못했습니다.');
+      watchedJob = (jobState.jobs || []).find(item => Number(item.job_id) === Number(jobId));
+      if (!watchedJob || Number(watchedJob.project_id) !== Number(projectId)) {
+        throw new Error('방금 시작한 분석 작업을 찾지 못했습니다. 지난 편집 결과는 열지 않았습니다.');
+      }
+    }
     const project = await edFetchJson(`/api/edit-projects/${projectId}`, undefined, '분석 상태를 확인하지 못했습니다.');
+    if (generation != null && generation !== edUploadGeneration) return;
     if (['proposed', 'revised', 'approved', 'completed'].includes(project.status)) {
       edRenderProject(project); await Promise.allSettled([edLoadProjects(), edLoadStorage()]);
       edSetProgress('done', '분석 제안이 준비됐습니다. 대화로 수정한 뒤 승인해주세요.', 100); return;
@@ -460,7 +518,7 @@ async function edPollAnalysis(projectId) {
     const chunkText = total > 0
       ? `${progress.label || '음성 분석'} ${completed}/${total}${progress.current_chunk ? ` · 현재 ${progress.current_chunk}번째` : ''} · 현재 ${Math.round(percent)}%`
       : (progress.label || labels[project.status] || '안전한 작업 큐에서 처리 중');
-    const heartbeatAt = project.current_job?.heartbeat_at;
+    const heartbeatAt = watchedJob?.heartbeat_at || project.current_job?.heartbeat_at;
     const heartbeatAge = heartbeatAt ? Math.max(0, (Date.now() - Date.parse(heartbeatAt)) / 1000) : 0;
     const recoveryText = project.current_job?.status === 'running' && heartbeatAge > 180
       ? ' · worker 응답이 늦어 안전 복구를 확인 중'
@@ -598,6 +656,8 @@ async function edAnalyze() {
   if (!edSelectedFile || edBusy) return;
   if (!edCapacityOkay && !(await edCheckSelectedCapacity())) return;
   edBusy = true;
+  const generation = edUploadGeneration;
+  const uploadRequestId = edNewUploadRequestId('ed');
   const button = document.getElementById('ed-analyze-btn');
   button.disabled = true;
   button.textContent = '분석 중...';
@@ -609,7 +669,7 @@ async function edAnalyze() {
 
   if (edStorageState?.direct_upload_enabled) {
     try {
-      await edAnalyzeDirect();
+      await edAnalyzeDirect(uploadRequestId, generation);
     } catch (error) {
       edSetProgress('error', error.message, 100);
     } finally {
@@ -653,6 +713,7 @@ async function edAnalyze() {
         const next = xhr.responseText.slice(state.offset);
         state.offset = xhr.responseText.length;
         edHandleSseText(state, next, data => {
+          if (generation !== edUploadGeneration) return;
           edSetProgress(data.step, data.message, data.percent);
           if (data.step === 'done' && data.project) {
             edRenderProject(data.project);
