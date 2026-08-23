@@ -514,6 +514,8 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             status = self.client.get(f"/api/edit-uploads/{project_id}/status")
             self.assertEqual(status.status_code, 200)
             self.assertEqual(status.json()["file_size"], 16)
+            self.assertEqual(status.json()["uploaded_bytes"], 16)
+            self.assertEqual(status.json()["uploaded_part_count"], 2)
             self.assertEqual(len(status.json()["uploaded_parts"]), 2)
 
             completed = self.client.post(
@@ -526,11 +528,14 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             self.assertEqual(self.store.get(project_id)["report"]["jobs"], [completed.json()["job"]["job_id"]])
 
         frontend = (Path(__file__).parents[1] / "static" / "app.js").read_text()
+        html = (Path(__file__).parents[1] / "static" / "index.html").read_text()
         self.assertIn("ED_PART_RESPONSE_WAIT_MS", frontend)
         self.assertIn("업로드 완료 처리 재시도", frontend)
-        self.assertIn("업로드 완료 확인 중", frontend)
-        self.assertIn("업로드 최종 처리 중", frontend)
+        self.assertIn("업로드 상태 확인 중", frontend)
+        self.assertIn("업로드 완료 처리 중", frontend)
         self.assertIn("분석 job 생성 중", frontend)
+        self.assertIn("ed-current-upload-finalize", html)
+        self.assertIn("project.status === 'uploading'", frontend)
 
     def test_same_filename_in_two_upload_sessions_creates_fresh_projects_and_jobs(self):
         base = {

@@ -2227,6 +2227,8 @@ async def edit_multipart_status(project_id: int):
         return {
             "project_id": project_id, "status": project.get("status"),
             "file_size": upload.get("file_size"), "part_size": upload["part_size"],
+            "uploaded_bytes": sum(int(part.get("size_bytes") or 0) for part in parts),
+            "uploaded_part_count": len(parts),
             "uploaded_parts": parts,
         }
     except KeyError as exc:

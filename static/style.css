@@ -2051,6 +2051,11 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ed-project-finalize { width: 100%; }
 .ed-project-meta { color: #64748b; font-size: 12px; line-height: 1.6; }
 .ed-workspace-head h2 { margin: 3px 0 0; font-size: 21px; }
+.ed-upload-recovery { display: flex; align-items: center; gap: 12px; border-color: #f59e0b; background: #fffbeb; }
+.ed-upload-recovery button { flex: 0 0 auto; border: 1px solid #f59e0b; background: #fff; color: #92400e; border-radius: 8px; padding: 9px 12px; cursor: pointer; font-weight: 800; }
+.ed-upload-recovery button:disabled { opacity: .5; cursor: wait; }
+.ed-upload-recovery span { color: #92400e; font-size: 13px; line-height: 1.5; }
+.ed-upload-recovery span.error { color: #b91c1c; }
 .ed-eyebrow { color: #7c3aed; font-size: 12px; font-weight: 800; }
 .ed-status { padding: 7px 11px; background: #f1f5f9; color: #475569; border-radius: 999px; font-size: 12px; font-weight: 800; }
 .ed-status.approved, .ed-status.completed { background: #dcfce7; color: #166534; }

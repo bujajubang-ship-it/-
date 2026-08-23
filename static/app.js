@@ -365,6 +365,10 @@ function edVerifiedMultipartParts(status, expectedFileSize) {
   if (!partSize || !fileSize) throw new Error('업로드 원본 크기 또는 파트 크기를 확인하지 못했습니다.');
   const totalParts = Math.ceil(fileSize / partSize);
   const uploaded = new Map((status.uploaded_parts || []).map(item => [Number(item.part_number), item]));
+  const uploadedBytes = Number(status.uploaded_bytes ?? [...uploaded.values()].reduce((sum, item) => sum + Number(item.size_bytes || 0), 0));
+  if (uploadedBytes !== fileSize) {
+    throw new Error(`Object Storage 업로드 용량이 원본과 일치하지 않습니다. (${edFormatBytes(uploadedBytes)} / ${edFormatBytes(fileSize)})`);
+  }
   const parts = [];
   for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
     const item = uploaded.get(partNumber);
@@ -390,17 +394,26 @@ function edShowUploadCompleteRetry(projectId) {
   if (button) button.classList.toggle('hidden', !edRetryCompleteProjectId);
 }
 
+function edSetUploadRecoveryProgress(message, percent, error = false) {
+  edSetProgress(error ? 'error' : 'validating', message, percent);
+  const current = document.getElementById('ed-current-upload-recovery-message');
+  if (current) {
+    current.textContent = message;
+    current.classList.toggle('error', error);
+  }
+}
+
 async function edCompleteMultipartUpload(projectId, expectedFileSize) {
   try {
-    edSetProgress('validating', '업로드 완료 확인 중', 56);
+    edSetUploadRecoveryProgress('업로드 상태 확인 중', 56);
     const status = await edFetchJson(`/api/edit-uploads/${projectId}/status`, undefined, '업로드 완료 상태를 확인하지 못했습니다.');
     const parts = edVerifiedMultipartParts(status, expectedFileSize);
-    edSetProgress('validating', '업로드 최종 처리 중', 57);
+    edSetUploadRecoveryProgress('업로드 완료 처리 중', 57);
     const completed = await edFetchJson(`/api/edit-uploads/${projectId}/complete`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({parts})
     }, '업로드 완료 처리에 실패했습니다. Object Storage 원본은 보존됩니다.');
-    edSetProgress('validating', '분석 job 생성 중', 58);
+    edSetUploadRecoveryProgress('분석 job 생성 중', 58);
     edHideUploadCompleteRetry();
     return completed;
   } catch (error) {
@@ -648,6 +661,8 @@ async function edRetryUploadComplete(projectId = edRetryCompleteProjectId) {
   if (!projectId || edBusy) return;
   edBusy = true;
   edHideUploadCompleteRetry();
+  const currentButton = document.getElementById('ed-current-upload-finalize');
+  if (currentButton) currentButton.disabled = true;
   try {
     const project = await edFetchJson(`/api/edit-projects/${projectId}`, undefined, '업로드 프로젝트를 불러오지 못했습니다.');
     let job = null;
@@ -664,14 +679,16 @@ async function edRetryUploadComplete(projectId = edRetryCompleteProjectId) {
     edActiveProjectId = projectId;
     edActiveJobId = jobId;
     edActiveUploadId = String(job?.payload?.upload_id || project.upload?.upload_id || '');
-    edSetProgress('validating', '분석 job 생성 중', 58);
+    edSetUploadRecoveryProgress('분석 job 생성 중', 58);
     await edLoadProjects();
+    edSetUploadRecoveryProgress('분석 중', 60);
     await edPollAnalysis(projectId, jobId);
   } catch (error) {
-    edSetProgress('error', `업로드 완료 처리 실패: ${error.message}`, 100);
+    edSetUploadRecoveryProgress(`업로드 완료 처리 실패: ${error.message}`, 100, true);
     edShowUploadCompleteRetry(projectId);
   } finally {
     edBusy = false;
+    if (currentButton) currentButton.disabled = false;
   }
 }
 
@@ -1073,6 +1090,16 @@ function edRenderProject(project, scrollToWorkspace = true) {
   const status = document.getElementById('ed-project-status');
   status.className = `ed-status ${project.status || ''}`;
   status.textContent = ED_STATUS_LABELS[project.status] || project.status || '-';
+  const uploadRecovery = document.getElementById('ed-current-upload-recovery');
+  const canRetryUpload = project.status === 'uploading'
+    && Number(project.upload?.file_size || project.source?.size_bytes || 0) > 0
+    && Boolean(project.upload?.upload_id);
+  uploadRecovery.classList.toggle('hidden', !canRetryUpload);
+  if (canRetryUpload) {
+    const recoveryMessage = document.getElementById('ed-current-upload-recovery-message');
+    recoveryMessage.textContent = 'Object Storage 업로드 상태를 확인한 뒤 완료 처리를 다시 시도할 수 있습니다.';
+    recoveryMessage.classList.remove('error');
+  }
   const media = project.source?.media || sources[0]?.media || {};
   document.getElementById('ed-media-meta').textContent = isMulti
     ? `${sources.length}개 원본 · ${edTime(sources.reduce((sum, row) => sum + Number(row.duration || row.media?.duration || 0), 0))} · ${escHtml(project.story_plan_state || '-')}`
