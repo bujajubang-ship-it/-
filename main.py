@@ -2100,48 +2100,11 @@ async def edit_multipart_start(req: EditMultipartStartRequest):
     if suffix not in {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}:
         return JSONResponse({"error": "지원하지 않는 영상 형식입니다."}, status_code=400)
     store = EditProjectStore()
-    # Filename/hash metadata is audit-only. Existing-project lookup is allowed
-    # solely for an explicit resume request; new-production is the default.
-    create_new = bool(req.force_new or req.create_new_project or not req.reuse_existing)
-    existing = None if create_new else store.find_by_client_upload_id(req.client_upload_id)
+    # A call to the new-upload endpoint always creates a project. Filename,
+    # hashes and client markers are audit metadata, never lookup keys. Multipart
+    # continuation uses the returned project_id and dedicated part endpoints.
+    create_new = True
     backend = object_storage_from_env()
-    if existing:
-        project = existing["report"]
-        upload = project.get("upload") or {}
-        parts = []
-        if upload.get("multipart_upload_id"):
-            try:
-                parts = await asyncio.to_thread(backend.list_parts, upload["object_key"], upload["multipart_upload_id"])
-            except Exception:
-                parts = []
-            return {
-                "project_id": existing["id"], "upload_id": upload.get("upload_id"),
-                "part_size": upload.get("part_size"), "uploaded_parts": parts,
-                "status": project.get("status"),
-            }
-        if project.get("status") != "upload_failed":
-            return {
-                "project_id": existing["id"], "upload_id": upload.get("upload_id"),
-                "part_size": upload.get("part_size"), "uploaded_parts": parts,
-                "status": project.get("status"),
-            }
-        backend = object_storage_from_env()
-        try:
-            upload_id = await asyncio.to_thread(
-                backend.initiate_multipart, upload["object_key"], content_type=req.content_type
-            )
-            upload["multipart_upload_id"] = upload_id
-            upload["restarted_at"] = utc_now()
-            project["upload"] = upload
-            project = transition_project(project, "uploading", lifecycle="UPLOADING", reason="multipart upload resumed")
-            store.save(int(existing["id"]), project)
-            return {
-                "project_id": existing["id"], "upload_id": upload.get("upload_id"),
-                "part_size": upload.get("part_size"), "uploaded_parts": [],
-                "status": "uploading",
-            }
-        except Exception:
-            return JSONResponse({"error": "중단된 업로드를 재개하지 못했습니다."}, status_code=503)
     project_uuid = uuid.uuid4().hex
     settings = {
         "video_type": req.video_type, "target_format": req.target_format,

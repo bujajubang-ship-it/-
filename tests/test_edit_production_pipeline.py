@@ -454,10 +454,10 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_multipart_contract_is_idempotent_and_analysis_is_queued(self):
+    def test_multipart_complete_queues_a_new_analysis_job(self):
         payload = {
             "client_upload_id": "stable-upload-123", "filename": "long.mp4", "file_size": 16,
-            "force_new": False, "create_new_project": False, "reuse_existing": True,
+            "force_new": True, "create_new_project": True, "reuse_existing": False,
             "content_type": "video/mp4", "video_type": "raw_footage", "target_format": "long_form",
             "target_length_seconds": 0, "purpose": "현장기록형", "topic": "long", "strategy_id": None,
         }
@@ -470,8 +470,6 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
         with patches[0], patches[1], patches[2], patches[3]:
             started = self.client.post("/api/edit-uploads/multipart/start", json=payload)
             self.assertEqual(started.status_code, 200)
-            again = self.client.post("/api/edit-uploads/multipart/start", json=payload)
-            self.assertEqual(again.json()["project_id"], started.json()["project_id"])
             project_id = started.json()["project_id"]
             key = self.store.get(project_id)["report"]["source"]["object_key"]
             self.s3.objects[key] = b"x" * 16
@@ -535,7 +533,8 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             self.assertNotIn("rough_cut_script_editor", fresh)
             self.assertEqual(self.queue.get(job_ids[1])["status"], "queued")
             frontend = (Path(__file__).parents[1] / "static" / "app.js").read_text()
-            self.assertNotIn("같은 원본의 기존 프로젝트를 열었습니다.", frontend)
+            forbidden = "같은 원본의 기존 프로젝트를 " + "열었습니다."
+            self.assertNotIn(forbidden, frontend)
 
     def test_multisource_project_queues_each_source_independently(self):
         patches = (
