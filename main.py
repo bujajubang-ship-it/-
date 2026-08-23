@@ -1751,6 +1751,7 @@ class EditMediaPurgeRequest(BaseModel):
 
 class EditMultipartStartRequest(BaseModel):
     client_upload_id: str = Field(min_length=8, max_length=160)
+    force_new: bool = False
     filename: str = Field(min_length=1, max_length=240)
     file_size: int = Field(gt=0, le=100 * 1024 * 1024 * 1024)
     content_type: str = Field(default="video/mp4", max_length=120)
@@ -2094,7 +2095,10 @@ async def edit_multipart_start(req: EditMultipartStartRequest):
     if suffix not in {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}:
         return JSONResponse({"error": "지원하지 않는 영상 형식입니다."}, status_code=400)
     store = EditProjectStore()
-    existing = store.find_by_client_upload_id(req.client_upload_id)
+    # client_upload_id remains the idempotency key for retries of one browser
+    # request. A deliberate new production run sets force_new and must never be
+    # resolved by filename, size, or an earlier completed project.
+    existing = None if req.force_new else store.find_by_client_upload_id(req.client_upload_id)
     backend = object_storage_from_env()
     if existing:
         project = existing["report"]
@@ -2105,9 +2109,17 @@ async def edit_multipart_start(req: EditMultipartStartRequest):
                 parts = await asyncio.to_thread(backend.list_parts, upload["object_key"], upload["multipart_upload_id"])
             except Exception:
                 parts = []
-            return {"project_id": existing["id"], "part_size": upload.get("part_size"), "uploaded_parts": parts, "status": project.get("status")}
+            return {
+                "project_id": existing["id"], "upload_id": upload.get("upload_id"),
+                "part_size": upload.get("part_size"), "uploaded_parts": parts,
+                "status": project.get("status"),
+            }
         if project.get("status") != "upload_failed":
-            return {"project_id": existing["id"], "part_size": upload.get("part_size"), "uploaded_parts": parts, "status": project.get("status")}
+            return {
+                "project_id": existing["id"], "upload_id": upload.get("upload_id"),
+                "part_size": upload.get("part_size"), "uploaded_parts": parts,
+                "status": project.get("status"),
+            }
         backend = object_storage_from_env()
         try:
             upload_id = await asyncio.to_thread(
@@ -2118,7 +2130,11 @@ async def edit_multipart_start(req: EditMultipartStartRequest):
             project["upload"] = upload
             project = transition_project(project, "uploading", lifecycle="UPLOADING", reason="multipart upload resumed")
             store.save(int(existing["id"]), project)
-            return {"project_id": existing["id"], "part_size": upload.get("part_size"), "uploaded_parts": [], "status": "uploading"}
+            return {
+                "project_id": existing["id"], "upload_id": upload.get("upload_id"),
+                "part_size": upload.get("part_size"), "uploaded_parts": [],
+                "status": "uploading",
+            }
         except Exception:
             return JSONResponse({"error": "중단된 업로드를 재개하지 못했습니다."}, status_code=503)
     project_uuid = uuid.uuid4().hex
@@ -2130,27 +2146,34 @@ async def edit_multipart_start(req: EditMultipartStartRequest):
         "content_strategy_id": req.strategy_id,
     }
     object_key = backend.key(project_uuid, f"source{suffix}")
+    upload_session_id = uuid.uuid4().hex
     part_size = max(8 * 1024 * 1024, int(os.getenv("EDIT_MULTIPART_PART_MB", "64")) * 1024 * 1024)
     project = _new_edit_project(
         project_uuid, settings=settings, status="uploading",
         source={"filename": req.filename, "size_bytes": req.file_size, "media": {}, "storage_backend": "object", "object_key": object_key},
     )
     project["upload"] = {
-        "client_upload_id": req.client_upload_id, "object_key": object_key,
+        "upload_id": upload_session_id, "client_upload_id": req.client_upload_id,
+        "force_new": bool(req.force_new), "object_key": object_key,
         "part_size": part_size, "file_size": req.file_size, "started_at": utc_now(),
         "multipart_upload_id": None,
     }
     project_id = store.create(keyword=req.topic.strip() or req.filename, project=project)
     try:
-        upload_id = await asyncio.to_thread(backend.initiate_multipart, object_key, content_type=req.content_type)
-        project["upload"]["multipart_upload_id"] = upload_id
+        multipart_upload_id = await asyncio.to_thread(
+            backend.initiate_multipart, object_key, content_type=req.content_type,
+        )
+        project["upload"]["multipart_upload_id"] = multipart_upload_id
         store.save(project_id, project)
     except Exception as exc:
         project = transition_project(project, "upload_failed", lifecycle="FAILED_UPLOAD", reason=type(exc).__name__)
         project["error"] = "Object Storage 업로드를 시작하지 못했습니다."
         store.save(project_id, project)
         return JSONResponse({"error": project["error"], "project_id": project_id}, status_code=503)
-    return {"project_id": project_id, "part_size": part_size, "uploaded_parts": [], "status": "uploading"}
+    return {
+        "project_id": project_id, "upload_id": upload_session_id,
+        "part_size": part_size, "uploaded_parts": [], "status": "uploading",
+    }
 
 
 def _multipart_project(project_id: int) -> tuple[EditProjectStore, dict, Any, dict]:
@@ -2214,8 +2237,10 @@ async def edit_multipart_complete(project_id: int, req: EditMultipartCompleteReq
         project = transition_project(project, "uploaded", lifecycle="UPLOADED", reason="multipart upload completed")
         store.save(project_id, project)
         job = EDIT_JOB_QUEUE.enqueue(
-            project_id, "analysis", idempotency_key=f"analysis:{project_id}:{metadata.get('etag') or metadata['size_bytes']}",
-            payload={"source_size": metadata["size_bytes"]}, max_attempts=3, priority=50,
+            project_id, "analysis",
+            idempotency_key=f"analysis:{project_id}:{upload.get('upload_id') or metadata.get('etag') or metadata['size_bytes']}",
+            payload={"source_size": metadata["size_bytes"], "upload_id": upload.get("upload_id")},
+            max_attempts=3, priority=50,
             defer_seconds=1 if EDIT_JOB_WORKER._task is not None else 0,
         )
         project["jobs"] = sorted(set((project.get("jobs") or []) + [int(job["job_id"])]))

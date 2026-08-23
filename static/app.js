@@ -141,6 +141,7 @@ let edBusy = false;
 let edCapacityOkay = false;
 let edStorageState = null;
 let edUploadGeneration = 0;
+let edActiveUploadId = null;
 let edActiveProjectId = null;
 let edActiveJobId = null;
 
@@ -151,6 +152,7 @@ function edNewUploadRequestId(prefix = 'ed') {
 
 function edResetCurrentResultForNewUpload() {
   edUploadGeneration += 1;
+  edActiveUploadId = null;
   edActiveProjectId = null;
   edActiveJobId = null;
   edCurrentProject = null;
@@ -404,7 +406,8 @@ async function edStartMultiSource() {
 async function edAnalyzeDirect(uploadRequestId, generation) {
   const file = edSelectedFile;
   const settings = {
-    client_upload_id: uploadRequestId, filename: file.name, file_size: file.size,
+    client_upload_id: uploadRequestId, force_new: true,
+    filename: file.name, file_size: file.size,
     content_type: file.type || 'video/mp4', video_type: document.getElementById('ed-video-type').value,
     target_format: document.getElementById('ed-target-format').value,
     target_length_seconds: Number(document.getElementById('ed-target-length').value || 0),
@@ -417,6 +420,8 @@ async function edAnalyzeDirect(uploadRequestId, generation) {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(settings)
   }, '대용량 직접 업로드를 시작하지 못했습니다.');
   if (generation !== edUploadGeneration) return {ignored: true};
+  if (!start.upload_id) throw new Error('새 업로드 ID를 받지 못했습니다. 다시 파일을 선택해주세요.');
+  edActiveUploadId = String(start.upload_id);
   edActiveProjectId = Number(start.project_id);
   if (start.status !== 'uploading') {
     throw new Error('새 업로드 세션을 만들지 못했습니다. 다시 파일을 선택해주세요.');
@@ -465,6 +470,9 @@ async function edAnalyzeDirect(uploadRequestId, generation) {
   if (generation !== edUploadGeneration) return {ignored: true};
   const jobId = Number(completed.job?.job_id || 0);
   if (!jobId) throw new Error('새 분석 작업 ID를 받지 못했습니다. 업로드 원본은 보존됩니다.');
+  if (String(completed.job?.payload?.upload_id || '') !== edActiveUploadId) {
+    throw new Error('새 업로드와 분석 작업 연결이 일치하지 않습니다. 지난 결과는 열지 않았습니다.');
+  }
   edActiveJobId = jobId;
   edSetProgress('validating', '원본을 안전하게 보관했습니다. 분석 작업 큐에 등록했습니다.', 58);
   await edPollAnalysis(start.project_id, jobId, generation);
@@ -489,6 +497,9 @@ async function edPollAnalysis(projectId, jobId = null, generation = null) {
       watchedJob = (jobState.jobs || []).find(item => Number(item.job_id) === Number(jobId));
       if (!watchedJob || Number(watchedJob.project_id) !== Number(projectId)) {
         throw new Error('방금 시작한 분석 작업을 찾지 못했습니다. 지난 편집 결과는 열지 않았습니다.');
+      }
+      if (generation != null && String(watchedJob.payload?.upload_id || '') !== edActiveUploadId) {
+        throw new Error('현재 업로드와 다른 분석 작업은 표시하지 않습니다.');
       }
     }
     const project = await edFetchJson(`/api/edit-projects/${projectId}`, undefined, '분석 상태를 확인하지 못했습니다.');
@@ -682,6 +693,7 @@ async function edAnalyze() {
 
   const form = new FormData();
   form.append('file', edSelectedFile);
+  form.append('force_new', 'true');
   form.append('video_type', document.getElementById('ed-video-type').value);
   form.append('target_format', document.getElementById('ed-target-format').value);
   form.append('target_length_seconds', document.getElementById('ed-target-length').value || '0');

@@ -496,13 +496,18 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             patch.object(main, "object_storage_from_env", return_value=self.backend),
         )
         project_ids, job_ids = [], []
+        upload_ids = []
         with patches[0], patches[1], patches[2], patches[3]:
-            for upload_id in ("fresh-upload-session-1", "fresh-upload-session-2"):
+            for _attempt in range(2):
                 started = self.client.post(
                     "/api/edit-uploads/multipart/start",
-                    json={**base, "client_upload_id": upload_id},
+                    json={
+                        **base, "client_upload_id": "same-browser-request-marker",
+                        "force_new": True,
+                    },
                 )
                 self.assertEqual(started.status_code, 200)
+                upload_ids.append(started.json()["upload_id"])
                 project_id = int(started.json()["project_id"])
                 key = self.store.get(project_id)["report"]["source"]["object_key"]
                 self.s3.objects[key] = b"x" * 16
@@ -511,10 +516,12 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
                     json={"parts": [{"part_number": 1, "etag": "one"}, {"part_number": 2, "etag": "two"}]},
                 )
                 self.assertEqual(completed.status_code, 200)
+                self.assertEqual(completed.json()["job"]["payload"]["upload_id"], started.json()["upload_id"])
                 project_ids.append(project_id)
                 job_ids.append(int(completed.json()["job"]["job_id"]))
 
             self.assertEqual(len(set(project_ids)), 2)
+            self.assertEqual(len(set(upload_ids)), 2)
             self.assertEqual(len(set(job_ids)), 2)
             fresh = self.store.get(project_ids[1])["report"]
             self.assertEqual(fresh["source"]["filename"], "same-name.mp4")
