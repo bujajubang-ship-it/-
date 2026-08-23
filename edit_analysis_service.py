@@ -478,6 +478,8 @@ class EditAnalysisService:
             instructions="""당신은 부자주방 멀티소스 러프컷 스토리 프로듀서다.
 선택 후보의 segment_id만 사용한다. 강한 실사용 증거나 고객 문제를 훅으로 시작하고, 문제→원리/사용법→실제 증거→구매 주의→관리/A/S→추천/결론처럼 문맥을 만든다.
 같은 의미 발언을 되살리지 않는다. 실제 사용자 발언이 일반 설명보다 강한 증거면 우선하고, 필요할 때만 설명 발언을 보완한다.
+각 segment는 완전한 발언/설명 블록이다. 블록 내부를 쪼개거나 목표 시간 때문에 발언 끝을 줄이지 않는다. 목표 길이는 soft guide이며 자연스러운 문맥이 더 길면 그대로 둔다.
+주제 블록 안의 원인→결과, 질문→답변, 문제→해결 순서를 보존한다. 애매한 후보는 제외보다 유지가 우선이다.
 채널 데이터가 부족하면 channel_evidence_confidence=low로 표시하고 Business PT와 영상 자체 문맥을 쓴다.
 사용자 수정 요청은 관련 순서/길이만 바꾸며 전체 소스를 다시 분석했다고 주장하지 않는다. JSON만 반환한다.""",
             schema=MULTISOURCE_STORY_SCHEMA,
@@ -693,6 +695,9 @@ visual_score는 화면 품질과 부자주방 현장 가치를 합친 0~1 점수
 - 연결 strategy의 제목·썸네일 약속, worksheet 촬영 우선순위, pipeline 목적과 충돌 여부를 strategy_alignment에 쓴다.
 - 데이터가 없으면 일반론을 채널 사실처럼 말하지 말고 data_limitations에 적는다.
 - cut/trim은 해당 구간 전체 제거, shorten은 해당 구간의 뒷부분 축약, use_as_hook은 해당 구간을 오프닝으로 이동한다.
+- 이 결과는 완성본이 아니라 conservative rough cut이다. 목표 길이는 hard limit가 아닌 soft guide이며 문장·설명·주제가 끝날 때까지 길어져도 유지한다.
+- 말 중간, 문장 중간, 인터뷰 답변 중간, 원인→결과 설명 중간에는 cut/trim/shorten을 제안하지 않는다. 애매하면 keep한다.
+- 화면 전환은 완전한 문장 끝, 주제 끝, 긴 침묵 또는 명확한 장면 전환에서만 제안한다. 원본 촬영 순서를 기본으로 유지한다.
 - 실제로 잘라야 할 구간만 구체적으로 쓰고 영상 전체를 촘촘히 재서술하지 않는다.
 - confidence는 0~1이다. 지나치게 공격적인 컷은 낮은 confidence로 표시한다.
 - B-roll/자막은 enhancements에 정확한 타임코드·필요 소스·화면 문구·우선순위를 쓰고 render_mode는 suggestion_only로 둔다.
@@ -702,7 +707,7 @@ visual_score는 화면 품질과 부자주방 현장 가치를 합친 0~1 점수
 
 [미디어]
 {_compact_json(media)}
-목표 길이: {target if target else 'AI 추천'}초
+목표 길이(soft guide, 강제 금지): {target if target else 'content-based auto duration'}초
 
 [정적 구간]
 {_compact_json(silences, 12000)}

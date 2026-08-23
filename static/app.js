@@ -736,10 +736,11 @@ function edPlayPreview() {
 
 function edRenderState(project) {
   const outputs = project.outputs || {};
-  const previewState = outputs.preview ? 'succeeded' : (project.preview_state || 'not_requested');
+  const previewState = project.preview_state === 'stale'
+    ? 'stale' : (outputs.preview ? 'succeeded' : (project.preview_state || 'not_requested'));
   const previewLabels = {
     succeeded: 'Preview 완료 100%', queued: 'Preview 대기 중', rendering: 'Preview 생성 중',
-    failed: 'Preview 생성 실패', not_requested: '준비 전',
+    stale: '스크립트 수정 후 재생성 필요', failed: 'Preview 생성 실패', not_requested: '준비 전',
   };
   const previewStatus = document.getElementById('ed-preview-status');
   previewStatus.className = `ed-render-state-value ${previewState}`;
@@ -764,7 +765,90 @@ function edRenderState(project) {
   finalStatus.textContent = finalLabels[finalState] || finalState;
 }
 
-function edRenderProject(project) {
+function edToggleScriptPanel() {
+  document.getElementById('ed-script-panel').classList.toggle('hidden');
+}
+
+function edShowEditLog() {
+  const details = document.getElementById('ed-edit-log-details');
+  details.open = true;
+  details.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function edRenderScriptEditor(project) {
+  const state = project.rough_cut_script_editor;
+  const summary = document.getElementById('ed-roughcut-summary');
+  const controls = document.getElementById('ed-script-controls');
+  const panel = document.getElementById('ed-script-panel');
+  const warning = document.getElementById('ed-script-warning');
+  if (!state) {
+    summary.classList.add('hidden');
+    controls.classList.add('hidden');
+    panel.classList.add('hidden');
+    warning.classList.add('hidden');
+    return;
+  }
+  const plan = state.user_modified_edit_plan || {};
+  const log = plan.rough_cut_log || {};
+  const segments = state.transcript_segments || [];
+  summary.classList.remove('hidden');
+  controls.classList.remove('hidden');
+  summary.innerHTML = `<b>러프컷 모드 적용됨</b> · 목표 길이 강제 안 함 · 문장/문맥 보존 우선<br>
+    원본 ${edTime(log.original_duration)} · 러프컷 ${edTime(log.rough_cut_duration ?? plan.estimated_output_duration)} · 자동 삭제 ${Number(log.removed_blocks || 0)}개 · 사용자 삭제 ${Number(log.user_deleted_blocks || 0)}개<br>
+    문장 중간 컷 차단 ${Number(log.rejected_cuts_due_to_mid_sentence || 0)}개 · 문맥 끊김 차단 ${Number(log.rejected_cuts_due_to_context_break || 0)}개 · 검토 필요 ${Number(log.needs_review_count || 0)}개`;
+  if (state.last_warning) {
+    warning.textContent = state.last_warning;
+    warning.classList.remove('hidden');
+  } else {
+    warning.textContent = '';
+    warning.classList.add('hidden');
+  }
+  document.getElementById('ed-script-list').innerHTML = segments.map(item => `
+    <article class="ed-script-segment ${item.deleted_by_user ? 'deleted' : ''}">
+      <div class="ed-script-time">원본 ${edTime(item.original_start_time)}~${edTime(item.original_end_time)}<br>러프컷 ${edTime(item.rough_cut_start_time)}~${edTime(item.rough_cut_end_time)}</div>
+      <div class="ed-script-text">${escHtml(item.text || '[무음/현장 화면]')}
+        <span class="ed-script-meta">${escHtml(item.source_filename || '')} · ${escHtml(item.block_type || 'sentence_block')}${item.needs_review ? ' · ⚠ 검토 필요' : ''}</span>
+      </div>
+      <button type="button" onclick="edToggleScriptSegment('${escHtml(item.segment_id || '')}', ${item.deleted_by_user ? 'false' : 'true'})">${item.deleted_by_user ? '복원' : '삭제'}</button>
+    </article>`).join('') || '<div class="ed-log-row">표시할 타임코드 스크립트가 없습니다.</div>';
+}
+
+async function edToggleScriptSegment(segmentId, deleted) {
+  if (!edCurrentProject || edBusy) return;
+  edBusy = true;
+  try {
+    const data = await edFetchJson(`/api/edit-projects/${edCurrentProject.id}/edit-script/toggle`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({segment_id: segmentId, deleted}),
+    }, '스크립트 구간을 수정하지 못했습니다.');
+    if (data.project) edRenderProject(data.project, false);
+    if (data.warning) edSetProgress('done', data.warning, 100);
+  } catch (e) {
+    edSetProgress('error', e.message, 100);
+  } finally {
+    edBusy = false;
+  }
+}
+
+async function edSaveScript(regeneratePreview) {
+  if (!edCurrentProject || edBusy) return;
+  edBusy = true;
+  try {
+    const data = await edFetchJson(`/api/edit-projects/${edCurrentProject.id}/edit-script/save`, {
+      method: 'POST',
+    }, '편집 스크립트를 저장하지 못했습니다.');
+    if (data.project) edRenderProject(data.project, false);
+    edSetProgress('done', '현재 스크립트 기반 러프컷을 저장했습니다. AI는 다시 호출하지 않았습니다.', 100);
+  } catch (e) {
+    edSetProgress('error', e.message, 100);
+    edBusy = false;
+    return;
+  }
+  edBusy = false;
+  if (regeneratePreview) await edPreviewRender();
+}
+
+function edRenderProject(project, scrollToWorkspace = true) {
   edCurrentProject = project;
   const isMulti = project.project_mode === 'multisource_roughcut';
   const sources = project.sources || [];
@@ -847,19 +931,20 @@ function edRenderProject(project) {
   const interruptedRender = rendering && project.runtime_rendering === false;
   const runtimeRendering = rendering && !interruptedRender;
   const approved = Number(project.approved_version || 0) === Number(latest.version || -1);
+  const scriptDirty = Boolean(project.rough_cut_script_editor?.dirty);
   const approve = document.getElementById('ed-approve-btn');
   approve.disabled = runtimeRendering || !latest.version || approved;
   approve.textContent = approved ? `v${latest.version} 승인 완료` : '이 편집안 승인';
   document.getElementById('ed-revise-btn').disabled = runtimeRendering || !latest.version;
   const render = document.getElementById('ed-render-btn');
-  render.disabled = !approved || runtimeRendering || ['queued', 'rendering'].includes(project.final_render_state);
+  render.disabled = scriptDirty || !approved || runtimeRendering || ['queued', 'rendering'].includes(project.final_render_state);
   render.textContent = isMulti
     ? (runtimeRendering ? '러프컷 생성 중...' : '승인 구성으로 1080p 러프컷 생성')
     : (project.final_render_state === 'queued' ? '최종 고화질 렌더 대기 중' : (runtimeRendering ? '편집 실행 중...' : '최종 원본 화질 렌더 요청'));
   const previewRender = document.getElementById('ed-preview-render-btn');
   if (previewRender) {
-    previewRender.disabled = isMulti || !approved || runtimeRendering || project.preview_state === 'rendering' || project.preview_state === 'queued';
-    previewRender.textContent = isMulti ? '멀티소스는 승인 후 러프컷 생성' : (project.preview_state === 'succeeded' ? '1080p 검토본 다시 만들기' : '1080p 검토본 만들기');
+    previewRender.disabled = isMulti || scriptDirty || !approved || runtimeRendering || project.preview_state === 'rendering' || project.preview_state === 'queued';
+    previewRender.textContent = scriptDirty ? '스크립트 수정안 저장 필요' : (isMulti ? '멀티소스는 승인 후 러프컷 생성' : (project.preview_state === 'succeeded' ? '1080p 검토본 다시 만들기' : '1080p 검토본 만들기'));
   }
   edRenderState(project);
   const renderProgress = document.getElementById('ed-render-progress');
@@ -879,13 +964,14 @@ function edRenderProject(project) {
 
   const outputs = project.outputs || {};
   const outputCard = document.getElementById('ed-output-card');
+  edRenderScriptEditor(project);
   if (outputs.full || outputs.preview || outputs.rough_cut) {
     outputCard.classList.remove('hidden');
     const video = document.getElementById('ed-output-video');
     const primaryOutput = outputs.rough_cut || outputs.full || outputs.preview;
     video.src = primaryOutput.download_url + `?v=${encodeURIComponent(primaryOutput.created_at || '')}`;
     document.getElementById('ed-output-links').innerHTML = `
-      ${outputs.preview ? `<a href="${outputs.preview.download_url}?download=1" download>Preview 다운로드</a>` : ''}
+      ${outputs.preview ? `<a href="${outputs.preview.download_url}?download=1" download>${project.rough_cut_script_editor ? '현재 러프컷 다운로드' : 'Preview 다운로드'}</a>` : ''}
       ${outputs.rough_cut ? `<a href="${outputs.rough_cut.download_url}" download>멀티소스 러프컷 다운로드</a>` : ''}
       ${outputs.full ? `<a href="${outputs.full.download_url}" download>전체 편집본 다운로드</a>` : ''}
       ${outputs.short ? `<a href="${outputs.short.download_url}" download>쇼츠 하이라이트 다운로드</a>` : ''}
@@ -894,7 +980,13 @@ function edRenderProject(project) {
     document.getElementById('ed-quality-assurance').innerHTML = qaRows.length
       ? `<b>자동 품질 검사</b>${qaRows.map(([kind, qa]) => `<div>${kind === 'short' ? '쇼츠' : (kind === 'preview' ? 'Preview' : (kind === 'rough_cut' ? '러프컷' : '전체'))} · ${escHtml(qa.status || '-')} · ${edTime(qa.actual_duration)}${(qa.warnings || []).length ? `<br>⚠️ ${(qa.warnings || []).map(item => escHtml(item.message || item.code || '')).join(' · ')}` : ''}</div>`).join('')}`
       : '<b>자동 품질 검사</b><div>이전 버전 결과에는 QA 기록이 없습니다.</div>';
-    document.getElementById('ed-edit-log').innerHTML = (project.applied_edit_log || []).map(item =>
+    const roughLog = project.rough_cut_script_editor?.user_modified_edit_plan?.rough_cut_log || plan.rough_cut_log || {};
+    const roughLogHtml = roughLog.mode ? `<div class="ed-log-row"><b>conservative rough cut</b><br>
+      원본 ${edTime(roughLog.original_duration)} · 러프컷 ${edTime(roughLog.rough_cut_duration)} · 압축률 ${Math.round(Number(roughLog.compression_ratio || 0) * 100)}%<br>
+      목표 길이 soft guide: ${roughLog.target_duration_used_as_soft_guide ? 'true' : 'false'} · 자동 길이 선택: ${roughLog.auto_duration_selected ? 'true' : 'false'}<br>
+      보존 topic ${Number(roughLog.preserved_topic_blocks || 0)} · 제거 ${Number(roughLog.removed_blocks || 0)} · 사용자 삭제 ${Number(roughLog.user_deleted_blocks || 0)}<br>
+      문장 중간 컷 차단 ${Number(roughLog.rejected_cuts_due_to_mid_sentence || 0)} · 문맥 끊김 차단 ${Number(roughLog.rejected_cuts_due_to_context_break || 0)} · 혼란 위험 ${Number(roughLog.viewer_confusion_risk_count || 0)} · 검토 필요 ${Number(roughLog.needs_review_count || 0)}</div>` : '';
+    document.getElementById('ed-edit-log').innerHTML = roughLogHtml + (project.applied_edit_log || []).map(item =>
       `<div class="ed-log-row">${item.output === 'short' ? '쇼츠' : '전체'} #${Number(item.order)} · ${edTime(item.source_start)}~${edTime(item.source_end)} · ${escHtml(item.action || '')}<br>${escHtml(item.reason || '')}</div>`
     ).join('');
     document.getElementById('ed-advisory-log').innerHTML = (project.advisory_edit_log || []).map(item =>
@@ -911,7 +1003,7 @@ function edRenderProject(project) {
   } else {
     outputCard.classList.add('hidden');
   }
-  workspace.scrollIntoView({behavior: 'smooth', block: 'start'});
+  if (scrollToWorkspace) workspace.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
 async function edLinkUpload() {

@@ -44,6 +44,9 @@ from edit_project_store import EditProjectStore, public_project, transition_proj
 from media_ingest import MediaIngestService, MediaValidationError, StorageCapacityError
 from edit_analysis_service import EditAnalysisService
 from edit_plan_service import prepare_plan, plan_diff
+from conservative_rough_cut import (
+    ROUGH_CUT_MODE, apply_script_choices, initialize_script_editor,
+)
 from edit_render_service import EditRenderService
 from edit_storage import EditStorageService, object_storage_configured, object_storage_from_env
 from edit_job_queue import EditJobQueue, EditJobWorker
@@ -368,6 +371,11 @@ class EditPlanRevisionRequest(BaseModel):
 
 class EditPlanApprovalRequest(BaseModel):
     version: int | None = None
+
+
+class EditScriptToggleRequest(BaseModel):
+    segment_id: str = Field(min_length=1, max_length=160)
+    deleted: bool
 
 
 class EditProjectUploadLinkRequest(BaseModel):
@@ -1886,6 +1894,7 @@ async def edit_multisource_create(req: EditMultiSourceProjectRequest):
         settings={
             "video_type": "raw_footage", "target_format": "long_form",
             "target_length_seconds": round(float(req.target_length_seconds), 3),
+            "rough_cut_mode": ROUGH_CUT_MODE,
             "purpose": req.purpose, "topic": req.topic.strip()[:300],
             "content_strategy_id": req.strategy_id,
         },
@@ -2116,6 +2125,7 @@ async def edit_multipart_start(req: EditMultipartStartRequest):
     settings = {
         "video_type": req.video_type, "target_format": req.target_format,
         "target_length_seconds": round(float(req.target_length_seconds), 3),
+        "rough_cut_mode": ROUGH_CUT_MODE,
         "purpose": req.purpose, "topic": req.topic.strip()[:300],
         "content_strategy_id": req.strategy_id,
     }
@@ -2360,6 +2370,7 @@ async def edit_projects_analyze(
         "video_type": video_type,
         "target_format": target_format,
         "target_length_seconds": round(float(target_length_seconds), 3),
+        "rough_cut_mode": ROUGH_CUT_MODE,
         "purpose": purpose,
         "topic": topic.strip()[:300],
         "content_strategy_id": strategy_id,
@@ -2501,6 +2512,9 @@ async def edit_projects_analyze(
                 diagnosis.get("plan") or {},
                 float(media["duration"]),
                 target_format=settings.get("target_format"),
+                transcript=transcript,
+                rough_cut_mode=ROUGH_CUT_MODE,
+                source_filename=str((project.get("source") or {}).get("filename") or "원본 영상"),
             )
             project["diagnosis"] = {key: value for key, value in diagnosis.items() if key != "plan"}
             project["plan_versions"] = [
@@ -2515,6 +2529,7 @@ async def edit_projects_analyze(
                     "plan": plan,
                 }
             ]
+            project["rough_cut_script_editor"] = initialize_script_editor(project)
             project["status"] = "proposed"
             project["error"] = None
             project["timings"]["analysis_total_seconds"] = round(
@@ -2580,6 +2595,8 @@ async def edit_projects_revise(project_id: int, req: EditPlanRevisionRequest):
                     "revision_summary": str(reasoning.get("recommended_direction") or "구성 수정 반영")[:1000],
                     "diff": plan_diff(current, plan), "plan": plan,
                 })
+                project["plan_versions"] = versions
+                project["rough_cut_script_editor"] = initialize_script_editor(project)
                 project["conversation"] = (project.get("conversation") or []) + [
                     {"role": "user", "content": message[:4000], "created_at": utc_now(), "version": version},
                     {"role": "assistant", "content": versions[-1]["revision_summary"], "created_at": utc_now(), "version": version},
@@ -2627,6 +2644,9 @@ async def edit_projects_revise(project_id: int, req: EditPlanRevisionRequest):
                 revised.get("plan") or {},
                 media_duration,
                 target_format=(project.get("settings") or {}).get("target_format"),
+                transcript=project.get("transcript") or {},
+                rough_cut_mode=ROUGH_CUT_MODE,
+                source_filename=str((project.get("source") or {}).get("filename") or "원본 영상"),
             )
             version = int(versions[-1]["version"]) + 1
             diff = plan_diff(current, plan)
@@ -2642,6 +2662,8 @@ async def edit_projects_revise(project_id: int, req: EditPlanRevisionRequest):
                     "plan": plan,
                 }
             )
+            project["plan_versions"] = versions
+            project["rough_cut_script_editor"] = initialize_script_editor(project)
             project["conversation"] = (project.get("conversation") or []) + [
                 {"role": "user", "content": message[:4000], "created_at": utc_now(), "version": version},
                 {"role": "assistant", "content": str(revised.get("revision_summary") or "수정 요청 반영")[:2000], "created_at": utc_now(), "version": version},
@@ -2659,6 +2681,114 @@ async def edit_projects_revise(project_id: int, req: EditPlanRevisionRequest):
         stream(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/edit-projects/{project_id}/edit-script/initialize")
+async def edit_projects_script_initialize(project_id: int):
+    try:
+        row = _edit_row(project_id)
+        project = row["report"]
+        state = initialize_script_editor(project)
+    except (KeyError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404 if isinstance(exc, KeyError) else 409)
+    project["rough_cut_script_editor"] = state
+    EditProjectStore().save(project_id, project)
+    return {"ok": True, "script_editor": state, "project": public_project(EditProjectStore().get(project_id))}
+
+
+@app.post("/api/edit-projects/{project_id}/edit-script/toggle")
+async def edit_projects_script_toggle(project_id: int, req: EditScriptToggleRequest):
+    try:
+        row = _edit_row(project_id)
+        project = row["report"]
+        state = initialize_script_editor(project)
+    except (KeyError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404 if isinstance(exc, KeyError) else 409)
+    active_preview = next((
+        job for job in EDIT_JOB_QUEUE.list(project_id=project_id, limit=100)
+        if job.get("type") in {"preview_rendering", "rough_cut_rendering"}
+        and job.get("status") == "running"
+    ), None)
+    if active_preview:
+        return JSONResponse({"error": "현재 러프컷을 만드는 중입니다. 완료 후 스크립트를 수정해주세요."}, status_code=409)
+    row_by_id = {
+        str(item.get("segment_id") or ""): item
+        for item in state.get("transcript_segments") or []
+    }
+    selected = row_by_id.get(req.segment_id)
+    if not selected:
+        return JSONResponse({"error": "편집 스크립트 구간을 찾지 못했습니다."}, status_code=404)
+    deleted = set(str(value) for value in state.get("deleted_segment_ids") or [])
+    restored = set(str(value) for value in state.get("restored_segment_ids") or [])
+    if req.deleted:
+        deleted.add(req.segment_id)
+        restored.discard(req.segment_id)
+    else:
+        deleted.discard(req.segment_id)
+        restored.add(req.segment_id)
+    state = apply_script_choices(state, deleted_ids=deleted, restored_ids=restored)
+    warning = None
+    if req.deleted and (
+        selected.get("viewer_confusion_risk")
+        or selected.get("context_continuity")
+        or not selected.get("topic_complete", True)
+    ):
+        warning = "이 구간을 삭제하면 앞뒤 문맥이 어색할 수 있습니다."
+    state["last_warning"] = warning
+    state["updated_at"] = utc_now()
+    project["rough_cut_script_editor"] = state
+    if (project.get("outputs") or {}).get("preview"):
+        project["preview_state"] = "stale"
+    EditProjectStore().save(project_id, project)
+    return {
+        "ok": True, "warning": warning, "script_editor": state,
+        "project": public_project(EditProjectStore().get(project_id)),
+    }
+
+
+@app.post("/api/edit-projects/{project_id}/edit-script/save")
+async def edit_projects_script_save(project_id: int):
+    try:
+        row = _edit_row(project_id)
+        project = row["report"]
+        state = initialize_script_editor(project)
+    except (KeyError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404 if isinstance(exc, KeyError) else 409)
+    if not state.get("dirty") and state.get("saved_version"):
+        return {"ok": True, "reused": True, "project": public_project(row)}
+    versions = project.get("plan_versions") or []
+    next_version = max((int(item.get("version") or 0) for item in versions), default=0) + 1
+    plan = json.loads(json.dumps(state.get("user_modified_edit_plan") or {}, ensure_ascii=False))
+    versions.append({
+        "version": next_version, "status": "approved", "created_at": utc_now(),
+        "source": "user_script_edit", "user_request": "편집 스크립트 직접 수정",
+        "revision_summary": f"스크립트 구간 {len(state.get('deleted_segment_ids') or [])}개 삭제 반영",
+        "diff": plan_diff(versions[-1].get("plan") or {}, plan) if versions else [],
+        "plan": plan,
+    })
+    for item in versions[:-1]:
+        if item.get("status") == "approved":
+            item["status"] = "superseded"
+    project["plan_versions"] = versions
+    project["approved_version"] = next_version
+    project["approved_at"] = utc_now()
+    project["approved_plan_snapshot"] = json.loads(json.dumps(versions[-1], ensure_ascii=False))
+    state["base_version"] = next_version
+    state["saved_version"] = next_version
+    state["dirty"] = False
+    state["saved_at"] = utc_now()
+    project["rough_cut_script_editor"] = state
+    project["conversation"] = (project.get("conversation") or []) + [{
+        "role": "user", "content": f"편집 스크립트 수정본 v{next_version} 저장",
+        "created_at": utc_now(), "version": next_version,
+    }]
+    if project.get("status") not in {"final_queued", "final_rendering"}:
+        project = transition_project(
+            project, "approved", lifecycle="APPROVED",
+            reason=f"owner saved script edit v{next_version}",
+        )
+    EditProjectStore().save(project_id, project)
+    return {"ok": True, "version": next_version, "project": public_project(EditProjectStore().get(project_id))}
 
 
 @app.post("/api/edit-projects/{project_id}/approve")

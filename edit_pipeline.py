@@ -15,6 +15,7 @@ from typing import Any
 from edit_analysis_service import EditAnalysisService
 from edit_learning_service import EditFeedbackService
 from edit_plan_service import prepare_plan
+from conservative_rough_cut import ROUGH_CUT_MODE, initialize_script_editor
 from edit_project_store import EditProjectStore, public_project, transition_project, utc_now
 from edit_quality_service import EditQualityService
 from edit_render_service import EditRenderService
@@ -403,6 +404,9 @@ class EditPipeline:
             plan = prepare_plan(
                 diagnosis.get("plan") or {}, float(media["duration"]),
                 target_format=(project.get("settings") or {}).get("target_format"),
+                transcript=project.get("transcript") or {},
+                rough_cut_mode=ROUGH_CUT_MODE,
+                source_filename=str((project.get("source") or {}).get("filename") or "원본 영상"),
             )
             project["diagnosis"] = {key: value for key, value in diagnosis.items() if key != "plan"}
             project["plan_versions"] = [{
@@ -410,6 +414,7 @@ class EditPipeline:
                 "source": "ai_diagnosis", "user_request": "",
                 "revision_summary": "AI 최초 분석 제안", "diff": [], "plan": plan,
             }]
+            project["rough_cut_script_editor"] = initialize_script_editor(project)
             project.setdefault("timings", {})["analysis_total_seconds"] = round(time.perf_counter() - started, 3)
             project = transition_project(project, "proposed", lifecycle="AWAITING_REVIEW", reason="diagnosis ready", job_id=int(job["job_id"]))
             project["error"] = None
@@ -627,6 +632,14 @@ class EditPipeline:
                 }
             project.setdefault("outputs", {})["preview"] = output
             project.setdefault("quality_assurance", {})["preview"] = qa
+            script_editor = project.get("rough_cut_script_editor") or {}
+            if script_editor:
+                script_editor["final_rough_cut_path"] = (
+                    output.get("object_key") or output.get("storage_name")
+                )
+                script_editor["last_preview_version"] = approved
+                script_editor["last_preview_created_at"] = output.get("created_at") or utc_now()
+                project["rough_cut_script_editor"] = script_editor
             project["preview_state"] = "succeeded"
             project["preview_error"] = None
             project.setdefault("timings", {})["preview_render_seconds"] = round(time.perf_counter() - started, 3)
@@ -895,6 +908,7 @@ class EditPipeline:
             "diff": [], "plan": plan,
         })
         project["plan_versions"] = versions
+        project["rough_cut_script_editor"] = initialize_script_editor(project)
         project["approved_version"], project["approved_at"] = None, None
         project["story_plan_state"] = "awaiting_approval"
         project = transition_project(project, "proposed", lifecycle="AWAITING_REVIEW", reason="multi-source story ready", job_id=int(job["job_id"]))

@@ -356,15 +356,11 @@ def build_story_plan(
         selected.insert(0, strongest)
     timeline = []
     total = 0.0
-    limit = max(0.0, float(target_length_seconds or (project.get("settings") or {}).get("target_length_seconds") or 0))
+    soft_guide = max(0.0, float(target_length_seconds or (project.get("settings") or {}).get("target_length_seconds") or 0))
     for order, segment in enumerate(selected, start=1):
         source = source_by_id[str(segment["source_id"])]
         duration = float((source.get("media") or {}).get("duration") or source.get("duration") or 0)
         start, end = _natural_handles(segment, duration)
-        if limit and total >= limit:
-            break
-        if limit and total + end - start > limit:
-            end = max(start, start + limit - total)
         if end - start < 0.2:
             continue
         timeline.append({
@@ -376,11 +372,30 @@ def build_story_plan(
             "segment_id": segment.get("segment_id"), "speech_boundary_ok": True,
         })
         total += end - start
+    original_duration = round(sum(
+        float((source.get("media") or {}).get("duration") or source.get("duration") or 0)
+        for source in source_by_id.values()
+    ), 3)
     return {
         "recommended_direction": "문제와 실제 증거를 먼저 제시하고 설명·주의사항·관리/A/S로 이어지는 러프컷",
         "timeline": timeline, "render_timeline": timeline,
         "estimated_output_duration": round(total, 3),
-        "target_length_seconds": limit, "source_count": len(source_by_id),
+        "target_length_seconds": soft_guide, "source_count": len(source_by_id),
+        "rough_cut_mode": "conservative_rough_cut",
+        "target_duration_used_as_soft_guide": True,
+        "auto_duration_selected": True,
+        "rough_cut_log": {
+            "mode": "conservative_rough_cut",
+            "original_duration": original_duration,
+            "rough_cut_duration": round(total, 3),
+            "compression_ratio": round(total / original_duration, 4) if original_duration else 1.0,
+            "target_duration_used_as_soft_guide": True,
+            "auto_duration_selected": True,
+            "preserved_topic_blocks": len(timeline), "removed_blocks": 0,
+            "user_deleted_blocks": 0, "rejected_cuts_due_to_mid_sentence": 0,
+            "rejected_cuts_due_to_context_break": 0,
+            "viewer_confusion_risk_count": 0, "needs_review_count": 0,
+        },
         "channel_evidence_confidence": _channel_confidence(project.get("evidence_trace") or []),
         "editor_notes": [
             "중복 발언은 실제 경험·명확성·정보 밀도가 높은 구간을 우선했습니다.",
@@ -404,7 +419,6 @@ def apply_story_reasoning(
     source_by_id = {str(source.get("source_id")): source for source in project.get("sources") or []}
     timeline = []
     total = 0.0
-    limit = max(0.0, float(target_length_seconds or fallback.get("target_length_seconds") or 0))
     used: set[str] = set()
     for decision in reasoning.get("ordered_segments") or []:
         segment_id_value = str(decision.get("segment_id") or "")
@@ -414,8 +428,6 @@ def apply_story_reasoning(
         source = source_by_id[str(segment["source_id"])]
         duration = float((source.get("media") or {}).get("duration") or source.get("duration") or 0)
         start, end = _natural_handles(segment, duration)
-        if limit and total + end - start > limit:
-            end = max(start, start + limit - total)
         if end - start < 0.2:
             continue
         used.add(segment_id_value)
@@ -428,8 +440,6 @@ def apply_story_reasoning(
             "segment_id": segment_id_value, "speech_boundary_ok": True,
         })
         total += end - start
-        if limit and total >= limit - 0.05:
-            break
     if not timeline:
         return fallback
     fallback.update({
@@ -439,6 +449,7 @@ def apply_story_reasoning(
         "channel_evidence_confidence": reasoning.get("channel_evidence_confidence") or fallback["channel_evidence_confidence"],
         "editor_notes": list(reasoning.get("editor_notes") or [])[:20] + fallback["editor_notes"],
     })
+    fallback.setdefault("rough_cut_log", {})["rough_cut_duration"] = round(total, 3)
     return fallback
 
 

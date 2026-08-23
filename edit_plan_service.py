@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from conservative_rough_cut import ROUGH_CUT_MODE, build_conservative_timeline
+
 
 EDIT_ACTIONS = {
     "keep",
@@ -246,7 +248,10 @@ def build_short_timeline(plan: dict[str, Any], duration: float) -> list[dict[str
 
 
 def prepare_plan(
-    raw_plan: dict[str, Any], duration: float, *, target_format: str | None = None
+    raw_plan: dict[str, Any], duration: float, *, target_format: str | None = None,
+    transcript: dict[str, Any] | None = None,
+    rough_cut_mode: str | None = None,
+    source_id: str = "source-1", source_filename: str = "원본 영상",
 ) -> dict[str, Any]:
     plan = deepcopy(raw_plan or {})
     plan["segments"] = normalize_proposals(plan.get("segments") or [], duration)
@@ -261,7 +266,21 @@ def prepare_plan(
     plan["create_short_highlight"] = bool(
         plan.get("create_short_highlight") or target_format == "short_reel"
     )
-    plan["render_timeline"] = build_render_timeline(plan, duration)
+    selected_mode = str(rough_cut_mode or plan.get("rough_cut_mode") or "").strip()
+    if selected_mode == ROUGH_CUT_MODE and transcript is not None:
+        timeline, evaluated, rough_log = build_conservative_timeline(
+            plan["segments"], duration, transcript,
+            source_id=source_id, filename=source_filename,
+            target_duration=plan["target_length_seconds"],
+        )
+        plan["segments"] = evaluated
+        plan["render_timeline"] = timeline
+        plan["rough_cut_mode"] = ROUGH_CUT_MODE
+        plan["rough_cut_log"] = rough_log
+        plan["target_duration_used_as_soft_guide"] = True
+        plan["auto_duration_selected"] = True
+    else:
+        plan["render_timeline"] = build_render_timeline(plan, duration)
     plan["estimated_output_duration"] = round(
         sum(item["source_end"] - item["source_start"] for item in plan["render_timeline"]), 3
     )
