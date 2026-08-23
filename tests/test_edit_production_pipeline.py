@@ -457,6 +457,7 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
     def test_multipart_contract_is_idempotent_and_analysis_is_queued(self):
         payload = {
             "client_upload_id": "stable-upload-123", "filename": "long.mp4", "file_size": 16,
+            "force_new": False, "create_new_project": False,
             "content_type": "video/mp4", "video_type": "raw_footage", "target_format": "long_form",
             "target_length_seconds": 0, "purpose": "현장기록형", "topic": "long", "strategy_id": None,
         }
@@ -501,10 +502,9 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             for _attempt in range(2):
                 started = self.client.post(
                     "/api/edit-uploads/multipart/start",
-                    json={
-                        **base, "client_upload_id": "same-browser-request-marker",
-                        "force_new": True,
-                    },
+                    # New-production semantics are the server default, even if
+                    # an older client omits both explicit flags.
+                    json={**base, "client_upload_id": "same-browser-request-marker"},
                 )
                 self.assertEqual(started.status_code, 200)
                 upload_ids.append(started.json()["upload_id"])

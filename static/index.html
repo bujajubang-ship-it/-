@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="style.css?v=20260823-new-upload-job" />
+  <link rel="stylesheet" href="style.css?v=20260823-force-new-project" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -1102,6 +1102,7 @@
             <button id="ed-storage-cleanup-btn" onclick="edCleanupStorage()">만료 파일 안전 정리</button>
           </div>
           <div id="ed-space-warning" class="hidden ed-space-warning"></div>
+          <div id="ed-existing-project-choice" class="hidden ed-space-warning"></div>
 
           <div class="upload-area">
             <input type="file" id="ed-file-input" accept="video/*" style="display:none" onchange="edFileSelected(event)">
@@ -1530,7 +1531,7 @@
 
   </main>
 
-  <script src="app.js?v=20260823-new-upload-job"></script>
+  <script src="app.js?v=20260823-force-new-project"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

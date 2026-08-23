@@ -144,6 +144,7 @@ let edUploadGeneration = 0;
 let edActiveUploadId = null;
 let edActiveProjectId = null;
 let edActiveJobId = null;
+let edKnownProjects = [];
 
 function edNewUploadRequestId(prefix = 'ed') {
   const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -273,8 +274,39 @@ function edFileSelected(event) {
   }
   const mb = (edSelectedFile.size / 1024 / 1024).toFixed(1);
   name.textContent = `${edSelectedFile.name} · ${mb}MB`;
+  edShowExistingProjectChoice();
   button.disabled = true;
   edCheckSelectedCapacity();
+}
+
+function edShowExistingProjectChoice() {
+  const choice = document.getElementById('ed-existing-project-choice');
+  if (!choice) return;
+  const existing = edSelectedFile
+    ? edKnownProjects.find(item => String(item.filename || '') === edSelectedFile.name)
+    : null;
+  if (!existing) {
+    choice.classList.add('hidden');
+    choice.innerHTML = '';
+    return;
+  }
+  choice.classList.remove('hidden');
+  choice.innerHTML = `<b>같은 파일명의 지난 편집 결과가 있습니다.</b><br>
+    자동으로 열지 않습니다. 제작 버튼을 누르면 새 프로젝트로 시작합니다.
+    <div class="ed-action-buttons" style="margin-top:8px">
+      <button type="button" class="secondary-btn" onclick="edOpenExistingChoice(${Number(existing.id)})">기존 프로젝트 열기</button>
+      <button type="button" onclick="edChooseNewProject()">새로 제작하기</button>
+    </div>`;
+}
+
+async function edOpenExistingChoice(projectId) {
+  document.getElementById('ed-existing-project-choice')?.classList.add('hidden');
+  await edOpenProject(projectId);
+}
+
+function edChooseNewProject() {
+  document.getElementById('ed-existing-project-choice')?.classList.add('hidden');
+  edSetProgress('uploading', '새 프로젝트로 제작할 준비가 됐습니다.', 0);
 }
 
 async function edInit() {
@@ -406,7 +438,7 @@ async function edStartMultiSource() {
 async function edAnalyzeDirect(uploadRequestId, generation) {
   const file = edSelectedFile;
   const settings = {
-    client_upload_id: uploadRequestId, force_new: true,
+    client_upload_id: uploadRequestId, force_new: true, create_new_project: true,
     filename: file.name, file_size: file.size,
     content_type: file.type || 'video/mp4', video_type: document.getElementById('ed-video-type').value,
     target_format: document.getElementById('ed-target-format').value,
@@ -623,6 +655,8 @@ async function edLoadProjects() {
   if (!target) return;
   try {
     const rows = await edFetchJson('/api/edit-projects?limit=30', undefined, '편집 프로젝트를 불러오지 못했습니다.');
+    edKnownProjects = rows || [];
+    edShowExistingProjectChoice();
     if (!rows.length) {
       target.innerHTML = '<div class="ed-project-meta">아직 편집 프로젝트가 없습니다.</div>';
       return;
@@ -694,6 +728,7 @@ async function edAnalyze() {
   const form = new FormData();
   form.append('file', edSelectedFile);
   form.append('force_new', 'true');
+  form.append('create_new_project', 'true');
   form.append('video_type', document.getElementById('ed-video-type').value);
   form.append('target_format', document.getElementById('ed-target-format').value);
   form.append('target_length_seconds', document.getElementById('ed-target-length').value || '0');
@@ -1330,7 +1365,10 @@ async function acStart() {
     const resp = await fetch(`${AC_CUTTER}/api/process`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ video_path: acPath, edit_mode: mode, direction, model: 'large-v3' }),
+      body: JSON.stringify({
+        video_path: acPath, edit_mode: mode, direction, model: 'large-v3',
+        upload_id: edNewUploadRequestId('ac'), force_new: true, create_new_project: true,
+      }),
     });
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
