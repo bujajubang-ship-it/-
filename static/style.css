@@ -2038,13 +2038,17 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ed-form-grid input, .ed-form-grid select, .ed-revision-row textarea { width: 100%; border: 1.5px solid #dbe1ea; border-radius: 10px; padding: 11px 12px; background: #fff; color: #111827; font: inherit; }
 .ed-form-grid input:focus, .ed-form-grid select:focus, .ed-revision-row textarea:focus { outline: none; border-color: #8b5cf6; }
 .ed-progress { margin-top: 16px; }
+.ed-upload-complete-retry, .ed-project-finalize { margin-top: 10px; border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; border-radius: 8px; padding: 8px 11px; cursor: pointer; font-weight: 800; }
 .ed-section-head h3, .ed-action-card h3 { margin: 0; color: #111827; }
 .ed-section-head > span { font-size: 12px; color: #64748b; }
 .ed-section-head button { border: 1px solid #dbe1ea; background: #fff; color: #475569; border-radius: 8px; padding: 7px 11px; cursor: pointer; }
 .ed-project-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 14px; }
-.ed-project-item { border: 1px solid #e5e7eb; background: #fff; border-radius: 12px; padding: 13px; cursor: pointer; text-align: left; }
+.ed-project-item { border: 1px solid #e5e7eb; background: #fff; border-radius: 12px; padding: 13px; text-align: left; }
 .ed-project-item:hover { border-color: #a78bfa; background: #faf8ff; }
-.ed-project-item b { display: block; color: #111827; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-project-open { display: block; width: 100%; border: 0; padding: 0; background: transparent; cursor: pointer; text-align: left; }
+.ed-project-open b { display: block; color: #111827; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-project-open .ed-project-meta { display: block; }
+.ed-project-finalize { width: 100%; }
 .ed-project-meta { color: #64748b; font-size: 12px; line-height: 1.6; }
 .ed-workspace-head h2 { margin: 3px 0 0; font-size: 21px; }
 .ed-eyebrow { color: #7c3aed; font-size: 12px; font-weight: 800; }

@@ -2224,7 +2224,11 @@ async def edit_multipart_status(project_id: int):
     try:
         _store, project, backend, upload = _multipart_project(project_id)
         parts = await asyncio.to_thread(backend.list_parts, upload["object_key"], upload["multipart_upload_id"])
-        return {"project_id": project_id, "status": project.get("status"), "part_size": upload["part_size"], "uploaded_parts": parts}
+        return {
+            "project_id": project_id, "status": project.get("status"),
+            "file_size": upload.get("file_size"), "part_size": upload["part_size"],
+            "uploaded_parts": parts,
+        }
     except KeyError as exc:
         return JSONResponse({"error": str(exc)}, status_code=404)
     except RuntimeError as exc:
@@ -2236,6 +2240,7 @@ async def edit_multipart_status(project_id: int):
 @app.post("/api/edit-uploads/{project_id}/complete")
 async def edit_multipart_complete(project_id: int, req: EditMultipartCompleteRequest):
     try:
+        print(f"[edit-upload-complete] project_id={project_id} parts={len(req.parts)} status=started", flush=True)
         store, project, backend, upload = _multipart_project(project_id)
         metadata = await asyncio.to_thread(
             backend.complete_multipart, upload["object_key"], upload["multipart_upload_id"], req.parts
@@ -2257,6 +2262,7 @@ async def edit_multipart_complete(project_id: int, req: EditMultipartCompleteReq
         )
         project["jobs"] = sorted(set((project.get("jobs") or []) + [int(job["job_id"])]))
         store.save(project_id, project)
+        print(f"[edit-upload-complete] project_id={project_id} job_id={job['job_id']} status=completed", flush=True)
         return {"ok": True, "project": public_project(store.get(project_id)), "job": job}
     except KeyError as exc:
         return JSONResponse({"error": str(exc)}, status_code=404)

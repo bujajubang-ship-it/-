@@ -144,6 +144,8 @@ let edUploadGeneration = 0;
 let edActiveUploadId = null;
 let edActiveProjectId = null;
 let edActiveJobId = null;
+let edRetryCompleteProjectId = null;
+const ED_PART_RESPONSE_WAIT_MS = 45000;
 
 function edNewUploadRequestId(prefix = 'ed', file = null) {
   const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -157,6 +159,7 @@ function edResetCurrentResultForNewUpload() {
   edActiveProjectId = null;
   edActiveJobId = null;
   edCurrentProject = null;
+  edHideUploadCompleteRetry();
   const workspace = document.getElementById('ed-workspace');
   const outputCard = document.getElementById('ed-output-card');
   const video = document.getElementById('ed-output-video');
@@ -304,17 +307,106 @@ async function edLoadStorage() {
 function edUploadPart(url, blob, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('PUT', url);
-    xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(event.loaded); };
-    xhr.onload = () => {
-      if (xhr.status < 200 || xhr.status >= 300) return reject(new Error(`파트 업로드 실패 (${xhr.status})`));
-      const etag = (xhr.getResponseHeader('ETag') || '').replaceAll('"', '');
-      if (!etag) return reject(new Error('Object Storage CORS에서 ETag 응답 노출이 필요합니다.'));
-      resolve(etag);
+    let settled = false;
+    let responseTimer = null;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      if (responseTimer) clearTimeout(responseTimer);
+      callback(value);
     };
-    xhr.onerror = () => reject(new Error('Object Storage 연결이 끊겼습니다.'));
+    const startResponseTimer = () => {
+      if (settled || responseTimer) return;
+      responseTimer = setTimeout(() => {
+        const error = new Error('Object Storage의 파트 완료 응답이 지연되고 있습니다. 서버에서 업로드 상태를 확인합니다.');
+        error.uploadResponseTimedOut = true;
+        finish(reject, error);
+        try { xhr.abort(); } catch (e) {}
+      }, ED_PART_RESPONSE_WAIT_MS);
+    };
+    xhr.open('PUT', url);
+    xhr.upload.onprogress = event => {
+      if (!event.lengthComputable) return;
+      onProgress(event.loaded);
+      // Mobile Safari can report every request byte as uploaded but never
+      // deliver the final response event. Bound only the response wait; slow
+      // uploads remain unrestricted until all bytes have left the browser.
+      if (event.loaded >= event.total) startResponseTimer();
+    };
+    xhr.upload.onload = startResponseTimer;
+    xhr.onload = () => {
+      if (xhr.status < 200 || xhr.status >= 300) return finish(reject, new Error(`파트 업로드 실패 (${xhr.status})`));
+      const etag = (xhr.getResponseHeader('ETag') || '').replaceAll('"', '');
+      if (!etag) return finish(reject, new Error('Object Storage CORS에서 ETag 응답 노출이 필요합니다.'));
+      finish(resolve, etag);
+    };
+    xhr.onerror = () => finish(reject, new Error('Object Storage 연결이 끊겼습니다.'));
+    xhr.ontimeout = () => finish(reject, new Error('Object Storage 파트 업로드 응답 시간이 초과되었습니다.'));
+    xhr.onabort = () => finish(reject, new Error('Object Storage 파트 업로드가 중단되었습니다.'));
     xhr.send(blob);
   });
+}
+
+async function edStoredUploadPart(projectId, partNumber, expectedSize) {
+  try {
+    const status = await edFetchJson(`/api/edit-uploads/${projectId}/status`, undefined, '업로드 상태를 확인하지 못했습니다.');
+    const part = (status.uploaded_parts || []).find(item => Number(item.part_number) === Number(partNumber));
+    const etag = String(part?.etag || '').replaceAll('"', '');
+    if (!etag || Number(part?.size_bytes || 0) !== Number(expectedSize)) return null;
+    return {part_number: Number(partNumber), etag, size_bytes: Number(part.size_bytes)};
+  } catch (error) {
+    return null;
+  }
+}
+
+function edVerifiedMultipartParts(status, expectedFileSize) {
+  const partSize = Number(status.part_size || 0);
+  const fileSize = Number(expectedFileSize || status.file_size || 0);
+  if (!partSize || !fileSize) throw new Error('업로드 원본 크기 또는 파트 크기를 확인하지 못했습니다.');
+  const totalParts = Math.ceil(fileSize / partSize);
+  const uploaded = new Map((status.uploaded_parts || []).map(item => [Number(item.part_number), item]));
+  const parts = [];
+  for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+    const item = uploaded.get(partNumber);
+    const expectedSize = Math.min(partSize, fileSize - ((partNumber - 1) * partSize));
+    const etag = String(item?.etag || '').replaceAll('"', '');
+    if (!item || !etag || Number(item.size_bytes || 0) !== expectedSize) {
+      throw new Error(`Object Storage 파트 ${partNumber}/${totalParts} 완료를 확인하지 못했습니다.`);
+    }
+    parts.push({part_number: partNumber, etag});
+  }
+  return parts;
+}
+
+function edHideUploadCompleteRetry() {
+  edRetryCompleteProjectId = null;
+  const button = document.getElementById('ed-upload-complete-retry');
+  if (button) button.classList.add('hidden');
+}
+
+function edShowUploadCompleteRetry(projectId) {
+  edRetryCompleteProjectId = Number(projectId) || null;
+  const button = document.getElementById('ed-upload-complete-retry');
+  if (button) button.classList.toggle('hidden', !edRetryCompleteProjectId);
+}
+
+async function edCompleteMultipartUpload(projectId, expectedFileSize) {
+  try {
+    edSetProgress('validating', '업로드 완료 확인 중', 56);
+    const status = await edFetchJson(`/api/edit-uploads/${projectId}/status`, undefined, '업로드 완료 상태를 확인하지 못했습니다.');
+    const parts = edVerifiedMultipartParts(status, expectedFileSize);
+    edSetProgress('validating', '업로드 최종 처리 중', 57);
+    const completed = await edFetchJson(`/api/edit-uploads/${projectId}/complete`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({parts})
+    }, '업로드 완료 처리에 실패했습니다. Object Storage 원본은 보존됩니다.');
+    edSetProgress('validating', '분석 job 생성 중', 58);
+    edHideUploadCompleteRetry();
+    return completed;
+  } catch (error) {
+    error.uploadCompleteProjectId = Number(projectId);
+    throw error;
+  }
 }
 
 function edMultiFilesSelected() {
@@ -458,6 +550,14 @@ async function edAnalyzeDirect(uploadRequestId, generation) {
           finished.set(partNumber, {part_number: partNumber, etag});
           progress.set(partNumber, blob.size); update(); lastError = null; break;
         } catch (error) {
+          const stored = await edStoredUploadPart(start.project_id, partNumber, blob.size);
+          if (stored) {
+            finished.set(partNumber, {part_number: partNumber, etag: stored.etag});
+            progress.set(partNumber, blob.size);
+            update();
+            lastError = null;
+            break;
+          }
           lastError = error;
           await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** (attempt - 1))));
         }
@@ -466,10 +566,7 @@ async function edAnalyzeDirect(uploadRequestId, generation) {
     }
   }
   await Promise.all(Array.from({length: Math.min(3, pending.length || 1)}, worker));
-  const completed = await edFetchJson(`/api/edit-uploads/${start.project_id}/complete`, {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({parts: [...finished.values()].sort((a, b) => a.part_number - b.part_number)})
-  }, '업로드 완료 상태를 저장하지 못했습니다. 원본 object는 보존됩니다.');
+  const completed = await edCompleteMultipartUpload(start.project_id, file.size);
   if (generation !== edUploadGeneration) return {ignored: true};
   const jobId = Number(completed.job?.job_id || 0);
   if (!jobId) throw new Error('새 분석 작업 ID를 받지 못했습니다. 업로드 원본은 보존됩니다.');
@@ -543,6 +640,38 @@ async function edPollAnalysis(projectId, jobId = null, generation = null) {
       percent,
     );
     await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+}
+
+async function edRetryUploadComplete(projectId = edRetryCompleteProjectId) {
+  projectId = Number(projectId || 0);
+  if (!projectId || edBusy) return;
+  edBusy = true;
+  edHideUploadCompleteRetry();
+  try {
+    const project = await edFetchJson(`/api/edit-projects/${projectId}`, undefined, '업로드 프로젝트를 불러오지 못했습니다.');
+    let job = null;
+    if (project.status === 'uploading') {
+      const expectedFileSize = Number(project.upload?.file_size || project.source?.size_bytes || 0);
+      const completed = await edCompleteMultipartUpload(projectId, expectedFileSize);
+      job = completed.job || null;
+    } else {
+      const jobs = await edFetchJson(`/api/edit-jobs?project_id=${projectId}`, undefined, '분석 job 상태를 불러오지 못했습니다.');
+      job = (jobs.jobs || []).find(item => item.type === 'analysis' && item.status !== 'cancelled') || null;
+    }
+    const jobId = Number(job?.job_id || 0);
+    if (!jobId) throw new Error('분석 job이 생성되지 않았습니다. 업로드 원본은 보존됩니다.');
+    edActiveProjectId = projectId;
+    edActiveJobId = jobId;
+    edActiveUploadId = String(job?.payload?.upload_id || project.upload?.upload_id || '');
+    edSetProgress('validating', '분석 job 생성 중', 58);
+    await edLoadProjects();
+    await edPollAnalysis(projectId, jobId);
+  } catch (error) {
+    edSetProgress('error', `업로드 완료 처리 실패: ${error.message}`, 100);
+    edShowUploadCompleteRetry(projectId);
+  } finally {
+    edBusy = false;
   }
 }
 
@@ -631,10 +760,13 @@ async function edLoadProjects() {
       return;
     }
     target.innerHTML = rows.map(item => `
-      <button class="ed-project-item" onclick="edOpenProject(${Number(item.id)})">
-        <b>${escHtml(item.keyword || item.filename || '편집 프로젝트')}</b>
-        <div class="ed-project-meta">${escHtml(ED_STATUS_LABELS[item.status] || item.status || '-')} · v${Number(item.version || 0)}<br>${escHtml(item.video_type || '-')} · ${edTime(item.duration)}</div>
-      </button>`).join('');
+      <div class="ed-project-item">
+        <button class="ed-project-open" onclick="edOpenProject(${Number(item.id)})">
+          <b>${escHtml(item.keyword || item.filename || '편집 프로젝트')}</b>
+          <span class="ed-project-meta">${escHtml(ED_STATUS_LABELS[item.status] || item.status || '-')} · v${Number(item.version || 0)}<br>${escHtml(item.video_type || '-')} · ${edTime(item.duration)}</span>
+        </button>
+        ${item.status === 'uploading' ? `<button class="ed-project-finalize" onclick="edRetryUploadComplete(${Number(item.id)})">업로드 완료 처리 재시도</button>` : ''}
+      </div>`).join('');
   } catch (e) {
     target.innerHTML = '<div class="ed-project-meta" style="color:#dc2626">프로젝트를 불러오지 못했습니다.</div>';
   }
@@ -670,6 +802,7 @@ async function edAnalyze() {
   if (!edSelectedFile || edBusy) return;
   if (!edCapacityOkay && !(await edCheckSelectedCapacity())) return;
   edBusy = true;
+  edHideUploadCompleteRetry();
   const generation = edUploadGeneration;
   const uploadRequestId = edNewUploadRequestId('ed', edSelectedFile);
   const button = document.getElementById('ed-analyze-btn');
@@ -686,6 +819,7 @@ async function edAnalyze() {
       await edAnalyzeDirect(uploadRequestId, generation);
     } catch (error) {
       edSetProgress('error', error.message, 100);
+      if (error.uploadCompleteProjectId) edShowUploadCompleteRetry(error.uploadCompleteProjectId);
     } finally {
       edBusy = false;
       button.disabled = !edSelectedFile;

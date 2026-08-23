@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="style.css?v=20260823-unique-edit-upload" />
+  <link rel="stylesheet" href="style.css?v=20260824-multipart-finalize" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -1152,6 +1152,7 @@
           <div id="ed-progress" class="hidden ed-progress">
             <div class="step-indicator" id="ed-progress-message">업로드 준비 중...</div>
             <div class="progress-bar"><div class="progress-fill" id="ed-progress-fill"></div></div>
+            <button type="button" id="ed-upload-complete-retry" class="hidden ed-upload-complete-retry" onclick="edRetryUploadComplete()">업로드 완료 처리 재시도</button>
           </div>
         </section>
 
@@ -1530,7 +1531,7 @@
 
   </main>
 
-  <script src="app.js?v=20260823-unique-edit-upload"></script>
+  <script src="app.js?v=20260824-multipart-finalize"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

@@ -475,13 +475,62 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             project_id = started.json()["project_id"]
             key = self.store.get(project_id)["report"]["source"]["object_key"]
             self.s3.objects[key] = b"x" * 16
-            done = self.client.post(
-                f"/api/edit-uploads/{project_id}/complete",
-                json={"parts": [{"part_number": 1, "etag": "one"}, {"part_number": 2, "etag": "two"}]},
-            )
+            with patch("builtins.print") as complete_log:
+                done = self.client.post(
+                    f"/api/edit-uploads/{project_id}/complete",
+                    json={"parts": [{"part_number": 1, "etag": "one"}, {"part_number": 2, "etag": "two"}]},
+                )
             self.assertEqual(done.status_code, 200)
             self.assertEqual(done.json()["project"]["lifecycle_status"], "UPLOADED")
             self.assertEqual(self.queue.list(project_id=project_id)[0]["type"], "analysis")
+            messages = [str(call.args[0]) for call in complete_log.call_args_list if call.args]
+            self.assertTrue(any("status=started" in message for message in messages))
+            self.assertTrue(any("status=completed" in message for message in messages))
+
+    def test_existing_uploaded_parts_can_be_verified_and_finalized(self):
+        payload = {
+            "client_upload_id": "safari-upload-123", "filename": "iphone.mp4", "file_size": 16,
+            "force_new": True, "create_new_project": True, "reuse_existing": False,
+            "content_type": "video/mp4", "video_type": "raw_footage", "target_format": "long_form",
+            "target_length_seconds": 0, "purpose": "현장기록형", "topic": "iphone", "strategy_id": None,
+        }
+        patches = (
+            patch.object(main, "EditProjectStore", lambda: self.store),
+            patch.object(main, "EDIT_JOB_QUEUE", self.queue),
+            patch.object(main, "object_storage_configured", return_value=True),
+            patch.object(main, "object_storage_from_env", return_value=self.backend),
+        )
+        with patches[0], patches[1], patches[2], patches[3]:
+            started = self.client.post("/api/edit-uploads/multipart/start", json=payload)
+            self.assertEqual(started.status_code, 200)
+            project_id = int(started.json()["project_id"])
+            project = self.store.get(project_id)["report"]
+            upload = project["upload"]
+            self.s3.parts[(upload["object_key"], upload["multipart_upload_id"])] = [
+                {"PartNumber": 1, "ETag": '"one"', "Size": 8},
+                {"PartNumber": 2, "ETag": '"two"', "Size": 8},
+            ]
+
+            status = self.client.get(f"/api/edit-uploads/{project_id}/status")
+            self.assertEqual(status.status_code, 200)
+            self.assertEqual(status.json()["file_size"], 16)
+            self.assertEqual(len(status.json()["uploaded_parts"]), 2)
+
+            completed = self.client.post(
+                f"/api/edit-uploads/{project_id}/complete",
+                json={"parts": status.json()["uploaded_parts"]},
+            )
+            self.assertEqual(completed.status_code, 200)
+            self.assertEqual(completed.json()["project"]["status"], "uploaded")
+            self.assertEqual(completed.json()["job"]["type"], "analysis")
+            self.assertEqual(self.store.get(project_id)["report"]["jobs"], [completed.json()["job"]["job_id"]])
+
+        frontend = (Path(__file__).parents[1] / "static" / "app.js").read_text()
+        self.assertIn("ED_PART_RESPONSE_WAIT_MS", frontend)
+        self.assertIn("업로드 완료 처리 재시도", frontend)
+        self.assertIn("업로드 완료 확인 중", frontend)
+        self.assertIn("업로드 최종 처리 중", frontend)
+        self.assertIn("분석 job 생성 중", frontend)
 
     def test_same_filename_in_two_upload_sessions_creates_fresh_projects_and_jobs(self):
         base = {
