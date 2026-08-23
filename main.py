@@ -1753,6 +1753,10 @@ class EditMultipartStartRequest(BaseModel):
     client_upload_id: str = Field(min_length=8, max_length=160)
     force_new: bool = True
     create_new_project: bool = True
+    reuse_existing: bool = False
+    original_filename: str | None = Field(default=None, max_length=240)
+    source_hash: str | None = Field(default=None, max_length=160)
+    file_hash: str | None = Field(default=None, max_length=160)
     filename: str = Field(min_length=1, max_length=240)
     file_size: int = Field(gt=0, le=100 * 1024 * 1024 * 1024)
     content_type: str = Field(default="video/mp4", max_length=120)
@@ -2096,10 +2100,9 @@ async def edit_multipart_start(req: EditMultipartStartRequest):
     if suffix not in {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}:
         return JSONResponse({"error": "지원하지 않는 영상 형식입니다."}, status_code=400)
     store = EditProjectStore()
-    # client_upload_id remains the idempotency key for retries of one browser
-    # request. A deliberate new production run sets force_new and must never be
-    # resolved by filename, size, or an earlier completed project.
-    create_new = bool(req.force_new or req.create_new_project)
+    # Filename/hash metadata is audit-only. Existing-project lookup is allowed
+    # solely for an explicit resume request; new-production is the default.
+    create_new = bool(req.force_new or req.create_new_project or not req.reuse_existing)
     existing = None if create_new else store.find_by_client_upload_id(req.client_upload_id)
     backend = object_storage_from_env()
     if existing:
@@ -2157,6 +2160,9 @@ async def edit_multipart_start(req: EditMultipartStartRequest):
     project["upload"] = {
         "upload_id": upload_session_id, "client_upload_id": req.client_upload_id,
         "force_new": create_new, "create_new_project": create_new,
+        "reuse_existing": False,
+        "original_filename": req.original_filename or req.filename,
+        "source_hash": req.source_hash, "file_hash": req.file_hash,
         "object_key": object_key,
         "part_size": part_size, "file_size": req.file_size, "started_at": utc_now(),
         "multipart_upload_id": None,

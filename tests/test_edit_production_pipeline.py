@@ -457,7 +457,7 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
     def test_multipart_contract_is_idempotent_and_analysis_is_queued(self):
         payload = {
             "client_upload_id": "stable-upload-123", "filename": "long.mp4", "file_size": 16,
-            "force_new": False, "create_new_project": False,
+            "force_new": False, "create_new_project": False, "reuse_existing": True,
             "content_type": "video/mp4", "video_type": "raw_footage", "target_format": "long_form",
             "target_length_seconds": 0, "purpose": "현장기록형", "topic": "long", "strategy_id": None,
         }
@@ -486,6 +486,8 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
     def test_same_filename_in_two_upload_sessions_creates_fresh_projects_and_jobs(self):
         base = {
             "filename": "same-name.mp4", "file_size": 16,
+            "original_filename": "same-name.mp4",
+            "source_hash": "same-source-hash", "file_hash": "same-file-hash",
             "content_type": "video/mp4", "video_type": "rough_cut",
             "target_format": "long_form", "target_length_seconds": 0,
             "purpose": "브랜드신뢰형", "topic": "새 러프컷", "strategy_id": None,
@@ -525,10 +527,15 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             self.assertEqual(len(set(job_ids)), 2)
             fresh = self.store.get(project_ids[1])["report"]
             self.assertEqual(fresh["source"]["filename"], "same-name.mp4")
+            self.assertEqual(fresh["settings"]["rough_cut_mode"], "conservative_rough_cut")
+            self.assertFalse(fresh["upload"]["reuse_existing"])
             self.assertEqual(fresh["transcript"], {})
             self.assertEqual(fresh["plan_versions"], [])
             self.assertEqual(fresh["outputs"], {})
             self.assertNotIn("rough_cut_script_editor", fresh)
+            self.assertEqual(self.queue.get(job_ids[1])["status"], "queued")
+            frontend = (Path(__file__).parents[1] / "static" / "app.js").read_text()
+            self.assertNotIn("같은 원본의 기존 프로젝트를 열었습니다.", frontend)
 
     def test_multisource_project_queues_each_source_independently(self):
         patches = (
