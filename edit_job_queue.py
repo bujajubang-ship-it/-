@@ -134,16 +134,30 @@ class EditJobQueue:
             ).fetchall()
             for row in rows:
                 job = self._load(row)
-                if job.get("status") != "running":
+                if job.get("status") not in {"queued", "running"}:
+                    continue
+                attempt = int(job.get("attempt") or 0)
+                max_attempts = int(job.get("max_attempts") or 1)
+                if job.get("status") == "queued" and attempt < max_attempts:
                     continue
                 heartbeat = _parse(job.get("heartbeat_at") or job.get("started_at"))
-                if heartbeat and heartbeat >= cutoff:
+                # Legacy recovery could requeue an interrupted job forever,
+                # including project 127/job 129. An impossible overrun is
+                # terminal immediately; a normal final attempt is allowed to
+                # finish while its heartbeat remains healthy.
+                if heartbeat and heartbeat >= cutoff and attempt <= max_attempts:
                     continue
-                job["status"] = "queued"
+                exhausted = attempt >= max_attempts
+                job["status"] = "failed" if exhausted else "queued"
                 job["worker_id"] = None
                 job["heartbeat_at"] = None
-                job["next_retry_at"] = utc_now()
-                job["error"] = "WorkerInterrupted: stale heartbeat recovered"
+                job["next_retry_at"] = None if exhausted else utc_now()
+                job["finished_at"] = utc_now() if exhausted else None
+                job["retry_needed"] = exhausted
+                job["error"] = (
+                    "WorkerInterrupted: retry limit reached; owner retry required"
+                    if exhausted else "WorkerInterrupted: stale heartbeat recovered"
+                )
                 self._save(connection, job)
                 recovered.append(int(job["job_id"]))
             connection.commit()
@@ -202,7 +216,10 @@ class EditJobQueue:
         job = self.get(job_id)
         if not job:
             return
-        job.update({"status": "completed", "finished_at": utc_now(), "heartbeat_at": utc_now(), "error": None})
+        job.update({
+            "status": "completed", "finished_at": utc_now(), "heartbeat_at": utc_now(),
+            "error": None, "retry_needed": False,
+        })
         job["timings"] = {**(job.get("timings") or {}), **(timings or {})}
         with closing(self._connect()) as connection:
             self._save(connection, job)
@@ -216,6 +233,7 @@ class EditJobQueue:
         can_retry = retryable and attempt < int(job.get("max_attempts") or 1)
         job["status"] = "queued" if can_retry else "failed"
         job["error"] = f"{type(exc).__name__}: {str(exc)[:400]}"
+        job["retry_needed"] = bool(getattr(exc, "retry_needed", False)) and not can_retry
         job["worker_id"] = None
         job["finished_at"] = None if can_retry else utc_now()
         job["next_retry_at"] = (
@@ -233,7 +251,11 @@ class EditJobQueue:
             raise KeyError("작업을 찾지 못했습니다.")
         if job.get("status") not in {"failed", "cancelled"}:
             raise RuntimeError("실패하거나 취소된 작업만 다시 시도할 수 있습니다.")
-        job.update({"status": "queued", "next_retry_at": utc_now(), "finished_at": None, "worker_id": None})
+        job.update({
+            "status": "queued", "attempt": 0, "next_retry_at": utc_now(),
+            "finished_at": None, "worker_id": None, "heartbeat_at": None,
+            "error": None, "retry_needed": False,
+        })
         with closing(self._connect()) as connection:
             self._save(connection, job)
             connection.commit()

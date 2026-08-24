@@ -1157,7 +1157,10 @@ function edRenderProject(project, scrollToWorkspace = true) {
       <small>${escHtml(item.reason || '')} · 신뢰도 ${Math.round(Number(item.confidence || 0) * 100)}%</small>
     </div>`).join('')}` : '';
   const timeline = (plan.render_timeline || []).map((item, i) => `${i + 1}. ${escHtml(item.filename || '')} ${edTime(item.source_start)}~${edTime(item.source_end)} (${escHtml(item.role || item.action || 'keep')})`).join('<br>');
-  document.getElementById('ed-plan-notes').innerHTML = `<b>실제 승인 시 출력 순서</b><br>${timeline || '출력 구간 없음'}${(plan.editor_notes || []).length ? `<br><br><b>편집자 지시</b><br>${plan.editor_notes.map(escHtml).join('<br>')}` : ''}`;
+  const largeSource = Number(project.source?.size_bytes || 0) >= 1024 * 1024 * 1024;
+  const proxyNotice = largeSource
+    ? '<br><br><b>원본 용량이 커서 720p 작업용 프록시로 변환 후 분석합니다.</b>' : '';
+  document.getElementById('ed-plan-notes').innerHTML = `<b>실제 승인 시 출력 순서</b><br>${timeline || '출력 구간 없음'}${(plan.editor_notes || []).length ? `<br><br><b>편집자 지시</b><br>${plan.editor_notes.map(escHtml).join('<br>')}` : ''}${proxyNotice}`;
 
   document.getElementById('ed-conversation').innerHTML = (project.conversation || []).map(item =>
     `<div class="ed-conversation-item ${item.role === 'user' ? 'user' : ''}">${escHtml(item.content || '')}</div>`
@@ -1198,7 +1201,10 @@ function edRenderProject(project, scrollToWorkspace = true) {
     renderProgress.classList.add('hidden');
   }
   if (project.failed_job) {
-    document.getElementById('ed-plan-notes').innerHTML += `<br><button class="ed-retry-btn" onclick="edRetryJob(${Number(project.failed_job.job_id)})">실패 단계부터 다시 시도</button>`;
+    const proxyRetry = largeSource && project.failed_job.type === 'preview_rendering';
+    const retryLabel = proxyRetry ? '720p proxy 생성 후 다시 시작' : '실패 단계부터 다시 시도';
+    const retryError = project.preview_error || project.failed_job.error || project.error || '';
+    document.getElementById('ed-plan-notes').innerHTML += `<br>${retryError ? `<small>${escHtml(retryError)}</small><br>` : ''}<button class="ed-retry-btn" onclick="edRetryJob(${Number(project.failed_job.job_id)}, ${proxyRetry})">${retryLabel}</button>`;
   }
 
   const outputs = project.outputs || {};
@@ -1413,10 +1419,12 @@ async function edPurgeProjectMedia() {
   } catch (error) { edSetProgress('error', error.message, 100); }
 }
 
-async function edRetryJob(jobId) {
+async function edRetryJob(jobId, proxyRetry = false) {
   try {
     await edFetchJson(`/api/edit-jobs/${jobId}/retry`, {method: 'POST'}, '작업을 다시 시도하지 못했습니다.');
-    edSetProgress('queued', '실패 단계부터 안전 작업 큐에 다시 등록했습니다.', 10);
+    edSetProgress('queued', proxyRetry
+      ? '원본 용량이 커서 720p 작업용 프록시로 변환 후 분석합니다.'
+      : '실패 단계부터 안전 작업 큐에 다시 등록했습니다.', 10);
     if (edCurrentProject) await edOpenProject(edCurrentProject.id);
     await edLoadStorage();
   } catch (error) { edSetProgress('error', error.message, 100); }

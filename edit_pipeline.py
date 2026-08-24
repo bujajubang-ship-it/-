@@ -32,6 +32,10 @@ class PermanentEditJobError(RuntimeError):
     retryable = False
 
 
+class RetryNeededEditJobError(PermanentEditJobError):
+    retry_needed = True
+
+
 class EditPipeline:
     def __init__(self, store: EditProjectStore | None = None) -> None:
         self.store = store or EditProjectStore()
@@ -53,6 +57,24 @@ class EditPipeline:
             return str(source["object_key"]), backend
         return str(self.store.resolve_media_path(project, "source")), None
 
+    @staticmethod
+    def _large_source_threshold() -> int:
+        return max(1024, int(os.getenv("EDIT_LARGE_SOURCE_MB", "1024"))) * 1024 * 1024
+
+    def _is_large_object_source(self, source: dict[str, Any]) -> bool:
+        return bool(
+            (source.get("storage_backend") == "object" or source.get("object_key") or source.get("storage_key"))
+            and int(source.get("size_bytes") or 0) >= self._large_source_threshold()
+        )
+
+    @staticmethod
+    def _is_capacity_error(exc: Exception) -> bool:
+        message = f"{type(exc).__name__}: {exc}".lower()
+        return any(token in message for token in (
+            "no space left", "enospc", "temporary storage", "localworkingspaceinsufficient",
+            "disk quota", "size of temporary storage volume", "proxy size limit exceeded",
+        ))
+
     async def _working_source(
         self, project: dict[str, Any], backend: Any, *, output_ratio: float,
         object_meta: dict[str, Any] | None = None,
@@ -61,11 +83,19 @@ class EditPipeline:
 
         source = object_meta or project.get("source") or {}
         size = max(0, int(source.get("size_bytes") or 0))
+        original = project.get("source") or {}
+        if (
+            self._is_large_object_source(original)
+            and str(source.get("object_key") or "") == str(original.get("object_key") or "")
+        ):
+            raise RetryNeededEditJobError(
+                "LargeSourceProxyRequired: 1GB 이상 원본은 /tmp에 다운로드할 수 없습니다."
+            )
         reserve = 256 * 1024 * 1024
         required = int(size * max(1.0, output_ratio)) + reserve
         free = shutil.disk_usage(tempfile.gettempdir()).free
         if free < required:
-            raise RuntimeError(
+            raise RetryNeededEditJobError(
                 f"LocalWorkingSpaceInsufficient: required={required} free={free}"
             )
         temporary = tempfile.TemporaryDirectory(
@@ -81,6 +111,94 @@ class EditPipeline:
             if not destination.is_file() or (size and destination.stat().st_size != size):
                 raise RuntimeError("Object Storage working copy size mismatch")
             return temporary, destination, round(time.perf_counter() - started, 3)
+        except Exception as exc:
+            await asyncio.to_thread(temporary.cleanup)
+            if self._is_capacity_error(exc) and not isinstance(exc, RetryNeededEditJobError):
+                raise RetryNeededEditJobError(str(exc)) from exc
+            raise
+
+    async def _ensure_large_source_proxy(
+        self, project_id: int, project: dict[str, Any], backend: Any,
+        temporary: tempfile.TemporaryDirectory[str], ingest: MediaIngestService,
+    ) -> Path:
+        """Create the only local copy for a large source by streaming its signed URL."""
+        source = project.get("source") or {}
+        proxy = project.get("proxy") or {}
+        if proxy.get("object_key") and proxy.get("status", "ready") == "ready":
+            raise RuntimeError("ready proxy must be downloaded through _working_source")
+        message = "원본 용량이 커서 720p 작업용 프록시로 변환 후 분석합니다."
+        project["processing_message"] = message
+        project["retry_needed"] = False
+        project["proxy"] = {
+            **proxy, "profile": "working_720p", "status": "creating",
+            "source_size_bytes": int(source.get("size_bytes") or 0),
+            "started_at": utc_now(), "message": message,
+        }
+        self.store.save(project_id, project)
+        proxy_path = Path(temporary.name) / "proxy_720p.mp4"
+        started = time.perf_counter()
+        try:
+            signed_url = await asyncio.to_thread(
+                backend.presigned_download, str(source["object_key"]), expires_seconds=43200,
+            )
+            media = source.get("media") or {}
+            if not media:
+                media = await asyncio.to_thread(ingest.probe, str(signed_url))
+                source["media"] = media
+                self.store.save(project_id, project)
+            await asyncio.to_thread(
+                ingest.create_working_proxy_720p, str(signed_url), proxy_path,
+                float(media.get("duration") or 0),
+            )
+            proxy_key = await asyncio.to_thread(
+                backend.upload, proxy_path, project_uuid=str(project["project_uuid"]),
+                filename="proxy_720p.mp4", content_type="video/mp4",
+            )
+            metadata = await asyncio.to_thread(backend.head, proxy_key)
+        except Exception as exc:
+            retry_needed = self._is_capacity_error(exc)
+            project["retry_needed"] = retry_needed
+            project["proxy"] = {
+                **(project.get("proxy") or {}), "status": "failed",
+                "error": f"{type(exc).__name__}: {str(exc)[:240]}", "failed_at": utc_now(),
+            }
+            self.store.save(project_id, project)
+            if retry_needed:
+                raise RetryNeededEditJobError(str(exc)) from exc
+            raise
+        project["proxy"] = {
+            "storage_backend": "object", "object_key": proxy_key,
+            "filename": "proxy_720p.mp4", "size_bytes": int(metadata["size_bytes"]),
+            "profile": "working_720p", "status": "ready", "created_at": utc_now(),
+            "source_size_bytes": int(source.get("size_bytes") or 0),
+        }
+        project["retry_needed"] = False
+        project.setdefault("timings", {})["working_proxy_create_seconds"] = round(time.perf_counter() - started, 3)
+        self.store.save(project_id, project)
+        return proxy_path
+
+    async def _processing_source(
+        self, project_id: int, project: dict[str, Any], backend: Any, *, output_ratio: float,
+    ) -> tuple[tempfile.TemporaryDirectory[str] | None, str, float, bool]:
+        """Return a local working source, streaming large originals only into a proxy."""
+        original = project.get("source") or {}
+        if not self._is_large_object_source(original):
+            return await self._analysis_source_access(project, backend)
+        proxy = project.get("proxy") or {}
+        if proxy.get("object_key") and proxy.get("status", "ready") == "ready":
+            temporary, local, seconds = await self._working_source(
+                project, backend, output_ratio=output_ratio, object_meta=proxy,
+            )
+            return temporary, str(local), seconds, False
+        temporary = tempfile.TemporaryDirectory(
+            prefix=f"edit-proxy-{str(project.get('project_uuid') or '')[:8]}-"
+        )
+        started = time.perf_counter()
+        try:
+            local = await self._ensure_large_source_proxy(
+                project_id, project, backend, temporary, MediaIngestService(self.store),
+            )
+            return temporary, str(local), round(time.perf_counter() - started, 3), True
         except Exception:
             await asyncio.to_thread(temporary.cleanup)
             raise
@@ -224,9 +342,15 @@ class EditPipeline:
 
         try:
             project = transition_project(project, "transcribing", lifecycle="ANALYZING", reason="durable analysis started", job_id=int(job["job_id"]))
+            large_source = self._is_large_object_source(project.get("source") or {})
             save_progress(
-                stage="source_download", label="원본 작업 사본 준비", percent=2,
-                pending_operation="r2_download",
+                stage="proxy_generation" if large_source else "source_download",
+                label=(
+                    "원본 용량이 커서 720p 작업용 프록시로 변환 후 분석합니다."
+                    if large_source else "원본 작업 사본 준비"
+                ),
+                percent=2,
+                pending_operation="proxy_720p" if large_source else "r2_download",
                 checkpoint_name="UPLOAD_COMPLETE",
             )
             self.store.save(project_id, project)
@@ -243,8 +367,8 @@ class EditPipeline:
                 try:
                     if backend is not None:
                         proxy_meta = project.get("proxy") or {}
-                        temporary, source, access_seconds, streamed = await self._analysis_source_access(
-                            project, backend,
+                        temporary, source, access_seconds, streamed = await self._processing_source(
+                            project_id, project, backend, output_ratio=1.25,
                         )
                         project.setdefault("timings", {})[
                             "analysis_source_stream_setup_seconds" if streamed else (
@@ -340,10 +464,8 @@ class EditPipeline:
                 temporary = None
                 try:
                     if backend is not None:
-                        proxy_meta = project.get("proxy") or {}
-                        temporary, local_source, _ = await self._working_source(
-                            project, backend, output_ratio=1.1,
-                            object_meta=proxy_meta if proxy_meta.get("object_key") else None,
+                        temporary, local_source, _, _ = await self._processing_source(
+                            project_id, project, backend, output_ratio=1.1,
                         )
                         source = str(local_source)
                     visual_analysis = await self._run_visual_analysis(
@@ -418,6 +540,7 @@ class EditPipeline:
             project.setdefault("timings", {})["analysis_total_seconds"] = round(time.perf_counter() - started, 3)
             project = transition_project(project, "proposed", lifecycle="AWAITING_REVIEW", reason="diagnosis ready", job_id=int(job["job_id"]))
             project["error"] = None
+            project["retry_needed"] = False
             save_progress(
                 stage="completed", label="분석 완료", percent=100,
                 checkpoint_name="DIAGNOSIS_COMPLETE",
@@ -428,6 +551,7 @@ class EditPipeline:
             _, latest = self._row(project_id)
             latest = transition_project(latest, "analysis_failed", lifecycle="FAILED_ANALYSIS", reason=type(exc).__name__, job_id=int(job["job_id"]))
             latest["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            latest["retry_needed"] = bool(getattr(exc, "retry_needed", False))
             progress = dict(latest.get("analysis_progress") or {})
             progress.update({
                 "last_error": latest["error"],
@@ -585,9 +709,8 @@ class EditPipeline:
         try:
             source, backend = self._source(project)
             if backend is not None:
-                temporary, local_source, download_seconds = await self._working_source(
-                    project, backend, output_ratio=1.5,
-                    object_meta=(project.get("proxy") or None),
+                temporary, local_source, download_seconds, _ = await self._processing_source(
+                    project_id, project, backend, output_ratio=1.5,
                 )
                 source = str(local_source)
                 project.setdefault("timings", {})["preview_source_download_seconds"] = download_seconds
@@ -642,6 +765,7 @@ class EditPipeline:
                 project["rough_cut_script_editor"] = script_editor
             project["preview_state"] = "succeeded"
             project["preview_error"] = None
+            project["retry_needed"] = False
             project.setdefault("timings", {})["preview_render_seconds"] = round(time.perf_counter() - started, 3)
             self.store.save(project_id, project)
             return {"preview_render_seconds": project["timings"]["preview_render_seconds"]}
@@ -649,6 +773,7 @@ class EditPipeline:
             _, latest = self._row(project_id)
             latest["preview_state"] = "failed"
             latest["preview_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            latest["retry_needed"] = bool(getattr(exc, "retry_needed", False))
             self.store.save(project_id, latest)
             raise
         finally:
@@ -669,7 +794,8 @@ class EditPipeline:
         return {"sync_completed": 1}
 
     async def _multisource_local_copy(
-        self, project: dict[str, Any], source: dict[str, Any], temporary: tempfile.TemporaryDirectory[str],
+        self, project_id: int, project: dict[str, Any], source: dict[str, Any],
+        temporary: tempfile.TemporaryDirectory[str],
     ) -> Path:
         key = str(source.get("storage_key") or "")
         suffix = Path(str(source.get("filename") or "source.mp4")).suffix.lower() or ".mp4"
@@ -678,7 +804,58 @@ class EditPipeline:
             backend = object_storage_from_env()
             if backend is None:
                 raise RuntimeError("Object Storage 연결이 설정되지 않았습니다.")
-            await asyncio.to_thread(backend.download, key, destination)
+            if self._is_large_object_source(source):
+                proxy = source.get("proxy") or {}
+                proxy_key = str(proxy.get("object_key") or "")
+                if proxy_key and proxy.get("status", "ready") == "ready":
+                    destination = Path(temporary.name) / f"{source['source_id']}-proxy_720p.mp4"
+                    await asyncio.to_thread(backend.download, proxy_key, destination)
+                else:
+                    message = "원본 용량이 커서 720p 작업용 프록시로 변환 후 분석합니다."
+                    source["proxy"] = {
+                        **proxy, "profile": "working_720p", "status": "creating",
+                        "message": message, "started_at": utc_now(),
+                    }
+                    project["processing_message"] = message
+                    self.store.save(project_id, project)
+                    destination = Path(temporary.name) / f"{source['source_id']}-proxy_720p.mp4"
+                    try:
+                        signed_url = await asyncio.to_thread(
+                            backend.presigned_download, key, expires_seconds=43200,
+                        )
+                        ingest = MediaIngestService(self.store)
+                        media = source.get("media") or {}
+                        if not media:
+                            media = await asyncio.to_thread(ingest.probe, str(signed_url))
+                            source["media"] = media
+                        await asyncio.to_thread(
+                            ingest.create_working_proxy_720p, str(signed_url), destination,
+                            float(media.get("duration") or source.get("duration") or 0),
+                        )
+                        proxy_key = await asyncio.to_thread(
+                            backend.upload, destination, project_uuid=str(project["project_uuid"]),
+                            filename=f"{source['source_id']}-proxy_720p.mp4", content_type="video/mp4",
+                        )
+                        metadata = await asyncio.to_thread(backend.head, proxy_key)
+                    except Exception as exc:
+                        source["proxy"] = {
+                            **(source.get("proxy") or {}), "status": "failed",
+                            "error": f"{type(exc).__name__}: {str(exc)[:240]}", "failed_at": utc_now(),
+                        }
+                        project["retry_needed"] = self._is_capacity_error(exc)
+                        self.store.save(project_id, project)
+                        if project["retry_needed"]:
+                            raise RetryNeededEditJobError(str(exc)) from exc
+                        raise
+                    source["proxy"] = {
+                        "storage_backend": "object", "object_key": proxy_key,
+                        "filename": destination.name, "size_bytes": int(metadata["size_bytes"]),
+                        "profile": "working_720p", "status": "ready", "created_at": utc_now(),
+                    }
+                    project["retry_needed"] = False
+                    self.store.save(project_id, project)
+            else:
+                await asyncio.to_thread(backend.download, key, destination)
         else:
             storage_name = str(source.get("storage_name") or key)
             project_dir = self.store.project_dir(str(project.get("project_uuid") or ""))
@@ -707,7 +884,7 @@ class EditPipeline:
         self.store.save(project_id, project)
         temporary = tempfile.TemporaryDirectory(prefix=f"rough-source-{source_id_value[:8]}-")
         try:
-            local = await self._multisource_local_copy(project, source, temporary)
+            local = await self._multisource_local_copy(project_id, project, source, temporary)
             ingest = MediaIngestService(self.store)
             if not source.get("media"):
                 media = await asyncio.to_thread(ingest.probe, local)
@@ -943,7 +1120,9 @@ class EditPipeline:
             for source in project.get("sources") or []:
                 if str(source.get("source_id")) not in needed:
                     continue
-                paths[str(source["source_id"])] = await self._multisource_local_copy(project, source, temporary)
+                paths[str(source["source_id"])] = await self._multisource_local_copy(
+                    project_id, project, source, temporary,
+                )
             output_dir = Path(temporary.name) / "output"
             output = output_dir / f"rough-cut-v{approved}.mp4"
             renderer = EditRenderService()
@@ -1005,6 +1184,7 @@ class EditPipeline:
                 reason="approved multi-source rough cut completed", job_id=int(job["job_id"]),
             )
             project["error"] = None
+            project["retry_needed"] = False
             self.store.save(project_id, project)
             return {"rough_cut_render_seconds": project["timings"]["rough_cut_render_seconds"]}
         except Exception as exc:
@@ -1014,6 +1194,7 @@ class EditPipeline:
                 reason=type(exc).__name__, job_id=int(job["job_id"]),
             )
             latest["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            latest["retry_needed"] = bool(getattr(exc, "retry_needed", False))
             self.store.save(project_id, latest)
             raise
         finally:

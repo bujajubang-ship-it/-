@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 import main
 from edit_job_queue import EditJobQueue, EditJobWorker
-from edit_pipeline import EditPipeline
+from edit_pipeline import EditPipeline, RetryNeededEditJobError
 from edit_project_store import EditProjectStore, migrate_project, transition_project
 from edit_quality_service import EditQualityError, EditQualityService
 from edit_render_contract import build_final_render_payload, render_profile, requires_external_final
@@ -130,6 +130,30 @@ class DurableQueueTests(unittest.TestCase):
         self.assertEqual(snapshot["counts"]["queued"], 4)
         self.assertEqual([row["queue_position"] for row in snapshot["active"] if row["status"] == "queued"], [1, 2, 3, 4])
         self.queue.finish(running["job_id"])
+
+    def test_exhausted_recovery_stops_loop_until_owner_retry(self):
+        job = self.queue.enqueue(
+            127, "preview_rendering", idempotency_key="preview:127:v1:run1", max_attempts=2,
+        )
+        with self.connect() as connection:
+            report = json.loads(connection.execute(
+                "SELECT report FROM history WHERE id=?", (job["job_id"],)
+            ).fetchone()[0])
+            report.update({
+                "status": "running", "attempt": 27,
+                "heartbeat_at": datetime.now(timezone.utc).isoformat(),
+            })
+            connection.execute(
+                "UPDATE history SET report=? WHERE id=?", (json.dumps(report), job["job_id"])
+            )
+            connection.commit()
+        self.assertEqual(self.queue.recover_stale(stale_seconds=60), [job["job_id"]])
+        stopped = self.queue.get(job["job_id"])
+        self.assertEqual(stopped["status"], "failed")
+        self.assertTrue(stopped["retry_needed"])
+        retried = self.queue.retry(job["job_id"])
+        self.assertEqual(retried["attempt"], 0)
+        self.assertFalse(retried["retry_needed"])
 
     def test_external_final_payload_is_self_contained_and_not_claimed_by_embedded_worker(self):
         self.assertEqual(
@@ -341,6 +365,24 @@ class LifecycleAndQualityTests(unittest.TestCase):
             self.assertLessEqual(metadata["height"], 1080)
             self.assertFalse(list(Path(td).glob(".*.part.mp4")))
 
+    @unittest.skipUnless(__import__("shutil").which("ffmpeg"), "ffmpeg required")
+    def test_large_working_proxy_is_720p_bounded_and_atomic(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "source.mp4"
+            proxy = Path(td) / "proxy_720p.mp4"
+            subprocess.run([
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=20",
+                "-f", "lavfi", "-i", "sine=frequency=440", "-t", "2",
+                "-c:v", "libx264", "-c:a", "aac", str(source), "-y",
+            ], check=True)
+            MediaIngestService.create_working_proxy_720p(source, proxy, 2)
+            metadata = MediaIngestService.probe(proxy)
+            self.assertLessEqual(metadata["width"], 1280)
+            self.assertLessEqual(metadata["height"], 720)
+            self.assertLess(proxy.stat().st_size, 800 * 1024 * 1024)
+            self.assertFalse(list(Path(td).glob(".*.part.mp4")))
+
 
 class LargeAnalysisSourceTests(unittest.TestCase):
     def test_large_analysis_source_streams_from_r2_without_tmp_copy(self):
@@ -371,6 +413,78 @@ class LargeAnalysisSourceTests(unittest.TestCase):
         self.assertTrue(streamed)
         self.assertTrue(source.startswith("https://objects.invalid/"))
         self.assertEqual(backend.signed, [("edit/f/source.mp4", 43200)])
+
+    def test_large_processing_source_creates_only_proxy_from_signed_url(self):
+        class Backend:
+            def __init__(self):
+                self.downloads = []
+                self.uploaded = []
+
+            def presigned_download(self, key, *, expires_seconds):
+                self.signed = (key, expires_seconds)
+                return "https://objects.invalid/source.mp4?signed=redacted"
+
+            def download(self, key, destination):
+                self.downloads.append(key)
+                raise AssertionError("large original must not be downloaded")
+
+            def upload(self, path, *, project_uuid, filename, content_type):
+                self.uploaded.append((Path(path).name, Path(path).stat().st_size))
+                return f"edit/{project_uuid}/{filename}"
+
+            def head(self, key):
+                return {"size_bytes": self.uploaded[-1][1]}
+
+        def make_proxy(input_url, output, duration):
+            self.assertTrue(str(input_url).startswith("https://objects.invalid/"))
+            self.assertEqual(duration, 1726.0)
+            Path(output).write_bytes(b"p" * (2 * 1024 * 1024))
+            return Path(output)
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            store = EditProjectStore(database(root / "history.db"), storage_root=root / "managed")
+            project_uuid = "f" * 32
+            project_id = store.create(keyword="large proxy", project={
+                "project_uuid": project_uuid, "status": "uploaded",
+                "source": {
+                    "storage_backend": "object", "object_key": "edit/f/source.mp4",
+                    "filename": "source.mp4", "size_bytes": 2_205_946_289,
+                    "media": {"duration": 1726.0, "width": 1920, "height": 1080, "has_audio": True},
+                },
+            })
+            project = store.get(project_id)["report"]
+            pipeline = EditPipeline(store)
+            backend = Backend()
+            with patch.object(MediaIngestService, "create_working_proxy_720p", side_effect=make_proxy):
+                temporary, local, _seconds, streamed = asyncio.run(
+                    pipeline._processing_source(project_id, project, backend, output_ratio=1.5)
+                )
+            try:
+                files = [path for path in Path(temporary.name).iterdir() if path.is_file()]
+                self.assertEqual([path.name for path in files], ["proxy_720p.mp4"])
+                self.assertEqual(Path(local).name, "proxy_720p.mp4")
+                self.assertLess(sum(path.stat().st_size for path in files), 2 * 1024 * 1024 * 1024)
+                self.assertTrue(streamed)
+                self.assertEqual(backend.downloads, [])
+                self.assertEqual(backend.signed, ("edit/f/source.mp4", 43200))
+                saved = store.get(project_id)["report"]
+                self.assertEqual(saved["proxy"]["status"], "ready")
+                self.assertEqual(saved["proxy"]["profile"], "working_720p")
+            finally:
+                temporary.cleanup()
+
+    def test_large_original_working_copy_is_rejected_before_download(self):
+        pipeline = EditPipeline()
+        project = {
+            "project_uuid": "f" * 32,
+            "source": {
+                "storage_backend": "object", "object_key": "edit/f/source.mp4",
+                "filename": "source.mp4", "size_bytes": 2_205_946_289,
+            },
+        }
+        with self.assertRaises(RetryNeededEditJobError):
+            asyncio.run(pipeline._working_source(project, object(), output_ratio=1.1))
 
 
 @unittest.skipUnless(__import__("shutil").which("ffmpeg") and __import__("shutil").which("ffprobe"), "ffmpeg required")

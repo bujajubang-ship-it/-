@@ -220,6 +220,47 @@ class MediaIngestService:
         return output
 
     @staticmethod
+    def create_working_proxy_720p(path: str | Path, output: Path, duration: float) -> Path:
+        """Stream an input into a bounded 720p proxy without materializing it first."""
+        if not shutil.which("ffmpeg"):
+            raise RuntimeError("ffmpeg가 설치되어 있지 않습니다.")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        part = output.with_name(f".{output.stem}.part{output.suffix}")
+        part.unlink(missing_ok=True)
+        # Keep a long recording below Render's 2 GB temporary-volume limit.
+        # CRF controls normal quality while maxrate caps unexpectedly complex
+        # footage to a roughly 750 MiB working-file budget.
+        seconds = max(1.0, float(duration or 0))
+        target_kbps = int((750 * 1024 * 1024 * 8) / seconds / 1000)
+        video_kbps = max(350, min(2500, target_kbps - 128))
+        command = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+            "-vf", "scale=w='min(1280,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "31",
+            "-maxrate", f"{video_kbps}k", "-bufsize", f"{video_kbps * 2}k",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k",
+            "-movflags", "+faststart", str(part), "-y",
+        ]
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True,
+                timeout=max(900, min(14400, int(seconds * 4) + 300)),
+            )
+        except subprocess.TimeoutExpired as exc:
+            part.unlink(missing_ok=True)
+            raise RuntimeError("720p 작업용 proxy 생성 시간이 초과됐습니다.") from exc
+        if result.returncode != 0 or not part.is_file() or part.stat().st_size <= 0:
+            detail = (result.stderr or "").strip()[-240:]
+            part.unlink(missing_ok=True)
+            raise RuntimeError(f"720p 작업용 proxy를 만들지 못했습니다. {detail}".strip())
+        if part.stat().st_size > 800 * 1024 * 1024:
+            size = part.stat().st_size
+            part.unlink(missing_ok=True)
+            raise RuntimeError(f"720p proxy size limit exceeded: size={size}")
+        os.replace(part, output)
+        return output
+
+    @staticmethod
     def detect_silences(
         path: str | Path, duration: float, *, start_offset: float = 0.0
     ) -> list[dict[str, float]]:

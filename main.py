@@ -1853,9 +1853,16 @@ async def edit_jobs_retry(job_id: int):
                 pass
         elif job.get("type") == "story_planning":
             project["story_plan_state"] = "queued"
+        elif job.get("type") == "preview_rendering":
+            project["preview_state"] = "queued"
+            project["preview_error"] = None
+            source = project.get("source") or {}
+            if int(source.get("size_bytes") or 0) >= EditPipeline._large_source_threshold():
+                project["processing_message"] = "원본 용량이 커서 720p 작업용 프록시로 변환 후 분석합니다."
         next_status = "queued" if job.get("type") in {"rendering", "rough_cut_rendering"} else project.get("status") or "uploaded"
         project = transition_project(project, next_status, lifecycle="QUEUED", reason="owner retry", job_id=job_id)
         project["error"] = None
+        project["retry_needed"] = False
         EditProjectStore().save(int(job["project_id"]), project)
     return {"ok": True, "job": job}
 
@@ -2981,17 +2988,31 @@ async def edit_projects_preview_render(project_id: int):
 
     async def stream():
         started = time.perf_counter()
-        yield sse({"step": "queued", "percent": 3, "message": "1080p 검토본 작업을 준비합니다."})
+        large_proxy_needed = (
+            int(source.get("size_bytes") or 0) >= EditPipeline._large_source_threshold()
+            and not (project.get("proxy") or {}).get("object_key")
+        )
+        proxy_message = "원본 용량이 커서 720p 작업용 프록시로 변환 후 분석합니다."
+        yield sse({
+            "step": "queued", "percent": 3,
+            "message": proxy_message if large_proxy_needed else "1080p 검토본 작업을 준비합니다.",
+        })
         while True:
             await asyncio.sleep(1)
             current = EDIT_JOB_QUEUE.get(int(job["job_id"])) or {}
             if current.get("status") in {"completed", "failed", "cancelled"}:
                 break
             elapsed = time.perf_counter() - started
+            current_row = EditProjectStore().get(project_id)
+            current_report = (current_row or {}).get("report") or {}
+            proxy_ready = bool((current_report.get("proxy") or {}).get("object_key"))
             yield sse({
                 "step": "queued" if current.get("status") == "queued" else "rendering",
                 "percent": min(92, 8 + int(elapsed / 3)),
-                "message": "1080p 검토본 대기 중입니다." if current.get("status") == "queued" else "1080p fast preview를 렌더링하고 있습니다.",
+                "message": (
+                    proxy_message if large_proxy_needed and not proxy_ready else
+                    ("1080p 검토본 대기 중입니다." if current.get("status") == "queued" else "1080p fast preview를 렌더링하고 있습니다.")
+                ),
             })
         latest = EditProjectStore().get(project_id)
         current = EDIT_JOB_QUEUE.get(int(job["job_id"])) or {}
