@@ -75,6 +75,34 @@ class EditPipeline:
             "disk quota", "size of temporary storage volume", "proxy size limit exceeded",
         ))
 
+    def _record_processing_output(
+        self, project_id: int, project: dict[str, Any], *, stage: str,
+        label: str, update: dict[str, Any], overall_percent: int,
+    ) -> None:
+        now = utc_now()
+        previous = project.get("processing_output") or {}
+        size = max(0, int(update.get("size_bytes") or 0))
+        stage_changed = str(previous.get("stage") or "") != stage
+        previous_size = 0 if stage_changed else max(0, int(previous.get("size_bytes") or 0))
+        project["processing_output"] = {
+            "stage": stage, "stage_label": label,
+            "path": str(update.get("path") or previous.get("path") or ""),
+            "exists": bool(update.get("exists")), "size_bytes": size,
+            "previous_size_bytes": previous_size,
+            "size_growth_bytes": max(0, size - previous_size),
+            "completed": int(update.get("stage_percent") or 0) >= 100,
+            "size_updated_at": now if size > previous_size else (None if stage_changed else previous.get("size_updated_at")),
+            "checked_at": now,
+            "stage_started_at": now if stage_changed else previous.get("stage_started_at") or now,
+        }
+        project["processing_progress"] = {
+            "current_stage": stage, "stage_label": label,
+            "stage_percent": max(0, min(100, int(update.get("stage_percent") or 0))),
+            "overall_percent": max(0, min(100, int(overall_percent))),
+            "updated_at": now,
+        }
+        self.store.save(project_id, project)
+
     async def _working_source(
         self, project: dict[str, Any], backend: Any, *, output_ratio: float,
         object_meta: dict[str, Any] | None = None,
@@ -150,6 +178,11 @@ class EditPipeline:
             await asyncio.to_thread(
                 ingest.create_working_proxy_720p, str(signed_url), proxy_path,
                 float(media.get("duration") or 0),
+                progress_callback=lambda update: self._record_processing_output(
+                    project_id, project, stage="proxy_generation",
+                    label="720p 프록시 생성", update=update,
+                    overall_percent=10 + round(int(update.get("stage_percent") or 0) * 0.25),
+                ),
             )
             proxy_key = await asyncio.to_thread(
                 backend.upload, proxy_path, project_uuid=str(project["project_uuid"]),
@@ -743,7 +776,12 @@ class EditPipeline:
                 timeline=version_row["plan"].get("render_timeline") or [],
                 duration=float(((project.get("source") or {}).get("media") or {}).get("duration") or 0),
                 has_audio=bool(((project.get("source") or {}).get("media") or {}).get("has_audio")),
-                profile=str((job.get("payload") or {}).get("profile") or "preview_1080p"),
+                profile=str((job.get("payload") or {}).get("profile") or "preview_720p"),
+                progress_callback=lambda update: self._record_processing_output(
+                    project_id, project, stage="preview_rendering",
+                    label="검토용 720p 프리뷰 생성", update=update,
+                    overall_percent=80 + round(int(update.get("stage_percent") or 0) * 0.2),
+                ),
             )
             media = ((project.get("source") or {}).get("media") or {})
             qa = await asyncio.to_thread(
@@ -782,12 +820,17 @@ class EditPipeline:
             self.store.save(project_id, project)
             return {"preview_render_seconds": project["timings"]["preview_render_seconds"]}
         except Exception as exc:
+            failure = (
+                RetryNeededEditJobError(str(exc))
+                if self._is_capacity_error(exc) and not isinstance(exc, RetryNeededEditJobError)
+                else exc
+            )
             _, latest = self._row(project_id)
             latest["preview_state"] = "failed"
-            latest["preview_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
-            latest["retry_needed"] = bool(getattr(exc, "retry_needed", False))
+            latest["preview_error"] = f"{type(failure).__name__}: {str(failure)[:300]}"
+            latest["retry_needed"] = bool(getattr(failure, "retry_needed", False))
             self.store.save(project_id, latest)
-            raise
+            raise failure
         finally:
             await self._cleanup_working_copy(temporary)
 
@@ -1142,7 +1185,7 @@ class EditPipeline:
             rendered = await asyncio.to_thread(
                 renderer.render_multisource_timeline,
                 sources=paths, source_rows=project.get("sources") or [], output=output,
-                timeline=timeline, profile="preview_1080p",
+                timeline=timeline, profile="preview_720p",
             )
             media = next((source.get("media") or {} for source in project.get("sources") or [] if str(source.get("source_id")) in needed), {})
             qa = await asyncio.to_thread(

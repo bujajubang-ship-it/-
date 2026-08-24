@@ -6,8 +6,9 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from edit_plan_service import validate_approved_timeline
 from edit_project_store import utc_now
@@ -92,6 +93,7 @@ class EditRenderService:
         duration: float,
         has_audio: bool,
         profile: str | RenderProfile = "final_original",
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         if not self.ffmpeg:
             raise EditRenderError("ffmpeg가 설치되어 있지 않습니다.")
@@ -122,13 +124,32 @@ class EditRenderService:
             output=["-movflags", "+faststart", str(part), "-y"],
         )
         timeout = max(300, min(selected.timeout_seconds, int(output_duration * (2 if selected.name.startswith("preview") else 30)) + 300))
+        started = time.monotonic()
         try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+            process = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
+            while process.poll() is None:
+                elapsed = time.monotonic() - started
+                if elapsed > timeout:
+                    process.kill()
+                    process.communicate()
+                    raise subprocess.TimeoutExpired(command, timeout)
+                size = part.stat().st_size if part.is_file() else 0
+                # Duration-based progress is intentionally conservative; file
+                # growth is reported separately and is the liveness signal.
+                percent = min(95, round((elapsed / max(30.0, output_duration * 1.5)) * 100))
+                if progress_callback:
+                    try:
+                        progress_callback({
+                            "path": output.name, "exists": part.is_file(),
+                            "size_bytes": size, "stage_percent": percent,
+                        })
+                    except Exception:
+                        pass
+                time.sleep(2)
+            stdout, stderr = process.communicate()
+            result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         except subprocess.TimeoutExpired as exc:
             part.unlink(missing_ok=True)
             raise EditRenderError("편집 렌더링 시간이 초과됐습니다.") from exc
@@ -140,6 +161,14 @@ class EditRenderService:
             detail = (result.stderr or "ffmpeg render failed")[-600:]
             raise EditRenderError(f"편집본을 만들지 못했습니다: {detail}")
         os.replace(part, output)
+        if progress_callback:
+            try:
+                progress_callback({
+                    "path": output.name, "exists": True,
+                    "size_bytes": output.stat().st_size, "stage_percent": 100,
+                })
+            except Exception:
+                pass
         return {
             "storage_name": output.name,
             "filename": output.name,

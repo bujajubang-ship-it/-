@@ -35,7 +35,7 @@ class RenderProfile:
 RENDER_PROFILES = {
     "preview_720p": RenderProfile(
         name="preview_720p", max_width=1280, max_height=720,
-        preset="ultrafast", crf=28, audio_bitrate="128k", timeout_seconds=20 * 60,
+        preset="ultrafast", crf=30, audio_bitrate="96k", timeout_seconds=45 * 60,
     ),
     "preview_1080p": RenderProfile(
         name="preview_1080p", max_width=1920, max_height=1080,

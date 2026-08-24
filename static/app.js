@@ -145,6 +145,7 @@ let edActiveUploadId = null;
 let edActiveProjectId = null;
 let edActiveJobId = null;
 let edRetryCompleteProjectId = null;
+let edStatusPollTimer = null;
 const ED_PART_RESPONSE_WAIT_MS = 45000;
 
 function edNewUploadRequestId(prefix = 'ed', file = null) {
@@ -159,6 +160,8 @@ function edResetCurrentResultForNewUpload() {
   edActiveProjectId = null;
   edActiveJobId = null;
   edCurrentProject = null;
+  if (edStatusPollTimer) clearInterval(edStatusPollTimer);
+  edStatusPollTimer = null;
   edHideUploadCompleteRetry();
   const workspace = document.getElementById('ed-workspace');
   const outputCard = document.getElementById('ed-output-card');
@@ -951,6 +954,9 @@ async function edOpenProject(id) {
   try {
     const project = await edFetchJson(`/api/edit-projects/${id}`, undefined, '프로젝트를 불러오지 못했습니다.');
     edRenderProject(project);
+    await edRefreshProgress(false);
+    if (edStatusPollTimer) clearInterval(edStatusPollTimer);
+    edStatusPollTimer = setInterval(() => edRefreshProgress(false), 10000);
   } catch (e) {
     edSetProgress('error', e.message, 100);
   }
@@ -1000,8 +1006,80 @@ function edRenderState(project) {
   finalStatus.textContent = finalLabels[finalState] || finalState;
 }
 
+function edAgeText(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value)) return '-';
+  if (value < 60) return `${Math.max(0, Math.round(value))}초 전`;
+  return `${Math.floor(value / 60)}분 ${Math.round(value % 60)}초 전`;
+}
+
+function edRenderLiveStatus(status) {
+  if (!status) return;
+  const healthLabels = {normal: '정상 진행 중', slow: '느림', stale: '멈춤', completed: '완료', waiting: '대기 중'};
+  document.getElementById('ed-live-health').textContent = healthLabels[status.health_status] || status.health_status || '-';
+  document.getElementById('ed-live-identity').textContent = `project ${status.project_id ?? '-'} · job ${status.active_job_id ?? status.job_id ?? '-'}`;
+  document.getElementById('ed-live-stage').textContent = status.stage_label || status.current_stage || '-';
+  document.getElementById('ed-live-stage-percent').textContent = `${Math.round(Number(status.stage_percent || 0))}%`;
+  document.getElementById('ed-live-overall-percent').textContent = `${Math.round(Number(status.overall_percent || 0))}%`;
+  document.getElementById('ed-live-processing').textContent = edAgeText(status.seconds_since_last_processing);
+  document.getElementById('ed-live-heartbeat').textContent = edAgeText(status.seconds_since_last_heartbeat);
+  const outputText = status.output_file_exists
+    ? `${Number(status.output_file_size_mb || 0).toFixed(1)}MB · ${status.output_file_size_growth === 'increasing' ? '증가 중' : (status.output_file_size_growth === 'completed' ? '완료' : '변화 없음')}`
+    : '없음 / 0MB';
+  document.getElementById('ed-live-output').textContent = outputText;
+  document.getElementById('ed-live-stale').textContent = status.is_stale ? '멈춤' : (status.health_status === 'slow' ? '느림' : '정상');
+  document.getElementById('ed-live-message').textContent = status.status_message || '';
+  document.getElementById('ed-live-progress-fill').style.width = `${Math.max(0, Math.min(100, Number(status.overall_percent || 0)))}%`;
+  document.getElementById('ed-live-detail-text').textContent = [
+    `project_status: ${status.project_status || '-'}`,
+    `job_status: ${status.job_status || '-'}`,
+    `proxy: ${status.proxy_status || '-'} · transcript: ${status.transcript_status || '-'}`,
+    `rough_cut: ${status.rough_cut_status || '-'} · preview: ${status.preview_status || '-'} · render: ${status.render_status || '-'}`,
+    `last_heartbeat_at: ${status.last_heartbeat_at || '-'}`,
+    `output: ${status.output_file_path || '-'} · ${outputText}`,
+    `stale_reason: ${status.stale_reason || '-'}`,
+  ].join('\n');
+  const proxyRestart = document.getElementById('ed-live-proxy-restart');
+  proxyRestart.classList.toggle('hidden', !status.can_retry || status.recommended_action !== 'restart_with_720p_proxy');
+  const forceRestart = document.getElementById('ed-live-force-restart');
+  forceRestart.classList.toggle('hidden', !['running', 'queued', 'stale_rendering', 'failed', 'failed_retry_needed'].includes(status.job_status));
+  const previewRetry = document.getElementById('ed-live-preview-retry');
+  previewRetry.classList.toggle('hidden', !edCurrentProject?.approved_version);
+  const actions = document.getElementById('ed-live-preview-actions');
+  const preview = edCurrentProject?.outputs?.preview;
+  if (preview?.download_url) {
+    actions.classList.remove('hidden');
+    actions.innerHTML = `<button type="button" onclick="edPlayPreview()">프리뷰 보기</button><a href="${escHtml(preview.download_url)}?download=1" download>프리뷰 다운로드</a>`;
+  } else {
+    actions.classList.add('hidden');
+    actions.innerHTML = '';
+  }
+}
+
+async function edRefreshProgress(announce = true) {
+  if (!edCurrentProject?.id) return;
+  try {
+    const status = await edFetchJson(`/api/edit-projects/${edCurrentProject.id}/status`, undefined, '작업 상태를 확인하지 못했습니다.');
+    edRenderLiveStatus(status);
+    if (announce) edSetProgress(status.is_stale ? 'error' : 'done', status.status_message, status.overall_percent);
+  } catch (error) {
+    if (announce) edSetProgress('error', error.message, 100);
+  }
+}
+
 function edToggleScriptPanel() {
-  document.getElementById('ed-script-panel').classList.toggle('hidden');
+  const panel = document.getElementById('ed-script-panel');
+  panel.classList.toggle('hidden');
+  const button = document.getElementById('ed-script-toggle-btn');
+  if (button) button.textContent = panel.classList.contains('hidden')
+    ? `편집 스크립트 ${Number(edCurrentProject?.rough_cut_script_editor?.transcript_segments?.length || 0)}개 구간 · 열어서 삭제/복원`
+    : '편집 스크립트 접기';
+}
+
+function edToggleScriptText(button) {
+  const text = button.previousElementSibling;
+  text.classList.toggle('expanded');
+  button.textContent = text.classList.contains('expanded') ? '접기' : '더보기';
 }
 
 function edShowEditLog() {
@@ -1028,6 +1106,9 @@ function edRenderScriptEditor(project) {
   const segments = state.transcript_segments || [];
   summary.classList.remove('hidden');
   controls.classList.remove('hidden');
+  panel.classList.add('hidden');
+  const toggle = document.getElementById('ed-script-toggle-btn');
+  if (toggle) toggle.textContent = `편집 스크립트 ${segments.length}개 구간 · 열어서 삭제/복원`;
   summary.innerHTML = `<b>러프컷 모드 적용됨</b> · 목표 길이 강제 안 함 · 문장/문맥 보존 우선<br>
     원본 ${edTime(log.original_duration)} · 러프컷 ${edTime(log.rough_cut_duration ?? plan.estimated_output_duration)} · 자동 삭제 ${Number(log.removed_blocks || 0)}개 · 사용자 삭제 ${Number(log.user_deleted_blocks || 0)}개<br>
     문장 중간 컷 차단 ${Number(log.rejected_cuts_due_to_mid_sentence || 0)}개 · 문맥 끊김 차단 ${Number(log.rejected_cuts_due_to_context_break || 0)}개 · 검토 필요 ${Number(log.needs_review_count || 0)}개`;
@@ -1041,8 +1122,9 @@ function edRenderScriptEditor(project) {
   document.getElementById('ed-script-list').innerHTML = segments.map(item => `
     <article class="ed-script-segment ${item.deleted_by_user ? 'deleted' : ''}">
       <div class="ed-script-time">원본 ${edTime(item.original_start_time)}~${edTime(item.original_end_time)}<br>러프컷 ${edTime(item.rough_cut_start_time)}~${edTime(item.rough_cut_end_time)}</div>
-      <div class="ed-script-text">${escHtml(item.text || '[무음/현장 화면]')}
+      <div class="ed-script-text"><span class="ed-script-copy">${escHtml(item.text || '[무음/현장 화면]')}
         <span class="ed-script-meta">${escHtml(item.source_filename || '')} · ${escHtml(item.block_type || 'sentence_block')}${item.needs_review ? ' · ⚠ 검토 필요' : ''}</span>
+        </span><button type="button" class="ed-script-more" onclick="edToggleScriptText(this)">더보기</button>
       </div>
       <button type="button" onclick="edToggleScriptSegment('${escHtml(item.segment_id || '')}', ${item.deleted_by_user ? 'false' : 'true'})">${item.deleted_by_user ? '복원' : '삭제'}</button>
     </article>`).join('') || '<div class="ed-log-row">표시할 타임코드 스크립트가 없습니다.</div>';
@@ -1084,6 +1166,7 @@ async function edSaveScript(regeneratePreview) {
 }
 
 function edRenderProject(project, scrollToWorkspace = true) {
+  const projectChanged = Number(edCurrentProject?.id || 0) !== Number(project?.id || 0);
   edCurrentProject = project;
   const isMulti = project.project_mode === 'multisource_roughcut';
   const sources = project.sources || [];
@@ -1092,6 +1175,7 @@ function edRenderProject(project, scrollToWorkspace = true) {
   const plan = latest.plan || {};
   const workspace = document.getElementById('ed-workspace');
   workspace.classList.remove('hidden');
+  if (projectChanged) workspace.querySelectorAll('details').forEach(details => { details.open = false; });
   document.getElementById('ed-project-title').textContent = project.settings?.topic || project.source?.filename || (isMulti ? `멀티소스 러프컷 #${project.id}` : `프로젝트 #${project.id}`);
   const status = document.getElementById('ed-project-status');
   status.className = `ed-status ${project.status || ''}`;
@@ -1187,12 +1271,12 @@ function edRenderProject(project, scrollToWorkspace = true) {
   const render = document.getElementById('ed-render-btn');
   render.disabled = scriptDirty || !approved || runtimeRendering || ['queued', 'rendering'].includes(project.final_render_state);
   render.textContent = isMulti
-    ? (runtimeRendering ? '러프컷 생성 중...' : '승인 구성으로 1080p 러프컷 생성')
+    ? (runtimeRendering ? '러프컷 생성 중...' : '승인 구성으로 720p 러프컷 생성')
     : (project.final_render_state === 'queued' ? '최종 고화질 렌더 대기 중' : (runtimeRendering ? '편집 실행 중...' : '최종 원본 화질 렌더 요청'));
   const previewRender = document.getElementById('ed-preview-render-btn');
   if (previewRender) {
     previewRender.disabled = isMulti || scriptDirty || !approved || runtimeRendering || project.stale_rendering || project.preview_state === 'rendering' || project.preview_state === 'queued';
-    previewRender.textContent = scriptDirty ? '스크립트 수정안 저장 필요' : (isMulti ? '멀티소스는 승인 후 러프컷 생성' : (project.preview_state === 'succeeded' ? '1080p 검토본 다시 만들기' : '1080p 검토본 만들기'));
+    previewRender.textContent = scriptDirty ? '스크립트 수정안 저장 필요' : (isMulti ? '멀티소스는 승인 후 러프컷 생성' : (project.preview_state === 'succeeded' ? '720p 검토본 다시 만들기' : '720p 검토본 만들기'));
   }
   edRenderState(project);
   const renderProgress = document.getElementById('ed-render-progress');
@@ -1343,7 +1427,7 @@ async function edRender() {
           const state = await edFetchJson(`/api/edit-projects/${edCurrentProject.id}`, undefined, '러프컷 상태를 확인하지 못했습니다.');
           if (state.status === 'completed') {
             edRenderProject(state);
-            document.getElementById('ed-render-message').textContent = '1080p 러프컷을 만들었습니다.';
+            document.getElementById('ed-render-message').textContent = '720p 러프컷을 만들었습니다.';
             document.getElementById('ed-render-fill').style.width = '100%';
             break;
           }
@@ -1447,6 +1531,7 @@ async function edRestartStalePreview() {
   if (!edCurrentProject || edBusy) return;
   edBusy = true;
   let started = false;
+  let jobType = '';
   try {
     edSetProgress('queued', '720p 프록시 생성 중', 5);
     const result = await edFetchJson(
@@ -1455,12 +1540,44 @@ async function edRestartStalePreview() {
     );
     if (result.project) edRenderProject(result.project, false);
     started = Boolean(result.job?.job_id);
+    jobType = String(result.job?.type || '');
   } catch (error) {
     edSetProgress('error', error.message, 100);
   } finally {
     edBusy = false;
   }
-  if (started) await edPreviewRender();
+  if (started) {
+    await edRefreshProgress(false);
+    if (jobType === 'analysis') await edPollAnalysis(edCurrentProject.id, Number(edCurrentProject.current_job?.job_id || 0) || null);
+    else await edPreviewRender();
+  }
+}
+
+async function edForceRestartPreview() {
+  if (!edCurrentProject || edBusy) return;
+  if (!confirm('현재 작업을 중단하고 Object Storage 원본으로 새 job을 시작할까요?')) return;
+  edBusy = true;
+  let started = false;
+  let jobType = '';
+  try {
+    const result = await edFetchJson(
+      `/api/edit-projects/${edCurrentProject.id}/render/preview/restart-proxy?force=true`,
+      {method: 'POST'}, '작업을 중단하고 새 job을 시작하지 못했습니다.'
+    );
+    if (result.project) edRenderProject(result.project, false);
+    started = Boolean(result.job?.job_id);
+    jobType = String(result.job?.type || '');
+    edSetProgress('queued', `기존 job을 교체했습니다. 새 job ${result.job?.job_id || '-'} · 720p 프록시 생성 중`, 5);
+  } catch (error) {
+    edSetProgress('error', error.message, 100);
+  } finally {
+    edBusy = false;
+  }
+  if (started) {
+    await edRefreshProgress(false);
+    if (jobType === 'analysis') await edPollAnalysis(edCurrentProject.id, Number(edCurrentProject.current_job?.job_id || 0) || null);
+    else await edPreviewRender();
+  }
 }
 
 // ===== ✂️ 자동 컷편집 =====

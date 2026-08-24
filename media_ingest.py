@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -220,7 +221,10 @@ class MediaIngestService:
         return output
 
     @staticmethod
-    def create_working_proxy_720p(path: str | Path, output: Path, duration: float) -> Path:
+    def create_working_proxy_720p(
+        path: str | Path, output: Path, duration: float,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> Path:
         """Stream an input into a bounded 720p proxy without materializing it first."""
         if not shutil.which("ffmpeg"):
             raise RuntimeError("ffmpeg가 설치되어 있지 않습니다.")
@@ -241,11 +245,34 @@ class MediaIngestService:
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k",
             "-movflags", "+faststart", str(part), "-y",
         ]
+        timeout = max(900, min(14400, int(seconds * 4) + 300))
+        expected_bytes = min(
+            750 * 1024 * 1024,
+            max(1, int(((video_kbps + 96) * 1000 / 8) * seconds)),
+        )
+        started = time.monotonic()
         try:
-            result = subprocess.run(
-                command, capture_output=True, text=True,
-                timeout=max(900, min(14400, int(seconds * 4) + 300)),
+            process = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
+            while process.poll() is None:
+                elapsed = time.monotonic() - started
+                if elapsed > timeout:
+                    process.kill()
+                    process.communicate()
+                    raise subprocess.TimeoutExpired(command, timeout)
+                size = part.stat().st_size if part.is_file() else 0
+                if progress_callback:
+                    try:
+                        progress_callback({
+                            "path": output.name, "exists": part.is_file(), "size_bytes": size,
+                            "stage_percent": min(95, round((size / expected_bytes) * 100)) if expected_bytes else 0,
+                        })
+                    except Exception:
+                        pass
+                time.sleep(2)
+            stdout, stderr = process.communicate()
+            result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         except subprocess.TimeoutExpired as exc:
             part.unlink(missing_ok=True)
             raise RuntimeError("720p 작업용 proxy 생성 시간이 초과됐습니다.") from exc
@@ -258,6 +285,14 @@ class MediaIngestService:
             part.unlink(missing_ok=True)
             raise RuntimeError(f"720p proxy size limit exceeded: size={size}")
         os.replace(part, output)
+        if progress_callback:
+            try:
+                progress_callback({
+                    "path": output.name, "exists": True, "size_bytes": output.stat().st_size,
+                    "stage_percent": 100,
+                })
+            except Exception:
+                pass
         return output
 
     @staticmethod

@@ -2021,8 +2021,9 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 
 /* ===== 🎞️ AI 편집 디렉터 ===== */
 .tab-btn-edit-director { color: #6d28d9; border-color: #c4b5fd; }
-#pane-edit-director { padding: 24px 20px 70px; }
-.ed-page { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+#pane-edit-director { padding: 24px 20px calc(70px + env(safe-area-inset-bottom)); overflow-x: clip; }
+.ed-page { width: 100%; max-width: 1040px; min-width: 0; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+.ed-page > *, #ed-workspace, #ed-workspace > *, .ed-section-head > * { min-width: 0; max-width: 100%; }
 .ed-title-row, .ed-section-head, .ed-workspace-head, .ed-action-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .ed-safety-badge { padding: 8px 12px; border-radius: 999px; background: #ede9fe; color: #6d28d9; font-size: 12px; font-weight: 800; white-space: nowrap; }
 .ed-storage-card { display: flex; justify-content: space-between; gap: 14px; align-items: center; margin: 16px 0; padding: 13px 15px; border: 1px solid #dbeafe; border-radius: 12px; background: #f8fbff; color: #334155; }
@@ -2098,6 +2099,22 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ed-render-btn { background: #ef4444; color: #fff; }
 .ed-approve-btn:disabled, .ed-render-btn:disabled, .ed-revision-row button:disabled { opacity: .4; cursor: not-allowed; }
 .ed-render-progress { width: 100%; }
+.ed-live-status-card { position: sticky; top: 6px; z-index: 5; border: 1px solid #c4b5fd; background: rgba(255,255,255,.97); box-shadow: 0 8px 24px rgba(76,29,149,.08); }
+.ed-live-status-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ed-live-identity { color: #64748b; font-size: 11px; overflow-wrap: anywhere; }
+.ed-live-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+.ed-live-metrics > div { min-width: 0; padding: 9px 10px; border-radius: 9px; background: #f8fafc; }
+.ed-live-metrics small { display: block; color: #64748b; font-size: 10px; margin-bottom: 3px; }
+.ed-live-metrics b { display: block; color: #111827; font-size: 13px; overflow-wrap: anywhere; }
+.ed-live-message { margin: 9px 0; color: #475569; font-size: 12px; line-height: 1.45; }
+.ed-live-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.ed-live-actions button { min-height: 42px; border: 1px solid #cbd5e1; border-radius: 9px; padding: 9px 11px; background: #fff; color: #334155; font-weight: 800; cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
+.ed-live-actions button.primary { border-color: #7c3aed; background: #7c3aed; color: #fff; }
+.ed-live-actions button.danger { border-color: #ef4444; color: #b91c1c; }
+.ed-live-details { margin-top: 9px; color: #64748b; font-size: 11px; }
+.ed-live-details pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #f8fafc; padding: 8px; }
+.ed-detail-panel { margin-top: 12px; }
+.ed-detail-panel > summary, .ed-transcript > summary, #ed-edit-log-details > summary { cursor: pointer; font-weight: 800; color: #475569; padding: 7px 0; }
 .ed-render-state-grid { width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .ed-render-state-card { padding: 13px 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
 .ed-render-state-card > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -2123,6 +2140,9 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .ed-script-segment.deleted .ed-script-text { text-decoration: line-through; }
 .ed-script-time { color: #475569; font-size: 12px; font-weight: 800; white-space: nowrap; }
 .ed-script-text { color: #111827; line-height: 1.55; }
+.ed-script-copy { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.ed-script-copy.expanded { display: block; overflow: visible; -webkit-line-clamp: unset; }
+.ed-script-more { display: inline-block; margin-top: 5px; border: 0 !important; padding: 3px 0 !important; background: transparent !important; color: #6d28d9 !important; font-size: 11px; }
 .ed-script-meta { display: block; margin-top: 5px; color: #64748b; font-size: 11px; }
 .ed-script-segment button { border: 0; border-radius: 7px; padding: 7px 9px; background: #334155; color: #fff; cursor: pointer; font-weight: 700; white-space: nowrap; }
 .ed-script-segment.deleted button { background: #15803d; }
@@ -2148,12 +2168,30 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
   .ed-title-row, .ed-action-card { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 560px) {
-  #pane-edit-director { padding: 12px 8px 50px; }
+  #pane-edit-director { width: 100%; padding: 10px 6px calc(96px + env(safe-area-inset-bottom)); overflow-x: clip; }
+  .ed-page { gap: 10px; }
+  #ed-workspace .section-card { padding: 12px 10px; overflow: hidden; }
   .ed-form-grid { grid-template-columns: 1fr; }
   .ed-revision-row { grid-template-columns: 1fr; }
   .ed-action-buttons { width: 100%; flex-direction: column; }
+  .ed-action-buttons button, .ed-script-controls button, .ed-preview-actions > *, .ed-output-links > * { width: 100%; min-height: 44px; white-space: normal; overflow-wrap: anywhere; }
   .ed-render-state-grid { grid-template-columns: 1fr; }
   .ed-script-segment { grid-template-columns: 1fr; }
+  .ed-script-list { max-height: 55vh; overflow-y: auto; overscroll-behavior: contain; padding-right: 0; }
+  .ed-script-segment > button:last-child { width: 100%; min-height: 42px; }
+  .ed-workspace-head, .ed-section-head { align-items: flex-start; flex-wrap: wrap; }
+  .ed-workspace-head h2 { font-size: 18px; overflow-wrap: anywhere; }
+  .ed-status { white-space: normal; }
+  .ed-live-status-card { position: static; }
+  .ed-live-status-head { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .ed-live-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 9px 0; }
+  .ed-live-metrics > div { padding: 7px 8px; }
+  .ed-live-actions { display: grid; grid-template-columns: 1fr; }
+  .ed-live-actions button { width: 100%; }
+  .ed-table-wrap { max-width: 100%; }
+  .ed-segment-table { min-width: 620px; }
+  .ed-output-video { max-height: 44vh; }
+  .ed-feedback-row input { min-width: 0; width: 100%; }
 }
 
 /* 외부 링크 버튼 */

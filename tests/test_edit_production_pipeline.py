@@ -435,10 +435,12 @@ class LargeAnalysisSourceTests(unittest.TestCase):
             def head(self, key):
                 return {"size_bytes": self.uploaded[-1][1]}
 
-        def make_proxy(input_url, output, duration):
+        def make_proxy(input_url, output, duration, progress_callback=None):
             self.assertTrue(str(input_url).startswith("https://objects.invalid/"))
             self.assertEqual(duration, 1726.0)
             Path(output).write_bytes(b"p" * (2 * 1024 * 1024))
+            if progress_callback:
+                progress_callback({"path": Path(output).name, "exists": True, "size_bytes": Path(output).stat().st_size, "stage_percent": 100})
             return Path(output)
 
         with tempfile.TemporaryDirectory() as td:
@@ -543,12 +545,12 @@ class ObjectWorkingCopyPipelineTests(unittest.TestCase):
             ):
                 preview = asyncio.run(pipeline.preview_rendering({
                     "job_id": 1000, "project_id": project_id,
-                    "payload": {"profile": "preview_1080p"},
+                    "payload": {"profile": "preview_720p"},
                 }))
             saved = store.get(project_id)["report"]
             self.assertGreater(preview["preview_render_seconds"], 0)
             self.assertEqual(saved["preview_state"], "succeeded")
-            self.assertEqual(saved["outputs"]["preview"]["render_profile"], "preview_1080p")
+            self.assertEqual(saved["outputs"]["preview"]["render_profile"], "preview_720p")
             self.assertEqual(saved["status"], "completed")
             self.assertEqual(s3.downloads, [source_key, source_key])
             self.assertFalse(list(root.glob("edit-work-*")))
@@ -702,6 +704,21 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             self.assertTrue(polling.json()["stale_rendering"])
             watched = next(job for job in polling.json()["jobs"] if job["job_id"] == old["job_id"])
             self.assertEqual(watched["status"], "stale_rendering")
+            progress = self.client.get(f"/api/edit-projects/{project_id}/status")
+            self.assertEqual(progress.status_code, 200)
+            required = {
+                "project_id", "job_id", "project_status", "job_status", "current_stage",
+                "stage_label", "stage_percent", "overall_percent", "last_heartbeat_at",
+                "seconds_since_last_heartbeat", "proxy_status", "transcript_status",
+                "rough_cut_status", "preview_status", "render_status", "output_file_path",
+                "output_file_exists", "output_file_size_mb", "output_file_size_updated_at",
+                "output_file_size_growth", "is_stale", "stale_reason", "can_retry",
+                "retry_reason", "recommended_action",
+            }
+            self.assertTrue(required.issubset(progress.json()))
+            self.assertTrue(progress.json()["is_stale"])
+            self.assertTrue(progress.json()["can_retry"])
+            self.assertEqual(progress.json()["job_id"], old["job_id"])
 
             restarted = self.client.post(
                 f"/api/edit-projects/{project_id}/render/preview/restart-proxy"
@@ -711,13 +728,21 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
             self.assertNotEqual(new_job["job_id"], old["job_id"])
             self.assertEqual(new_job["payload"]["replaces_job_id"], old["job_id"])
             self.assertTrue(new_job["payload"]["proxy_restart"])
+            forced = self.client.post(
+                f"/api/edit-projects/{project_id}/render/preview/restart-proxy?force=true"
+            )
+            self.assertEqual(forced.status_code, 200)
+            forced_job = forced.json()["job"]
+            self.assertNotEqual(forced_job["job_id"], new_job["job_id"])
+            self.assertEqual(forced_job["payload"]["replaces_job_id"], new_job["job_id"])
 
         stopped = self.queue.get(old["job_id"])
         self.assertEqual(stopped["status"], "stale_rendering")
         self.assertTrue(stopped["retry_needed"])
         self.queue.fail(old["job_id"], TimeoutError("late dead worker result"), retryable=True)
         self.assertEqual(self.queue.get(old["job_id"])["status"], "stale_rendering")
-        self.assertEqual(self.queue.get(new_job["job_id"])["status"], "queued")
+        self.assertEqual(self.queue.get(new_job["job_id"])["status"], "cancelled")
+        self.assertEqual(self.queue.get(forced_job["job_id"])["status"], "queued")
         saved = self.store.get(project_id)["report"]
         self.assertEqual(saved["source"]["object_key"], source_key)
         self.assertEqual(saved["proxy"]["status"], "pending")
@@ -728,6 +753,66 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
         self.assertIn("edRestartStalePreview()", frontend)
         for label in ("720p 프록시 생성 중", "프록시 기반 분석 중", "러프컷 구성 중", "프리뷰 생성 중"):
             self.assertIn(label, frontend + (Path(__file__).parents[1] / "edit_pipeline.py").read_text())
+
+    def test_mobile_progress_controls_and_long_sections_default_collapsed(self):
+        root = Path(__file__).parents[1]
+        html = (root / "static" / "index.html").read_text()
+        css = (root / "static" / "style.css").read_text()
+        frontend = (root / "static" / "app.js").read_text()
+        for element_id in (
+            "ed-live-status-card", "ed-live-stage-percent", "ed-live-overall-percent",
+            "ed-live-processing", "ed-live-heartbeat", "ed-live-output", "ed-live-proxy-restart",
+            "ed-live-preview-retry", "ed-live-force-restart", "ed-live-preview-actions",
+        ):
+            self.assertIn(f'id="{element_id}"', html)
+        self.assertNotIn('class="ed-transcript" open', html)
+        self.assertIn("safe-area-inset-bottom", css)
+        self.assertIn("overflow-x: clip", css)
+        self.assertIn("@media (max-width: 560px)", css)
+        self.assertIn("-webkit-line-clamp: 2", css)
+        self.assertIn("max-height: 55vh", css)
+        self.assertIn("edRefreshProgress", frontend)
+        self.assertIn("edToggleScriptText", frontend)
+
+    def test_status_api_reports_live_percent_heartbeat_and_output_growth(self):
+        now = datetime.now(timezone.utc).isoformat()
+        project_id = self.store.create(keyword="live progress", project={
+            "project_uuid": "d" * 32, "status": "approved", "preview_state": "rendering",
+            "approved_version": 1,
+            "source": {
+                "storage_backend": "object", "object_key": "ed/d/source.mp4",
+                "filename": "source.mp4", "size_bytes": 2_205_946_289,
+            },
+            "proxy": {"status": "ready", "object_key": "ed/d/proxy_720p.mp4", "size_bytes": 400 * 1024 * 1024},
+            "outputs": {},
+            "processing_progress": {
+                "current_stage": "preview_rendering", "stage_label": "검토용 720p 프리뷰 생성",
+                "stage_percent": 45, "overall_percent": 62, "updated_at": now,
+            },
+            "processing_output": {
+                "stage": "preview_rendering", "path": "preview-v1.mp4", "exists": True,
+                "size_bytes": 184 * 1024 * 1024, "size_growth_bytes": 4 * 1024 * 1024,
+                "size_updated_at": now, "checked_at": now, "stage_started_at": now,
+            },
+        })
+        job = self.queue.enqueue(
+            project_id, "preview_rendering", idempotency_key="preview:live:v1:run1",
+            payload={"profile": "preview_720p"}, max_attempts=2,
+        )
+        self.queue.claim("live-worker", allowed_types={"preview_rendering"})
+        with patch.object(main, "EditProjectStore", lambda: self.store), patch.object(main, "EDIT_JOB_QUEUE", self.queue):
+            response = self.client.get(f"/api/edit-projects/{project_id}/status")
+        self.assertEqual(response.status_code, 200)
+        status = response.json()
+        self.assertEqual(status["job_id"], job["job_id"])
+        self.assertEqual(status["stage_percent"], 45)
+        self.assertEqual(status["overall_percent"], 62)
+        self.assertLess(status["seconds_since_last_heartbeat"], 10)
+        self.assertTrue(status["output_file_exists"])
+        self.assertEqual(status["output_file_size_mb"], 184.0)
+        self.assertEqual(status["output_file_size_growth"], "increasing")
+        self.assertFalse(status["is_stale"])
+        self.assertEqual(status["health_status"], "normal")
 
     def test_same_filename_in_two_upload_sessions_creates_fresh_projects_and_jobs(self):
         base = {

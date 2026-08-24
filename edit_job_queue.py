@@ -292,6 +292,22 @@ class EditJobQueue:
             connection.commit()
         return job
 
+    def mark_replaced(self, job_id: int) -> dict[str, Any]:
+        job = self.get(job_id)
+        if not job:
+            raise KeyError("작업을 찾지 못했습니다.")
+        if job.get("status") not in {"queued", "running", "failed", "stale_rendering"}:
+            raise RuntimeError("중단하고 교체할 수 없는 작업입니다.")
+        job.update({
+            "status": "cancelled", "worker_id": None, "finished_at": utc_now(),
+            "next_retry_at": None, "retry_needed": True, "replaced": True,
+            "error": "OwnerRestarted: replaced by a new proxy workflow job",
+        })
+        with closing(self._connect()) as connection:
+            self._save(connection, job)
+            connection.commit()
+        return job
+
     def snapshot(self) -> dict[str, Any]:
         jobs = self.list(limit=3000)
         counts: dict[str, int] = {}
