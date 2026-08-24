@@ -26,7 +26,7 @@ JOB_TYPES = {
     "source_analysis", "story_planning", "rough_cut_rendering",
     "short_render", "storage_upload", "cleanup", "performance_sync",
 }
-TERMINAL = {"completed", "failed", "cancelled"}
+TERMINAL = {"completed", "failed", "cancelled", "stale_rendering"}
 
 
 def _parse(value: Any) -> datetime | None:
@@ -216,6 +216,8 @@ class EditJobQueue:
         job = self.get(job_id)
         if not job:
             return
+        if job.get("status") != "running":
+            return
         job.update({
             "status": "completed", "finished_at": utc_now(), "heartbeat_at": utc_now(),
             "error": None, "retry_needed": False,
@@ -229,6 +231,8 @@ class EditJobQueue:
         job = self.get(job_id)
         if not job:
             return None
+        if job.get("status") != "running":
+            return job
         attempt = int(job.get("attempt") or 0)
         can_retry = retryable and attempt < int(job.get("max_attempts") or 1)
         job["status"] = "queued" if can_retry else "failed"
@@ -256,6 +260,33 @@ class EditJobQueue:
             "finished_at": None, "worker_id": None, "heartbeat_at": None,
             "error": None, "retry_needed": False,
         })
+        with closing(self._connect()) as connection:
+            self._save(connection, job)
+            connection.commit()
+        return job
+
+    def mark_stale_rendering(self, job_id: int, *, stale_seconds: int = 600) -> dict[str, Any]:
+        """Stop an abandoned preview job without making it claimable again."""
+        job = self.get(job_id)
+        if not job:
+            raise KeyError("작업을 찾지 못했습니다.")
+        if job.get("type") != "preview_rendering":
+            raise RuntimeError("preview 렌더 작업만 중단할 수 있습니다.")
+        if job.get("status") == "running":
+            heartbeat = _parse(job.get("heartbeat_at") or job.get("started_at"))
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(600, int(stale_seconds)))
+            if heartbeat and heartbeat >= cutoff:
+                raise RuntimeError("preview worker heartbeat가 아직 정상입니다.")
+            job.update({
+                "status": "stale_rendering", "worker_id": None,
+                "finished_at": utc_now(), "next_retry_at": None,
+                "retry_needed": True,
+                "error": "StalePreviewRendering: heartbeat expired; proxy restart required",
+            })
+        elif job.get("status") == "failed":
+            job["retry_needed"] = True
+        elif job.get("status") != "stale_rendering":
+            raise RuntimeError("멈춘 preview 렌더 작업이 아닙니다.")
         with closing(self._connect()) as connection:
             self._save(connection, job)
             connection.commit()

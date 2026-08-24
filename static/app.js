@@ -617,6 +617,11 @@ async function edPollAnalysis(projectId, jobId = null, generation = null) {
     }
     const project = await edFetchJson(`/api/edit-projects/${projectId}`, undefined, '분석 상태를 확인하지 못했습니다.');
     if (generation != null && generation !== edUploadGeneration) return;
+    if (project.stale_rendering) {
+      edRenderProject(project);
+      edSetProgress('error', '기존 렌더가 멈췄습니다. 720p 프록시로 다시 시작할 수 있습니다.', 100);
+      return;
+    }
     if (['proposed', 'revised', 'approved', 'completed'].includes(project.status)) {
       edRenderProject(project); await Promise.allSettled([edLoadProjects(), edLoadStorage()]);
       edSetProgress('done', '분석 제안이 준비됐습니다. 대화로 수정한 뒤 승인해주세요.', 100); return;
@@ -969,7 +974,8 @@ function edRenderState(project) {
     ? 'stale' : (outputs.preview ? 'succeeded' : (project.preview_state || 'not_requested'));
   const previewLabels = {
     succeeded: 'Preview 완료 100%', queued: 'Preview 대기 중', rendering: 'Preview 생성 중',
-    stale: '스크립트 수정 후 재생성 필요', failed: 'Preview 생성 실패', not_requested: '준비 전',
+    stale: '스크립트 수정 후 재생성 필요', stale_rendering: '기존 렌더 멈춤',
+    failed: 'Preview 생성 실패', not_requested: '준비 전',
   };
   const previewStatus = document.getElementById('ed-preview-status');
   previewStatus.className = `ed-render-state-value ${previewState}`;
@@ -1185,12 +1191,16 @@ function edRenderProject(project, scrollToWorkspace = true) {
     : (project.final_render_state === 'queued' ? '최종 고화질 렌더 대기 중' : (runtimeRendering ? '편집 실행 중...' : '최종 원본 화질 렌더 요청'));
   const previewRender = document.getElementById('ed-preview-render-btn');
   if (previewRender) {
-    previewRender.disabled = isMulti || scriptDirty || !approved || runtimeRendering || project.preview_state === 'rendering' || project.preview_state === 'queued';
+    previewRender.disabled = isMulti || scriptDirty || !approved || runtimeRendering || project.stale_rendering || project.preview_state === 'rendering' || project.preview_state === 'queued';
     previewRender.textContent = scriptDirty ? '스크립트 수정안 저장 필요' : (isMulti ? '멀티소스는 승인 후 러프컷 생성' : (project.preview_state === 'succeeded' ? '1080p 검토본 다시 만들기' : '1080p 검토본 만들기'));
   }
   edRenderState(project);
   const renderProgress = document.getElementById('ed-render-progress');
-  if (project.final_render_state === 'queued' || project.status === 'final_queued') {
+  if (project.stale_rendering) {
+    document.getElementById('ed-render-message').textContent = '기존 렌더가 멈췄습니다. 720p 프록시로 다시 시작할 수 있습니다.';
+    document.getElementById('ed-render-fill').style.width = '0%';
+    renderProgress.classList.remove('hidden');
+  } else if (project.final_render_state === 'queued' || project.status === 'final_queued') {
     document.getElementById('ed-render-message').textContent = '최종 고화질 렌더 대기 중 · 실패나 정지가 아니라 전용 worker 순서를 기다리고 있습니다.';
     document.getElementById('ed-render-fill').style.width = '0%';
     renderProgress.classList.remove('hidden');
@@ -1200,11 +1210,14 @@ function edRenderProject(project, scrollToWorkspace = true) {
   } else {
     renderProgress.classList.add('hidden');
   }
-  if (project.failed_job) {
+  if (project.stale_rendering && project.stale_rendering_job) {
+    document.getElementById('ed-plan-notes').innerHTML += `<br><button class="ed-retry-btn" onclick="edRestartStalePreview()">720p 프록시로 다시 시작</button>`;
+  } else if (project.failed_job) {
     const proxyRetry = largeSource && project.failed_job.type === 'preview_rendering';
-    const retryLabel = proxyRetry ? '720p proxy 생성 후 다시 시작' : '실패 단계부터 다시 시도';
+    const retryLabel = proxyRetry ? '720p 프록시로 다시 시작' : '실패 단계부터 다시 시도';
     const retryError = project.preview_error || project.failed_job.error || project.error || '';
-    document.getElementById('ed-plan-notes').innerHTML += `<br>${retryError ? `<small>${escHtml(retryError)}</small><br>` : ''}<button class="ed-retry-btn" onclick="edRetryJob(${Number(project.failed_job.job_id)}, ${proxyRetry})">${retryLabel}</button>`;
+    const retryAction = proxyRetry ? 'edRestartStalePreview()' : `edRetryJob(${Number(project.failed_job.job_id)}, false)`;
+    document.getElementById('ed-plan-notes').innerHTML += `<br>${retryError ? `<small>${escHtml(retryError)}</small><br>` : ''}<button class="ed-retry-btn" onclick="${retryAction}">${retryLabel}</button>`;
   }
 
   const outputs = project.outputs || {};
@@ -1428,6 +1441,26 @@ async function edRetryJob(jobId, proxyRetry = false) {
     if (edCurrentProject) await edOpenProject(edCurrentProject.id);
     await edLoadStorage();
   } catch (error) { edSetProgress('error', error.message, 100); }
+}
+
+async function edRestartStalePreview() {
+  if (!edCurrentProject || edBusy) return;
+  edBusy = true;
+  let started = false;
+  try {
+    edSetProgress('queued', '720p 프록시 생성 중', 5);
+    const result = await edFetchJson(
+      `/api/edit-projects/${edCurrentProject.id}/render/preview/restart-proxy`,
+      {method: 'POST'}, '720p 프록시 workflow를 시작하지 못했습니다.'
+    );
+    if (result.project) edRenderProject(result.project, false);
+    started = Boolean(result.job?.job_id);
+  } catch (error) {
+    edSetProgress('error', error.message, 100);
+  } finally {
+    edBusy = false;
+  }
+  if (started) await edPreviewRender();
 }
 
 // ===== ✂️ 자동 컷편집 =====

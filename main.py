@@ -1826,10 +1826,24 @@ async def edit_storage_status():
 async def edit_jobs_status(project_id: int | None = None):
     if project_id is None:
         return await asyncio.to_thread(EDIT_JOB_QUEUE.snapshot)
+    jobs = await asyncio.to_thread(EDIT_JOB_QUEUE.list, project_id=project_id, limit=100)
+    row = await asyncio.to_thread(EditProjectStore().get, project_id)
+    project = (row or {}).get("report") or {}
+    stale_job = _stale_preview_job(project, jobs)
+    if stale_job:
+        jobs = [
+            ({**job, "status": "stale_rendering"} if int(job["job_id"]) == int(stale_job["job_id"]) else job)
+            for job in jobs
+        ]
     return {
         "project_id": project_id,
-        "jobs": await asyncio.to_thread(EDIT_JOB_QUEUE.list, project_id=project_id, limit=100),
+        "jobs": jobs,
         "queue": await asyncio.to_thread(EDIT_JOB_QUEUE.snapshot),
+        "stale_rendering": bool(stale_job),
+        "message": (
+            "기존 렌더가 멈췄습니다. 720p 프록시로 다시 시작할 수 있습니다."
+            if stale_job else None
+        ),
     }
 
 
@@ -2321,6 +2335,52 @@ def _edit_row(project_id: int) -> dict:
     return row
 
 
+def _job_time(value: Any) -> datetime.datetime | None:
+    try:
+        parsed = datetime.datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=datetime.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stale_preview_job(project: dict, jobs: list[dict], *, stale_seconds: int = 600) -> dict | None:
+    """Find a preview with no output and no worker heartbeat for ten minutes."""
+    if (project.get("outputs") or {}).get("preview"):
+        return None
+    rendering_states = {"rendering", "preview_rendering", "running", "stale_rendering"}
+    if (
+        str(project.get("preview_state") or "") not in rendering_states
+        and str(project.get("status") or "") not in rendering_states
+    ):
+        return None
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        seconds=max(600, int(stale_seconds))
+    )
+    for job in jobs:
+        if job.get("type") != "preview_rendering" or job.get("status") != "running":
+            continue
+        heartbeat = _job_time(job.get("heartbeat_at") or job.get("started_at"))
+        if heartbeat is None or heartbeat < cutoff:
+            return job
+    return None
+
+
+def _preview_restart_candidate(project: dict, jobs: list[dict]) -> dict | None:
+    stale = _stale_preview_job(project, jobs)
+    if stale:
+        return stale
+    if (project.get("outputs") or {}).get("preview"):
+        return None
+    return next((
+        job for job in jobs
+        if job.get("type") == "preview_rendering"
+        and (
+            job.get("status") == "stale_rendering"
+            or (job.get("status") == "failed" and job.get("retry_needed"))
+        )
+    ), None)
+
+
 async def _run_edit_job_without_lifespan(job: dict, store: EditProjectStore) -> None:
     """Exercise the same durable handler in CLI/tests that omit ASGI lifespan.
 
@@ -2365,9 +2425,20 @@ async def edit_projects_get(project_id: int):
         with EDIT_RENDERING_LOCK:
             project["runtime_rendering"] = project_id in EDIT_RENDERING
         jobs = EDIT_JOB_QUEUE.list(project_id=project_id, limit=100)
-        current_job = next((job for job in jobs if job.get("status") in {"running", "queued"}), None)
+        stale_job = _stale_preview_job(project, jobs)
+        current_job = next((
+            job for job in jobs
+            if job.get("status") in {"running", "queued"}
+            and (not stale_job or int(job["job_id"]) != int(stale_job["job_id"]))
+        ), None)
         project["last_job"] = jobs[0] if jobs else None
         project["failed_job"] = next((job for job in jobs if job.get("status") == "failed"), None)
+        if stale_job:
+            project["stale_rendering"] = True
+            project["stale_rendering_job"] = {**stale_job, "status": "stale_rendering"}
+            project["preview_state"] = "stale_rendering"
+            project["runtime_rendering"] = False
+            project["status_message"] = "기존 렌더가 멈췄습니다. 720p 프록시로 다시 시작할 수 있습니다."
         if current_job:
             project["current_job"] = current_job
             project["runtime_rendering"] = bool(
@@ -2937,6 +3008,84 @@ async def _run_edit_render_job(
         EDIT_RENDER_TASKS.pop(project_id, None)
 
 
+@app.post("/api/edit-projects/{project_id}/render/preview/restart-proxy")
+async def edit_projects_preview_restart_proxy(project_id: int):
+    try:
+        row = _edit_row(project_id)
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    project = row["report"]
+    if (project.get("outputs") or {}).get("preview"):
+        return JSONResponse({"error": "이미 preview 파일이 생성되었습니다."}, status_code=409)
+    approved_version = int(project.get("approved_version") or 0)
+    if not approved_version:
+        return JSONResponse({"error": "승인된 편집안을 찾지 못했습니다."}, status_code=409)
+    source = project.get("source") or {}
+    if source.get("storage_backend") != "object" or not source.get("object_key"):
+        return JSONResponse({"error": "Object Storage 원본을 찾지 못했습니다."}, status_code=410)
+    try:
+        backend = object_storage_from_env()
+        if backend is None:
+            raise RuntimeError("Object Storage not configured")
+        await asyncio.to_thread(backend.head, source["object_key"])
+    except Exception:
+        return JSONResponse({"error": "Object Storage 원본을 확인하지 못했습니다."}, status_code=503)
+
+    jobs = await asyncio.to_thread(EDIT_JOB_QUEUE.list, project_id=project_id, limit=100)
+    candidate = _preview_restart_candidate(project, jobs)
+    if not candidate:
+        return JSONResponse({"error": "10분 이상 멈춘 preview 작업이 없습니다."}, status_code=409)
+    active_new = next((
+        job for job in jobs
+        if job.get("type") == "preview_rendering"
+        and job.get("status") in {"queued", "running"}
+        and int(job["job_id"]) != int(candidate["job_id"])
+    ), None)
+    if active_new:
+        response_project = public_project(EditProjectStore().get(project_id))
+        response_project["current_job"] = active_new
+        return {"ok": True, "job": active_new, "project": response_project, "reused": True}
+
+    try:
+        old_job = await asyncio.to_thread(
+            EDIT_JOB_QUEUE.mark_stale_rendering, int(candidate["job_id"])
+        )
+    except (KeyError, RuntimeError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    job = await asyncio.to_thread(
+        EDIT_JOB_QUEUE.enqueue,
+        project_id, "preview_rendering",
+        idempotency_key=(
+            f"preview-proxy-restart:{project_id}:{int(old_job['job_id'])}:{time.time_ns()}"
+        ),
+        payload={
+            "approved_version": approved_version, "profile": "preview_1080p",
+            "proxy_restart": True, "replaces_job_id": int(old_job["job_id"]),
+        },
+        max_attempts=2, priority=50,
+        defer_seconds=1 if EDIT_JOB_WORKER._task is not None else 0,
+    )
+    project["jobs"] = sorted(set((project.get("jobs") or []) + [int(job["job_id"])]))
+    project["preview_state"] = "queued"
+    project["preview_error"] = None
+    project["retry_needed"] = False
+    project["processing_message"] = "720p 프록시 생성 중"
+    project["proxy_workflow_stage"] = "proxy_queued"
+    project["replaced_preview_job_id"] = int(old_job["job_id"])
+    proxy = project.get("proxy") or {}
+    if proxy.get("status") != "ready":
+        project["proxy"] = {
+            "profile": "working_720p", "status": "pending",
+            "source_size_bytes": int(source.get("size_bytes") or 0),
+        }
+    EditProjectStore().save(project_id, project)
+    if EDIT_JOB_WORKER._task is None:
+        asyncio.create_task(_run_edit_job_without_lifespan(job, EditProjectStore()))
+    response_project = public_project(EditProjectStore().get(project_id))
+    response_project["current_job"] = job
+    return {"ok": True, "old_job": old_job, "job": job, "project": response_project}
+
+
 @app.post("/api/edit-projects/{project_id}/render/preview")
 async def edit_projects_preview_render(project_id: int):
     try:
@@ -2962,9 +3111,14 @@ async def edit_projects_preview_render(project_id: int):
             EditProjectStore().resolve_media_path(project, "source")
         except FileNotFoundError:
             return JSONResponse({"error": "원본 파일이 없습니다."}, status_code=410)
+    preview_jobs = EDIT_JOB_QUEUE.list(project_id=project_id, limit=100)
+    if _stale_preview_job(project, preview_jobs):
+        return JSONResponse({
+            "error": "기존 렌더가 멈췄습니다. 720p 프록시로 다시 시작할 수 있습니다."
+        }, status_code=409)
     active = next(
         (
-            job for job in EDIT_JOB_QUEUE.list(project_id=project_id, limit=100)
+            job for job in preview_jobs
             if job.get("type") == "preview_rendering" and job.get("status") in {"queued", "running"}
         ),
         None,
@@ -2992,26 +3146,26 @@ async def edit_projects_preview_render(project_id: int):
             int(source.get("size_bytes") or 0) >= EditPipeline._large_source_threshold()
             and not (project.get("proxy") or {}).get("object_key")
         )
-        proxy_message = "원본 용량이 커서 720p 작업용 프록시로 변환 후 분석합니다."
         yield sse({
             "step": "queued", "percent": 3,
-            "message": proxy_message if large_proxy_needed else "1080p 검토본 작업을 준비합니다.",
+            "message": "720p 프록시 생성 중" if large_proxy_needed else "1080p 검토본 작업을 준비합니다.",
         })
         while True:
             await asyncio.sleep(1)
             current = EDIT_JOB_QUEUE.get(int(job["job_id"])) or {}
-            if current.get("status") in {"completed", "failed", "cancelled"}:
+            if current.get("status") in {"completed", "failed", "cancelled", "stale_rendering"}:
                 break
             elapsed = time.perf_counter() - started
             current_row = EditProjectStore().get(project_id)
             current_report = (current_row or {}).get("report") or {}
-            proxy_ready = bool((current_report.get("proxy") or {}).get("object_key"))
+            current_proxy = current_report.get("proxy") or {}
+            proxy_ready = bool(current_proxy.get("object_key"))
             yield sse({
                 "step": "queued" if current.get("status") == "queued" else "rendering",
                 "percent": min(92, 8 + int(elapsed / 3)),
                 "message": (
-                    proxy_message if large_proxy_needed and not proxy_ready else
-                    ("1080p 검토본 대기 중입니다." if current.get("status") == "queued" else "1080p fast preview를 렌더링하고 있습니다.")
+                    "720p 프록시 생성 중" if large_proxy_needed and not proxy_ready else
+                    ("1080p 검토본 대기 중입니다." if current.get("status") == "queued" else "프리뷰 생성 중")
                 ),
             })
         latest = EditProjectStore().get(project_id)

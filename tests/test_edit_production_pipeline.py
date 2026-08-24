@@ -651,6 +651,84 @@ class MultipartAndPurgeApiTests(unittest.TestCase):
         self.assertIn("ed-current-upload-finalize", html)
         self.assertIn("project.status === 'uploading'", frontend)
 
+    def test_stale_preview_creates_a_new_proxy_job_without_reupload(self):
+        project_uuid = "c" * 32
+        source_key = self.backend.key(project_uuid, "source.mp4")
+        self.s3.objects[source_key] = b"original-remains-in-object-storage"
+        project_id = self.store.create(keyword="stale preview", project={
+            "project_uuid": project_uuid, "status": "approved",
+            "preview_state": "rendering", "approved_version": 1,
+            "source": {
+                "storage_backend": "object", "object_key": source_key,
+                "filename": "source.mp4", "size_bytes": 2_205_946_289,
+                "media": {"duration": 1726.0, "width": 1920, "height": 1080, "has_audio": True},
+            },
+            "outputs": {},
+            "plan_versions": [{
+                "version": 1, "status": "approved",
+                "plan": {"render_timeline": [{"source_start": 0, "source_end": 10}]},
+            }],
+        })
+        old = self.queue.enqueue(
+            project_id, "preview_rendering", idempotency_key=f"preview:{project_id}:v1:run1",
+            payload={"approved_version": 1, "profile": "preview_1080p"}, max_attempts=2,
+        )
+        claimed = self.queue.claim("dead-worker", allowed_types={"preview_rendering"})
+        self.assertEqual(claimed["job_id"], old["job_id"])
+        with self.connect() as connection:
+            report = json.loads(connection.execute(
+                "SELECT report FROM history WHERE id=?", (old["job_id"],)
+            ).fetchone()[0])
+            report["heartbeat_at"] = (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat()
+            connection.execute(
+                "UPDATE history SET report=? WHERE id=?", (json.dumps(report), old["job_id"])
+            )
+            connection.commit()
+
+        patches = (
+            patch.object(main, "EditProjectStore", lambda: self.store),
+            patch.object(main, "EDIT_JOB_QUEUE", self.queue),
+            patch.object(main, "object_storage_from_env", return_value=self.backend),
+            patch.object(main.EDIT_JOB_WORKER, "_task", object()),
+        )
+        with patches[0], patches[1], patches[2], patches[3]:
+            state = self.client.get(f"/api/edit-projects/{project_id}")
+            self.assertEqual(state.status_code, 200)
+            self.assertTrue(state.json()["stale_rendering"])
+            self.assertEqual(state.json()["preview_state"], "stale_rendering")
+            self.assertIn("720p 프록시로 다시 시작", state.json()["status_message"])
+            polling = self.client.get(f"/api/edit-jobs?project_id={project_id}")
+            self.assertEqual(polling.status_code, 200)
+            self.assertTrue(polling.json()["stale_rendering"])
+            watched = next(job for job in polling.json()["jobs"] if job["job_id"] == old["job_id"])
+            self.assertEqual(watched["status"], "stale_rendering")
+
+            restarted = self.client.post(
+                f"/api/edit-projects/{project_id}/render/preview/restart-proxy"
+            )
+            self.assertEqual(restarted.status_code, 200)
+            new_job = restarted.json()["job"]
+            self.assertNotEqual(new_job["job_id"], old["job_id"])
+            self.assertEqual(new_job["payload"]["replaces_job_id"], old["job_id"])
+            self.assertTrue(new_job["payload"]["proxy_restart"])
+
+        stopped = self.queue.get(old["job_id"])
+        self.assertEqual(stopped["status"], "stale_rendering")
+        self.assertTrue(stopped["retry_needed"])
+        self.queue.fail(old["job_id"], TimeoutError("late dead worker result"), retryable=True)
+        self.assertEqual(self.queue.get(old["job_id"])["status"], "stale_rendering")
+        self.assertEqual(self.queue.get(new_job["job_id"])["status"], "queued")
+        saved = self.store.get(project_id)["report"]
+        self.assertEqual(saved["source"]["object_key"], source_key)
+        self.assertEqual(saved["proxy"]["status"], "pending")
+        self.assertEqual(self.s3.objects[source_key], b"original-remains-in-object-storage")
+
+        frontend = (Path(__file__).parents[1] / "static" / "app.js").read_text()
+        self.assertIn("720p 프록시로 다시 시작", frontend)
+        self.assertIn("edRestartStalePreview()", frontend)
+        for label in ("720p 프록시 생성 중", "프록시 기반 분석 중", "러프컷 구성 중", "프리뷰 생성 중"):
+            self.assertIn(label, frontend + (Path(__file__).parents[1] / "edit_pipeline.py").read_text())
+
     def test_same_filename_in_two_upload_sessions_creates_fresh_projects_and_jobs(self):
         base = {
             "filename": "same-name.mp4", "file_size": 16,

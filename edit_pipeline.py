@@ -127,7 +127,8 @@ class EditPipeline:
         if proxy.get("object_key") and proxy.get("status", "ready") == "ready":
             raise RuntimeError("ready proxy must be downloaded through _working_source")
         message = "원본 용량이 커서 720p 작업용 프록시로 변환 후 분석합니다."
-        project["processing_message"] = message
+        project["processing_message"] = "720p 프록시 생성 중"
+        project["proxy_workflow_stage"] = "proxy_generating"
         project["retry_needed"] = False
         project["proxy"] = {
             **proxy, "profile": "working_720p", "status": "creating",
@@ -173,6 +174,8 @@ class EditPipeline:
             "source_size_bytes": int(source.get("size_bytes") or 0),
         }
         project["retry_needed"] = False
+        project["processing_message"] = "프록시 기반 분석 중"
+        project["proxy_workflow_stage"] = "proxy_ready"
         project.setdefault("timings", {})["working_proxy_create_seconds"] = round(time.perf_counter() - started, 3)
         self.store.save(project_id, project)
         return proxy_path
@@ -346,7 +349,7 @@ class EditPipeline:
             save_progress(
                 stage="proxy_generation" if large_source else "source_download",
                 label=(
-                    "원본 용량이 커서 720p 작업용 프록시로 변환 후 분석합니다."
+                    "720p 프록시 생성 중"
                     if large_source else "원본 작업 사본 준비"
                 ),
                 percent=2,
@@ -376,7 +379,9 @@ class EditPipeline:
                             )
                         ] = access_seconds
                         save_progress(
-                            stage="media_inspection", label="미디어 정보 확인", percent=5,
+                            stage="proxy_analysis" if large_source else "media_inspection",
+                            label="프록시 기반 분석 중" if large_source else "미디어 정보 확인",
+                            percent=5,
                             checkpoint_name="SOURCE_STREAM_READY" if streamed else "SOURCE_DOWNLOADED",
                         )
                     if not media:
@@ -523,6 +528,10 @@ class EditPipeline:
                 visual_analysis=visual_analysis,
             )
             project.setdefault("timings", {})["gpt_diagnosis_seconds"] = round(time.perf_counter() - diagnosis_started, 3)
+            save_progress(
+                stage="rough_cut_planning", label="러프컷 구성 중", percent=100,
+                checkpoint_name="DIAGNOSIS_COMPLETE",
+            )
             plan = prepare_plan(
                 diagnosis.get("plan") or {}, float(media["duration"]),
                 target_format=(project.get("settings") or {}).get("target_format"),
@@ -720,6 +729,9 @@ class EditPipeline:
                     media=((project.get("source") or {}).get("media") or {}),
                     ingest=MediaIngestService(self.store),
                 ))
+                project["processing_message"] = "프리뷰 생성 중"
+                project["proxy_workflow_stage"] = "preview_rendering"
+                self.store.save(project_id, project)
                 directory = Path(temporary.name) / "preview"
             else:
                 directory = self.store.project_dir(str(project["project_uuid"]), create=True)
@@ -1048,6 +1060,7 @@ class EditPipeline:
             raise PermanentEditJobError("분석이 완료된 원본이 없습니다.")
         started = time.perf_counter()
         project["story_plan_state"] = "planning"
+        project["processing_message"] = "러프컷 구성 중"
         project = transition_project(
             project, "diagnosing", lifecycle="ANALYZING",
             reason="multi-source story planning", job_id=int(job["job_id"]),
