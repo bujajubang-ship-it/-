@@ -77,6 +77,29 @@ def get_history(id_: int):
     return d
 
 
+def update_history_report(id_: int, report: dict, *, keyword: str | None = None) -> bool:
+    import json
+    conn = get_db()
+    try:
+        if keyword is None:
+            cursor = conn.execute(
+                "UPDATE history SET report=? WHERE id=?",
+                (json.dumps(report, ensure_ascii=False), id_),
+            )
+        else:
+            cursor = conn.execute(
+                "UPDATE history SET keyword=?,report=? WHERE id=?",
+                (keyword, json.dumps(report, ensure_ascii=False), id_),
+            )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def delete_history(id_: int):
     conn = get_db()
     conn.execute("DELETE FROM history WHERE id=?", (id_,))

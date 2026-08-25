@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -62,6 +62,9 @@ from edit_learning_service import (
 from viewtrap_service import ViewTrapService
 from worksheet_ai_service import WorksheetAIService
 from video_feedback_jobs import VideoFeedbackJobManager
+from plain_transcript_edit import render_csv as render_transcript_edit_csv
+from plain_transcript_edit import render_markdown as render_transcript_edit_markdown
+from plain_transcript_edit_jobs import PlainTranscriptEditJobManager
 from heatmap_service import fetch_heatmap, summarize_for_prompt
 from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
 from database import (init_db, save_history, list_history, get_history, delete_history,
@@ -111,6 +114,7 @@ EDIT_RENDER_TASKS: dict[int, asyncio.Task] = {}
 EDIT_JOB_QUEUE = EditJobQueue()
 EDIT_PIPELINE = EditPipeline()
 VIDEO_FEEDBACK_JOBS = VideoFeedbackJobManager()
+PLAIN_TRANSCRIPT_EDIT_JOBS = PlainTranscriptEditJobManager()
 EDIT_JOB_WORKER = EditJobWorker(
     EDIT_JOB_QUEUE,
     {
@@ -136,6 +140,7 @@ async def app_lifespan(_app: FastAPI):
     COLLECTION_SCHEDULER.start()
     EDIT_JOB_WORKER.start()
     VIDEO_FEEDBACK_JOBS.start()
+    PLAIN_TRANSCRIPT_EDIT_JOBS.start()
     cleanup_task = asyncio.create_task(_edit_storage_cleanup_loop())
     try:
         yield
@@ -152,6 +157,7 @@ async def app_lifespan(_app: FastAPI):
             await asyncio.gather(*render_tasks, return_exceptions=True)
         await EDIT_JOB_WORKER.stop()
         await VIDEO_FEEDBACK_JOBS.stop()
+        await PLAIN_TRANSCRIPT_EDIT_JOBS.stop()
         await COLLECTION_SCHEDULER.stop()
 
 
@@ -263,6 +269,34 @@ class EditFeedbackRequest(BaseModel):
     keyword: str
     script: str
     product_url: str = ""
+
+
+def edit_feedback_project_report(
+    report: dict[str, Any], request: EditFeedbackRequest,
+) -> dict[str, Any]:
+    """Add reopenable project inputs without changing the legacy report shape."""
+
+    payload = dict(report or {})
+    payload["_project"] = {
+        "schema_version": 1,
+        "name": request.keyword.strip(),
+        "script": request.script,
+        "product_url": request.product_url.strip(),
+    }
+    return payload
+
+
+class PlainTranscriptEditRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    topic: str = Field(min_length=1, max_length=300)
+    script: str = Field(min_length=10, max_length=300_000)
+    target_duration_seconds: float = Field(default=0, ge=0, le=21600)
+    purpose: str = Field(default="", max_length=500)
+    additional_request: str = Field(default="", max_length=4000)
+
+
+class PlainTranscriptEditRevisionRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
 
 
 class PlanningRequest(BaseModel):
@@ -802,8 +836,16 @@ async def edit_feedback(req: EditFeedbackRequest):
                 report["viewtrap_top"] = viewtrap_refs.get("top_videos", [])[:10]
                 report["viewtrap_hot"] = viewtrap_refs.get("hot_videos", [])[:10]
 
-            save_history("edit", req.keyword, report)
-            yield sse({"step": "done", "report": report, "keyword": req.keyword})
+            # Keep the original project inputs with the feedback so reopening a
+            # project restores both the result and the source context. Legacy
+            # edit history rows remain readable because the report shape stays
+            # top-level and this metadata is purely additive.
+            report = edit_feedback_project_report(report, req)
+            history_id = save_history("edit", req.keyword, report)
+            yield sse({
+                "step": "done", "report": report, "keyword": req.keyword,
+                "history_id": history_id,
+            })
 
         except Exception as e:
             yield sse({"step": "error", "message": str(e)})
@@ -814,6 +856,109 @@ async def edit_feedback(req: EditFeedbackRequest):
         stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/edit-feedback/flow-jobs")
+async def create_plain_transcript_edit_job(req: PlainTranscriptEditRequest):
+    job = PLAIN_TRANSCRIPT_EDIT_JOBS.enqueue_initial(req.model_dump())
+    if PLAIN_TRANSCRIPT_EDIT_JOBS._worker_task is None:
+        asyncio.create_task(PLAIN_TRANSCRIPT_EDIT_JOBS.process_once())
+    return JSONResponse({
+        "ok": True, "job_id": job["job_id"],
+        "status_url": f"/api/edit-feedback/flow-jobs/{job['job_id']}",
+    }, status_code=202)
+
+
+@app.get("/api/edit-feedback/flow-jobs/{job_id}")
+async def get_plain_transcript_edit_job(job_id: str):
+    if not re.fullmatch(r"[a-f0-9]{32}", job_id):
+        return JSONResponse({"error": "올바르지 않은 작업 ID입니다."}, status_code=400)
+    job = PLAIN_TRANSCRIPT_EDIT_JOBS.store.get(job_id)
+    if not job:
+        return JSONResponse({"error": "분석 작업을 찾지 못했습니다."}, status_code=404)
+    return job
+
+
+@app.get("/api/edit-feedback/projects")
+async def list_edit_feedback_projects():
+    projects = []
+    for summary in list_history("edit", limit=200):
+        row = get_history(int(summary["id"]))
+        if not row:
+            continue
+        report = row.get("report") or {}
+        metadata = report.get("_project") or {}
+        flow_mode = metadata.get("mode") == "plain_transcript_flow"
+        current = report.get("current_result") or {}
+        projects.append({
+            "id": int(row["id"]), "type": "edit", "keyword": row.get("keyword") or "",
+            "created_at": str(row.get("created_at") or ""),
+            "mode": "plain_transcript_flow" if flow_mode else "legacy_edit_feedback",
+            "title": metadata.get("title") or metadata.get("name") or row.get("keyword") or "",
+            "topic": metadata.get("topic") or row.get("keyword") or "",
+            "current_version": int(metadata.get("current_version") or (1 if flow_mode else 0)),
+            "expected_duration_seconds": current.get("recommended_duration_seconds"),
+            "last_revision_summary": metadata.get("last_revision_summary") or "",
+        })
+    return projects
+
+
+@app.post("/api/edit-feedback/projects/{history_id}/revisions")
+async def revise_plain_transcript_edit_project(
+    history_id: int, req: PlainTranscriptEditRevisionRequest,
+):
+    row = get_history(history_id)
+    if not row:
+        return JSONResponse({"error": "편집 프로젝트를 찾지 못했습니다."}, status_code=404)
+    if ((row.get("report") or {}).get("_project") or {}).get("mode") != "plain_transcript_flow":
+        return JSONResponse({"error": "대본 기반 영상 흐름 프로젝트가 아닙니다."}, status_code=409)
+    job = PLAIN_TRANSCRIPT_EDIT_JOBS.enqueue_revision(history_id, req.message.strip())
+    if PLAIN_TRANSCRIPT_EDIT_JOBS._worker_task is None:
+        asyncio.create_task(PLAIN_TRANSCRIPT_EDIT_JOBS.process_once())
+    return JSONResponse({
+        "ok": True, "job_id": job["job_id"],
+        "status_url": f"/api/edit-feedback/flow-jobs/{job['job_id']}",
+    }, status_code=202)
+
+
+def _plain_transcript_project_version(history_id: int, version: int | None = None):
+    row = get_history(history_id)
+    if not row:
+        raise KeyError("편집 프로젝트를 찾지 못했습니다.")
+    project = row.get("report") or {}
+    if (project.get("_project") or {}).get("mode") != "plain_transcript_flow":
+        raise ValueError("대본 기반 영상 흐름 프로젝트가 아닙니다.")
+    versions = project.get("versions") or []
+    selected = next(
+        (item for item in versions if int(item.get("version") or 0) == int(version or 0)),
+        versions[-1] if versions and version is None else None,
+    )
+    if not selected:
+        raise LookupError("편집안 버전을 찾지 못했습니다.")
+    return project, selected
+
+
+@app.get("/api/edit-feedback/projects/{history_id}/download/{kind}")
+async def download_plain_transcript_edit_project(
+    history_id: int, kind: str, version: int | None = None,
+):
+    try:
+        project, selected = _plain_transcript_project_version(history_id, version)
+    except KeyError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except (ValueError, LookupError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    version_number = int(selected.get("version") or 0)
+    if kind == "markdown":
+        content, media_type, suffix = render_transcript_edit_markdown(project.get("_project") or {}, selected), "text/markdown; charset=utf-8", "md"
+    elif kind == "csv":
+        content, media_type, suffix = render_transcript_edit_csv(selected.get("result") or {}), "text/csv; charset=utf-8", "csv"
+    else:
+        return JSONResponse({"error": "markdown 또는 csv만 다운로드할 수 있습니다."}, status_code=400)
+    return Response(
+        content=content, media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="edit-flow-v{version_number}.{suffix}"'},
     )
 
 
