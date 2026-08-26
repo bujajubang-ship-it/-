@@ -115,12 +115,16 @@ class SentenceAndExportTests(unittest.TestCase):
         rows = list(csv.DictReader(io.StringIO(csv_text.lstrip("\ufeff"))))
         self.assertEqual(rows[0]["sentence_start_id"], "S007")
         self.assertEqual(rows[0]["action"], "이동")
-        plain_text = render_plain_text({"title": "주방 동선"}, version)
-        self.assertTrue(plain_text.startswith("[편집 담당자 전달용 최종본]"))
-        self.assertIn("[전체 흐름]", plain_text)
-        self.assertIn("[상세 편집 순서]", plain_text)
-        self.assertIn('시작 자막: "실사용자: 1년 동안 사용해보니 설거지 시간이 실제로 줄었습니다."', plain_text)
-        self.assertIn("[완전 삭제 추천]", plain_text)
+        # 편집자 전달용은 장면 순서와 자막 문장만 담는다 (S코드·이유·근거는 넣지 않는다).
+        sentences = split_sentences(SCRIPT)
+        plain_text = render_plain_text(
+            {"_project": {"title": "주방 동선"}, "sentences": sentences}, version)
+        self.assertTrue(plain_text.startswith("주방 동선 — 편집 순서"))
+        self.assertIn("1번째 장면", plain_text)
+        self.assertIn("삭제할 자막", plain_text)
+        self.assertIn("실사용자: 1년 동안 사용해보니 설거지 시간이 실제로 줄었습니다.", plain_text)
+        for banned in ("S007", "[전체 흐름]", "[상세 편집 순서]", "이유:", "근거:", "화면:"):
+            self.assertNotIn(banned, plain_text)
 
     def test_thirty_minute_scale_transcript_keeps_stable_ids(self):
         long_script = "\n".join(
@@ -191,7 +195,10 @@ class BackgroundJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(project["_project"]["current_version"], 3)
         self.assertEqual(project["_project"]["mode"], "transcript_edit_guide")
         self.assertEqual(len(project["conversation"]), 4)
-        self.assertIn("[상세 편집 순서]", project["versions"][-1]["employee_guide_text"])
+        guide_text = project["versions"][-1]["employee_guide_text"]
+        self.assertIn("1번째 장면", guide_text)
+        self.assertIn("삭제할 자막", guide_text)
+        self.assertNotIn("[상세 편집 순서]", guide_text)
         self.assertEqual(project["_project"]["transcript_hash"], initial["transcript_hash"])
 
     async def test_same_transcript_reuses_sentence_and_evidence_checkpoint(self):
@@ -296,7 +303,8 @@ class ApiAndUiTests(unittest.TestCase):
         self.assertEqual(markdown.status_code, 200)
         self.assertIn("버전: v1", markdown.text)
         self.assertEqual(txt_response.status_code, 200)
-        self.assertIn("[편집 담당자 전달용 최종본]", txt_response.text)
+        self.assertIn("1번째 장면", txt_response.text)
+        self.assertNotIn("[편집 담당자 전달용 최종본]", txt_response.text)
         self.assertEqual(csv_response.status_code, 200)
         self.assertIn("sentence_start_id", csv_response.text)
 
