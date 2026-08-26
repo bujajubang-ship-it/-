@@ -3204,17 +3204,6 @@ function renderTranscriptGuideProject(project, requestedVersion = null) {
   document.getElementById('tg-duplicates').innerHTML = (result.duplicates || []).map(item => `<div class="edit-flow-list-item"><b>${escHtml(item.topic || '')}</b><br>후보: ${(item.candidates || []).map(escHtml).join(' · ')}<br>최종 선택: ${escHtml(item.selected || '')}<br><small>${escHtml(item.reason || '')} · ${escHtml(item.remaining_action || '')}</small></div>`).join('') || '<div class="edit-flow-list-item">중복 후보 없음</div>';
   document.getElementById('tg-condensations').innerHTML = (result.condensations || []).map(item => `<div class="edit-flow-list-item"><b>유지 ${(item.keep_sentence_ids || []).map(escHtml).join(' · ')}</b><br>삭제 ${(item.delete_sentence_ids || []).map(escHtml).join(' · ')}<br><small>${escHtml(item.purpose_after_condensing || '')}</small></div>`).join('') || '<div class="edit-flow-list-item">축약 없음</div>';
 
-  const final = result.final_instructions || {};
-  const finalSections = [
-    ['최종 영상 흐름', 'final_flow'], ['최종 문장 배치 순서', 'final_sentence_order'],
-    ['삭제할 문장', 'delete_sentences'], ['축약할 문장', 'condense_sentences'],
-    ['이동할 문장 묶음', 'move_sentence_groups'], ['중복 내용 선택 결과', 'duplicate_decisions'],
-    ['B-roll·제품 화면 추천 위치', 'broll_positions'], ['강조 자막 추천', 'caption_emphasis'],
-    ['연결 멘트가 필요한 위치', 'connection_lines_needed'], ['반드시 유지할 핵심 발언', 'must_keep_statements'],
-    ['영상 화면을 직접 확인해야 하는 항목', 'screen_review_required'],
-  ];
-  document.getElementById('tg-final-instructions').innerHTML = finalSections.map(([label, key]) => `<section class="edit-flow-final-section"><h4>${label}</h4>${transcriptGuideListHtml(final[key])}</section>`).join('') +
-    `<section class="edit-flow-final-section"><h4>예상 최종 영상 길이</h4><span>${formatEditFlowDuration(final.expected_duration_seconds || result.recommended_duration_seconds)}</span></section>`;
   document.getElementById('tg-employee-guide-text').textContent = version.employee_guide_text || '';
 
   const sentences = project.sentences || [];
@@ -3264,23 +3253,21 @@ async function copyTranscriptGuide() {
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
-    document.getElementById('tg-revision-status').textContent = '직원용 편집 가이드 전체를 복사했습니다.';
+    document.getElementById('tg-revision-status').textContent = 'Vrew 편집 가이드를 복사했습니다.';
   } catch (error) {
     document.getElementById('tg-revision-status').textContent = '복사하지 못했습니다.';
   }
 }
 
 async function copyVrewPrompt() {
-  if (!currentTranscriptGuideProjectId) return;
+  const text = document.getElementById('tg-employee-guide-text')?.textContent || '';
   const status = document.getElementById('tg-revision-status');
-  const version = currentTranscriptGuideVersion ? `?version=${Number(currentTranscriptGuideVersion)}` : '';
+  if (!text) return;
   try {
-    const response = await fetch(`/api/transcript-edit-guides/projects/${Number(currentTranscriptGuideProjectId)}/download/vrew${version}`);
-    if (!response.ok) throw new Error('failed');
-    await navigator.clipboard.writeText(await response.text());
-    if (status) status.textContent = 'Vrew 지시문을 복사했습니다. Vrew 에이전트 입력창에 그대로 붙여넣으세요 (삭제·순서·자막다듬기 한 번에).';
+    await navigator.clipboard.writeText(text);
+    if (status) status.textContent = 'Vrew 편집 가이드를 복사했습니다. Vrew 에이전트 입력창에 그대로 붙여넣으세요.';
   } catch (error) {
-    if (status) status.textContent = 'Vrew 지시문을 복사하지 못했습니다.';
+    if (status) status.textContent = 'Vrew 편집 가이드를 복사하지 못했습니다.';
   }
 }
 

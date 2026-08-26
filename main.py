@@ -64,7 +64,6 @@ from worksheet_ai_service import WorksheetAIService
 from video_feedback_jobs import VideoFeedbackJobManager
 from plain_transcript_edit import render_csv as render_transcript_edit_csv
 from plain_transcript_edit import render_markdown as render_transcript_edit_markdown
-from plain_transcript_edit import render_plain_text as render_transcript_edit_text
 from plain_transcript_edit import render_vrew_prompt as render_transcript_edit_vrew
 from plain_transcript_edit_jobs import HISTORY_TYPE as TRANSCRIPT_EDIT_GUIDE_HISTORY_TYPE
 from plain_transcript_edit_jobs import PROJECT_MODE as TRANSCRIPT_EDIT_GUIDE_MODE
@@ -978,9 +977,8 @@ async def download_plain_transcript_edit_project(
     version_number = int(selected.get("version") or 0)
     if kind == "markdown":
         content, media_type, suffix = render_transcript_edit_markdown(project.get("_project") or {}, selected), "text/markdown; charset=utf-8", "md"
-    elif kind == "txt":
-        content, media_type, suffix = render_transcript_edit_text(project, selected), "text/plain; charset=utf-8", "txt"
-    elif kind == "vrew":
+    elif kind in ("txt", "vrew"):
+        # 편집자에게 넘기는 문서는 Vrew 에이전트 가이드 하나로 통일했다.
         content, media_type, suffix = render_transcript_edit_vrew(project, selected), "text/plain; charset=utf-8", "txt"
     elif kind == "csv":
         content, media_type, suffix = render_transcript_edit_csv(selected.get("result") or {}), "text/csv; charset=utf-8", "csv"

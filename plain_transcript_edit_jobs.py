@@ -20,7 +20,7 @@ from plain_transcript_edit import (
     split_sentences,
     transcript_hash,
     validate_result,
-    render_plain_text,
+    render_vrew_prompt,
 )
 from strategy_brain.contracts import EvidenceEnvelope
 from strategy_brain.retrieval import StrategyRetrieval
@@ -505,7 +505,7 @@ class PlainTranscriptEditJobManager:
             "expected_duration_seconds": result.get("recommended_duration_seconds"),
             "created_at": now,
         }
-        version["employee_guide_text"] = render_plain_text(
+        version["employee_guide_text"] = render_vrew_prompt(
             {"_project": project_metadata, "sentences": sentences}, version,
         )
         project_metadata.update({
@@ -576,7 +576,7 @@ class PlainTranscriptEditJobManager:
             "expected_duration_seconds": result.get("recommended_duration_seconds"),
             "created_at": utc_now(),
         }
-        version["employee_guide_text"] = render_plain_text(project, version)
+        version["employee_guide_text"] = render_vrew_prompt(project, version)
         versions.append(version)
         project["versions"] = versions
         project["current_result"] = result
