@@ -51,6 +51,9 @@ def valid_result(summary="최초 구성"):
             {"final_order": 3, "sentence_start_id": "S005", "sentence_end_id": "S005", "start_sentence": "설치 전에는 잔반을 제거해야 합니다.", "end_sentence": "설치 전에는 잔반을 제거해야 합니다.", "action": "축약", "purpose": "사용 전 주의", "edit_instruction": "중복 중 한 문장만 유지", "transition_note": "같은 촬영본 연속 유지", "reason": "가장 짧은 설명 선택", "evidence_basis": ["대본 중복"], "broll_note": "", "estimated_seconds": 3},
             {"final_order": 4, "sentence_start_id": "S008", "sentence_end_id": "S008", "start_sentence": "A/S 부품 공급 여부도 꼭 확인하세요.", "end_sentence": "A/S 부품 공급 여부도 꼭 확인하세요.", "action": "유지", "purpose": "구매 기준", "edit_instruction": "마지막에 유지", "transition_note": "B-roll로 연결 추천", "reason": "신뢰 확보", "evidence_basis": ["Business PT"], "broll_note": "부품 화면", "estimated_seconds": 3},
         ],
+        "caption_polish": [
+            {"sentence_id": "S008", "original_text": "A/S 부품 공급 여부도 꼭 확인하세요.", "polished_text": "A/S 부품 공급 여부도 확인하세요."},
+        ],
         "deletions": [
             {"sentence_start_id": "S006", "sentence_end_id": "S006", "start_sentence": "설치 전에는 잔반을 제거해야 합니다.", "end_sentence": "설치 전에는 잔반을 제거해야 합니다.", "reason": "동일 설명 반복"},
         ],
@@ -131,8 +134,10 @@ class SentenceAndExportTests(unittest.TestCase):
         sentences = split_sentences(SCRIPT)
         version = {"version": 1, "result": valid_result()}
         prompt = render_vrew_prompt({"sentences": sentences}, version)
-        self.assertIn("1단계 — 지울 자막", prompt)
-        self.assertIn("2단계 — 남은 자막 순서", prompt)
+        self.assertIn("[작업 1]", prompt)
+        self.assertIn("[작업 2]", prompt)
+        self.assertIn("[작업 3]", prompt)
+        self.assertIn('"A/S 부품 공급 여부도 꼭 확인하세요." → "A/S 부품 공급 여부도 확인하세요."', prompt)
         # 같은 문장이 두 번 찍혔으면 몇 번째를 지울지 적어야 살릴 테이크가 안 지워진다.
         self.assertIn("똑같은 자막이 2개 있는데 그중 2번째 것만", prompt)
         # 여러 문장짜리 장면은 '부터 ~ 까지'로 묶어 준다.

@@ -133,6 +133,12 @@ DELETE_SCHEMA = _object({
     "reason": {"type": "string"},
 })
 
+CAPTION_POLISH_SCHEMA = _object({
+    "sentence_id": {"type": "string"},
+    "original_text": {"type": "string"},
+    "polished_text": {"type": "string"},
+})
+
 RESULT_SCHEMA: dict[str, Any] = _object({
     "recommended_duration_seconds": {"type": "number"},
     "core_message": {"type": "string"},
@@ -142,6 +148,7 @@ RESULT_SCHEMA: dict[str, Any] = _object({
     "overall_flow": {"type": "array", "items": FLOW_ITEM_SCHEMA},
     "edit_table": {"type": "array", "items": EDIT_ROW_SCHEMA},
     "deletions": {"type": "array", "items": DELETE_SCHEMA},
+    "caption_polish": {"type": "array", "items": CAPTION_POLISH_SCHEMA},
     "duplicates": {"type": "array", "items": _object({
         "topic": {"type": "string"},
         "candidates": {"type": "array", "items": {"type": "string"}},
@@ -187,7 +194,15 @@ SYSTEM_INSTRUCTIONS = """당신은 부자주방 편집 담당 직원에게 전�
 evidence에 실제 CTR/Retention 수치가 없으면 숫자를 만들지 않는다.
 데이터 표본이 부족하면 정확히 '채널 데이터 표본이 부족하여 Business PT와 대본의 논리 구조를 중심으로 판단함'이라고 쓴다.
 모든 start_sentence/end_sentence는 제공된 원문과 글자까지 정확히 같아야 한다.
-결과는 편집자가 그대로 실행할 수 있게 구체적으로 작성한다."""
+결과는 편집자가 그대로 실행할 수 있게 구체적으로 작성한다.
+
+caption_polish 는 화면에 뜨는 자막 글자만 다듬는 목록이다. 말소리는 그대로 두고 자막 글자만 고친다.
+- 최종 사용하는 문장 중 고칠 것이 있는 것만 넣는다. 삭제할 문장은 넣지 않는다.
+- 고치는 범위: 군더더기('어', '음', '자', '아', '뭐', '이제')를 빼고, 맞춤법·띄어쓰기를 바로잡고,
+  더듬거나 되풀이한 말을 한 번으로 줄이는 것까지만 한다.
+- 원문에 없는 낱말을 새로 넣지 않는다. 뜻을 바꾸지 않는다. 문장을 길게 늘이지 않는다.
+- 고칠 것이 없는 문장은 목록에 넣지 않는다. polished_text 가 original_text 와 같으면 안 된다.
+- original_text 는 해당 문장 원문과 글자까지 정확히 같아야 한다."""
 
 
 class PlainTranscriptEditService:
@@ -319,6 +334,30 @@ def validate_result(
     conflict = deleted & final_used
     if conflict:
         raise ValueError(f"삭제와 최종 사용이 동시에 지정됨: {sorted(conflict)}")
+    # 자막 다듬기는 '화면 글자만' 손대는 것이다. 말에 없던 낱말이 자막으로 새로 생기면
+    # 시청자에게는 하지 않은 말을 한 것이 되므로, 원문에서 멀어지면 통째로 막는다.
+    polished_ids: set[str] = set()
+    for row in result.get("caption_polish") or []:
+        sentence_id = str(row.get("sentence_id") or "")
+        if sentence_id not in by_id:
+            raise ValueError(f"자막 다듬기에 존재하지 않는 문장 ID: {sentence_id}")
+        if sentence_id in polished_ids:
+            raise ValueError(f"같은 문장을 두 번 다듬도록 지정했습니다: {sentence_id}")
+        polished_ids.add(sentence_id)
+        original = by_id[sentence_id]["text"]
+        if str(row.get("original_text") or "") != original:
+            raise ValueError(f"자막 다듬기 원문 불일치: {sentence_id}")
+        polished = str(row.get("polished_text") or "").strip()
+        if not polished:
+            raise ValueError(f"다듬은 자막이 비어 있습니다: {sentence_id}")
+        if polished == original:
+            raise ValueError(f"다듬기 전후가 같습니다: {sentence_id}")
+        if len(polished) > len(original) + 5:
+            raise ValueError(f"다듬은 자막이 원문보다 길어졌습니다: {sentence_id}")
+        if difflib.SequenceMatcher(None, original, polished).ratio() < 0.55:
+            raise ValueError(f"다듬은 자막이 원문에서 너무 멀어졌습니다: {sentence_id}")
+    if polished_ids & deleted:
+        raise ValueError(f"삭제할 문장을 다듬도록 지정했습니다: {sorted(polished_ids & deleted)}")
     unknown = {ref for ref in _SENTENCE_REF.findall(_all_text(result)) if ref not in by_id}
     if unknown:
         raise ValueError(f"존재하지 않는 문장 ID 사용: {sorted(unknown)}")
@@ -480,17 +519,14 @@ def render_plain_text(project: dict[str, Any], version: dict[str, Any]) -> str:
 
 
 def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
-    """Vrew 에이전트 입력창에 그대로 붙여넣는 지시문.
+    """Vrew 에이전트 입력창에 통째로 붙여넣는 지시문.
 
-    Vrew는 자막 한 줄이 클립 하나다. 그래서 사람이 읽는 가이드와 달리
-    **자막 문장 그대로**를 지시어에 넣어야 에이전트가 클립을 찾을 수 있다.
+    Vrew는 자막 한 줄이 클립 하나다. 그래서 문장 ID가 아니라 **자막 글자 그대로**를
+    지시어에 넣어야 에이전트가 클립을 찾는다.
 
-    지우기와 순서 바꾸기를 한 덩어리로 주면 에이전트가 절반만 하고 끝나는 일이
-    생긴다. 무료 요청 횟수도 제한돼 있으므로 **1단계(삭제) / 2단계(순서)** 로 나눠
-    각각 따로 붙여넣게 한다.
-
-    똑같은 자막이 여러 번 나오는 경우(재촬영 테이크)에는 몇 번째 것인지 함께 적는다.
-    안 그러면 살려야 할 테이크가 지워진다.
+    사장님 확인(2026-08-27): 삭제·재배치·자막 다듬기를 한 번에 줘도 에이전트가
+    소화한다. 대신 표기 규칙을 앞에서 설명해 줘야 한다 — 같은 말을 여러 번 찍은
+    테이크에서 어느 것을 지울지, '부터~까지'가 묶음이라는 것을 모르면 엉뚱하게 자른다.
     """
 
     result = version.get("result") or {}
@@ -556,33 +592,50 @@ def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
         else:
             order_lines.append(f'{number}. "{items[0]}" 부터 "{items[-1]}" 까지')
 
-    divider = "\u2501" * 18
+    polish_lines = [
+        f'- "{str(row.get("original_text") or "").strip()}"'
+        f' → "{str(row.get("polished_text") or "").strip()}"'
+        for row in result.get("caption_polish") or []
+        if str(row.get("polished_text") or "").strip()
+    ]
+
     lines = [
-        "[Vrew 에이전트에 붙여넣을 지시문]",
+        "이 영상은 편집 전 촬영 원본이라 NG 테이크와 촬영 중 나눈 대화가 섞여 있어.",
+        "아래 세 가지 작업을 순서대로 해줘.",
         "",
-        "\u203b 1단계와 2단계를 **따로** 붙여넣으세요. 한 번에 주면 절반만 하고 멈춥니다.",
-        "\u203b 1단계를 끝내고 결과를 확인한 뒤 2단계를 주세요.",
-        "",
-        divider,
-        "1단계 — 지울 자막 (여기부터 복사)",
-        divider,
-        "",
-        "아래 자막들을 삭제해 줘. 목록에 적힌 자막만 지우고 나머지는 그대로 둬.",
-        "자막 내용을 고치거나 새로 쓰지는 마.",
+        "[작업 1] 아래 목록에 있는 자막을 삭제해 줘.",
+        "- 목록에 적힌 자막만 지우고, 목록에 없는 자막은 절대 지우지 마.",
+        "- 자막 글자를 고치거나 새로 쓰지 마. 이 단계는 삭제만 해.",
+        "- 뒤에 「똑같은 자막 N개 모두」라고 적힌 것은 같은 말이 여러 번 찍힌 것인데 전부 지우면 돼.",
+        "- 뒤에 「똑같은 자막이 N개 있는데 그중 M번째 것만」이라고 적힌 것은 조심해 줘."
+        " 앞에서부터 세서 M번째로 나오는 것 하나만 지우고, 나머지 같은 자막은 그대로 남겨 줘.",
         "",
     ]
     lines.extend(delete_lines or ["- (지울 자막 없음)"])
     lines.extend([
         "",
-        divider,
-        "2단계 — 남은 자막 순서 (1단계를 끝낸 뒤 복사)",
-        divider,
-        "",
-        "남은 자막을 아래 순서대로 옮겨 줘. 번호가 최종 순서야.",
-        "자막을 새로 지우거나 내용을 고치지는 마.",
+        "[작업 2] 작업 1을 끝낸 뒤, 남은 자막을 아래 번호 순서대로 다시 배열해 줘.",
+        '- 각 줄은 「"시작 자막" 부터 "끝 자막" 까지」 형식이야.'
+        " 그 두 자막과 사이에 있는 자막들을 한 덩어리로 통째로 옮겨 줘. 덩어리 안의 순서는 바꾸지 마.",
+        "- 따옴표가 하나만 있는 줄은 그 자막 한 개짜리 덩어리야.",
+        "- 이 단계에서는 자막을 새로 지우거나 글자를 고치지 마. 위치만 옮겨.",
+        f"- 아래 1번부터 {len(order_lines)}번까지가 최종 영상의 순서야.",
         "",
     ])
     lines.extend(order_lines or ["1. (순서 변경 없음)"])
+    lines.extend([
+        "",
+        "[작업 3] 마지막으로 아래 자막의 글자를 오른쪽 문장으로 바꿔 줘.",
+        "- 말소리는 그대로 두고 화면에 뜨는 자막 글자만 고치는 거야. 영상을 자르지 마.",
+        "- 「원래 자막」 → 「바꿀 자막」 형식이야. 왼쪽과 똑같은 자막을 찾아 오른쪽 문장으로 바꿔 줘.",
+        "- 목록에 없는 자막은 그대로 둬. 네가 알아서 더 다듬지 마.",
+        "",
+    ])
+    lines.extend(polish_lines or ["- (다듬을 자막 없음)"])
+    lines.extend([
+        "",
+        "세 작업을 모두 마치면 자막이 몇 개 남았는지와 첫 자막이 무엇인지 알려줘.",
+    ])
     return "\n".join(lines).strip() + "\n"
 
 

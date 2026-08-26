@@ -3278,7 +3278,7 @@ async function copyVrewPrompt() {
     const response = await fetch(`/api/transcript-edit-guides/projects/${Number(currentTranscriptGuideProjectId)}/download/vrew${version}`);
     if (!response.ok) throw new Error('failed');
     await navigator.clipboard.writeText(await response.text());
-    if (status) status.textContent = 'Vrew 지시문을 복사했습니다. 1단계부터 붙여넣으세요 (1·2단계를 따로).';
+    if (status) status.textContent = 'Vrew 지시문을 복사했습니다. Vrew 에이전트 입력창에 그대로 붙여넣으세요 (삭제·순서·자막다듬기 한 번에).';
   } catch (error) {
     if (status) status.textContent = 'Vrew 지시문을 복사하지 못했습니다.';
   }
