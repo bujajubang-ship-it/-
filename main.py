@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -70,6 +70,8 @@ from plain_transcript_edit_jobs import PROJECT_MODE as TRANSCRIPT_EDIT_GUIDE_MOD
 from plain_transcript_edit_jobs import PlainTranscriptEditJobManager
 from heatmap_service import fetch_heatmap, summarize_for_prompt
 from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
+import guest_mode
+from plan_feedback import PlanFeedbackService, validate_feedback
 from database import (init_db, save_history, list_history, get_history, delete_history,
                        init_pipeline, list_pipeline, create_pipeline_item,
                        update_pipeline_item, delete_pipeline_item)
@@ -167,6 +169,64 @@ async def app_lifespan(_app: FastAPI):
 app = FastAPI(title="YouTube Content Researcher", lifespan=app_lifespan)
 OWNER_AUTH = OwnerAuthenticator(OwnerAuthSettings.from_env())
 app.add_middleware(OwnerAuthMiddleware, authenticator=OWNER_AUTH)
+
+
+@app.middleware("http")
+async def block_hidden_features(request: Request, call_next):
+    """친구 사이트에서는 열어 준 기능 말고는 서버가 막는다.
+
+    화면에서 탭을 숨기는 것만으로는 주소를 직접 치면 그대로 열린다.
+    """
+    if guest_mode.is_guest() and not guest_mode.path_allowed(request.url.path):
+        return JSONResponse({"error": guest_mode.hidden_notice()}, status_code=404)
+    return await call_next(request)
+
+
+@app.get("/api/site-mode")
+async def site_mode():
+    return {"guest": guest_mode.is_guest(), "tabs": list(guest_mode.GUEST_TABS)}
+
+
+PLAN_FEEDBACK = PlanFeedbackService()
+
+
+class PlanFeedbackRequest(BaseModel):
+    keyword: str = ""
+    plan: str
+
+
+@app.post("/api/plan-feedback")
+async def plan_feedback(req: PlanFeedbackRequest):
+    """촬영 전 기획안을 검사한다. 사장님 채널 수치는 쓰지 않는다."""
+    plan = (req.plan or "").strip()
+    if len(plan) < 20:
+        return JSONResponse({"error": "기획 내용을 조금 더 자세히 적어 주세요."}, status_code=400)
+    try:
+        principles = _general_principles(req.keyword or plan[:40])
+    except Exception:
+        principles = []
+    try:
+        result = await PLAN_FEEDBACK.review(
+            keyword=req.keyword or "", plan_text=plan, principles=principles,
+        )
+        return validate_feedback(result)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    except Exception as exc:
+        return JSONResponse({"error": f"기획 피드백을 만들지 못했습니다: {exc}"}, status_code=502)
+
+
+def _general_principles(query: str) -> list[dict[str, Any]]:
+    """지식에 저장해 둔 '일반 영상 제작 원칙'만 가져온다.
+
+    부자주방에 특화된 항목(비즈니스 PT·상품·매장)은 친구에게 줄 것이 아니다.
+    친구 사이트 DB에는 애초에 일반 원칙만 넣어 두므로 여기서는 그대로 읽어 온다.
+    """
+    from strategy_brain.retrieval import StrategyRetrieval
+    envelope = StrategyRetrieval().search_knowledge({"query": query, "limit": 8})
+    data = getattr(envelope, "data", None) or {}
+    rows = data.get("items") if isinstance(data, dict) else None
+    return list(rows or [])
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -4593,6 +4653,11 @@ async def worksheet_autofill(request: Request):
 
 @app.get("/")
 async def root():
-    return FileResponse("static/index.html", headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+    headers = {"Cache-Control": "no-store, no-cache, must-revalidate"}
+    if guest_mode.is_guest():
+        # 친구 화면은 열어 준 기능만 남겨 내려보낸다. 감추기만 하면 소스에 그대로 남는다.
+        html = guest_mode.filter_html(Path("static/index.html").read_text(encoding="utf-8"))
+        return HTMLResponse(html, headers=headers)
+    return FileResponse("static/index.html", headers=headers)
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

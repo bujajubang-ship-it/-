@@ -26,6 +26,7 @@
         <button class="tab-btn tab-btn-trend" id="tab-topic" onclick="switchTab('topic')">주제 추천</button>
         <button class="tab-btn tab-btn-trend" id="tab-jjachi" onclick="switchTab('jjachi')">🔥 짜치는 기획</button>
         <button class="tab-btn" id="tab-edit" onclick="switchTab('edit')">편집 피드백</button>
+        <button class="tab-btn" id="tab-plan-feedback" onclick="switchTab('plan-feedback')">📋 기획 피드백</button>
         <button class="tab-btn tab-btn-transcript-guide" id="tab-transcript-guide" onclick="switchTab('transcript-guide')">📝 자막 편집 가이드</button>
         <button class="tab-btn" id="tab-channel" onclick="switchTab('channel')">채널 분석</button>
         <button class="tab-btn" id="tab-sns" onclick="switchTab('sns')">📣 SNS 변환</button>
@@ -465,6 +466,59 @@
           </div>
         </div>
         <div id="jjachi-report-body"></div>
+      </section>
+    </div>
+
+
+    <!-- ===== 📋 기획 피드백 탭 ===== -->
+    <div id="pane-plan-feedback" class="hidden">
+      <section class="search-section">
+        <div class="search-card edit-card">
+          <h1>찍기 전에 기획부터 검사받으세요</h1>
+          <p class="search-desc">촬영을 망치면 편집으로 못 살립니다.<br>기획안을 붙여넣으면 100점 만점으로 점수를 매기고 어디를 어떻게 고칠지 알려드립니다.</p>
+          <div class="edit-inputs">
+            <div class="edit-keyword-row">
+              <input type="text" id="plan-keyword-input" placeholder="영상 주제 키워드 (예: 자취방 정리)" autocomplete="off" />
+            </div>
+            <textarea id="plan-input" rows="12" placeholder="기획한 내용을 붙여넣으세요&#10;&#10;예시:&#10;- 주제: 원룸 주방 좁을 때 쓰는 수납&#10;- 이런 사람에게: 자취 시작한 사회초년생&#10;- 도입: 좁은 주방 보여주고 시작&#10;- 본론: 제품 3개 소개&#10;- 마무리: 구매 링크 안내"></textarea>
+            <button id="plan-analyze-btn" onclick="startPlanFeedback()">기획 피드백 받기</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="progress-section hidden" id="plan-progress-section">
+        <div class="progress-card">
+          <div class="progress-spinner"></div>
+          <div class="progress-steps">기획을 읽고 있습니다. 1~2분 걸립니다.</div>
+        </div>
+      </section>
+
+      <section class="hidden" id="plan-result-section">
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🎯</span> 총점</div>
+          <div id="plan-total"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-icon">📊</span> 항목별 점수</div>
+          <div id="plan-scores" class="edit-flow-final-grid"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🔧</span> 고칠 점 (급한 순서)</div>
+          <div id="plan-fixes"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-icon">🎬</span> 첫 15초에 할 말</div>
+          <pre id="plan-opening" class="tg-employee-guide-text"></pre>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-icon">✏️</span> 제목 후보</div>
+          <div id="plan-titles"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-icon">📷</span> 촬영장 체크리스트</div>
+          <div id="plan-checklist"></div>
+        </div>
+        <p class="report-subtitle" id="plan-basis"></p>
       </section>
     </div>
 

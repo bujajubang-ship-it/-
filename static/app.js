@@ -7222,3 +7222,86 @@ function ysRenderReport(r) {
       <ul class="ys-list">${li(r.avoid)}</ul>
     </div>`;
 }
+
+// ── 📋 기획 피드백 ────────────────────────────────────────────────
+// 촬영 전에 기획을 검사한다. 편집 피드백과 달리 대본이 아니라 기획안을 받는다.
+async function startPlanFeedback() {
+  const plan = document.getElementById('plan-input')?.value?.trim() || '';
+  const keyword = document.getElementById('plan-keyword-input')?.value?.trim() || '';
+  if (plan.length < 20) {
+    alert('기획 내용을 조금 더 자세히 적어 주세요.');
+    return;
+  }
+  const button = document.getElementById('plan-analyze-btn');
+  const progress = document.getElementById('plan-progress-section');
+  const result = document.getElementById('plan-result-section');
+  button.disabled = true;
+  progress.classList.remove('hidden');
+  result.classList.add('hidden');
+  try {
+    const response = await fetch('/api/plan-feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keyword, plan }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '기획 피드백을 받지 못했습니다.');
+    renderPlanFeedback(data);
+    result.classList.remove('hidden');
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+    progress.classList.add('hidden');
+  }
+}
+
+function renderPlanFeedback(data) {
+  const total = Number(data.total_score || 0);
+  // 60점 미만이면 이대로 찍지 말라는 뜻이다. 색으로 바로 보이게 한다.
+  const tone = total >= 80 ? '#1a7f37' : total >= 60 ? '#b26a00' : '#c62828';
+  document.getElementById('plan-total').innerHTML =
+    `<div style="font-size:34px;font-weight:700;color:${tone}">${total}점 <span style="font-size:15px;font-weight:500">/ 100</span></div>` +
+    `<p>${escHtml(data.one_line || '')}</p>` +
+    (total < 60 ? '<p style="color:#c62828;font-weight:600">이대로 찍지 마세요. 아래 고칠 점을 먼저 반영하세요.</p>' : '') +
+    `<p><b>가장 큰 문제</b><br>${escHtml(data.biggest_problem || '')}</p>`;
+
+  document.getElementById('plan-scores').innerHTML = (data.scores || []).map(row =>
+    `<section class="edit-flow-final-section"><h4>${escHtml(row.name || '')} — ${Number(row.score || 0)}/20</h4>` +
+    `<b>${escHtml(row.verdict || '')}</b><br><small>${escHtml(row.why || '')}</small></section>`).join('');
+
+  document.getElementById('plan-fixes').innerHTML = (data.fixes || [])
+    .slice().sort((a, b) => Number(a.priority || 0) - Number(b.priority || 0))
+    .map(row => `<div class="edit-flow-list-item"><b>${Number(row.priority || 0)}. ${escHtml(row.problem || '')}</b>` +
+      `<br>${escHtml(row.fix || '')}` +
+      (row.example ? `<br><small>예시: ${escHtml(row.example)}</small>` : '') + '</div>').join('');
+
+  document.getElementById('plan-opening').textContent = data.opening_15s || '';
+  document.getElementById('plan-titles').innerHTML = (data.title_ideas || [])
+    .map(title => `<div class="edit-flow-list-item">${escHtml(title)}</div>`).join('');
+  document.getElementById('plan-checklist').innerHTML = (data.shoot_checklist || [])
+    .map(item => `<div class="edit-flow-list-item">${escHtml(item)}</div>`).join('');
+  document.getElementById('plan-basis').textContent = data.basis_note || '';
+}
+
+// ── 친구용 사이트: 열어 준 탭만 남긴다 ─────────────────────────────
+// 화면에서 감추는 것은 보기 좋으라고 하는 것이고, 실제 차단은 서버가 한다.
+async function applySiteMode() {
+  try {
+    const response = await fetch('/api/site-mode');
+    if (!response.ok) return;
+    const mode = await response.json();
+    if (!mode.guest) return;
+    const allowed = new Set(mode.tabs || []);
+    document.querySelectorAll('.tab-nav .tab-btn').forEach(button => {
+      const name = (button.id || '').replace(/^tab-/, '');
+      if (!allowed.has(name)) button.remove();
+    });
+    const first = document.querySelector('.tab-nav .tab-btn');
+    if (first) switchTab((first.id || '').replace(/^tab-/, ''));
+  } catch (error) {
+    /* 사이트 모드를 못 읽으면 화면은 그대로 둔다 */
+  }
+}
+
+document.addEventListener('DOMContentLoaded', applySiteMode);
