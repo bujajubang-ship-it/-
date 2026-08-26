@@ -225,15 +225,16 @@ async def plan_feedback(req: PlanFeedbackRequest):
 
 
 def _general_principles(query: str) -> list[dict[str, Any]]:
-    """지식에 저장해 둔 '일반 영상 제작 원칙'만 가져온다.
+    """기획을 판단할 때 근거로 쓸 지식을 가져온다.
 
-    부자주방에 특화된 항목(비즈니스 PT·상품·매장)은 친구에게 줄 것이 아니다.
-    친구 사이트 DB에는 애초에 일반 원칙만 넣어 두므로 여기서는 그대로 읽어 온다.
+    사장님이 쌓아 둔 지식(Low Data 판단 규칙, 영상 구성 원칙 등)을 그대로 쓴다.
+    친구는 지식 탭 자체를 못 열지만, 조언의 근거로는 이 지식이 쓰인다.
     """
     from strategy_brain.retrieval import StrategyRetrieval
     envelope = StrategyRetrieval().search_knowledge({"query": query, "limit": 8})
-    data = getattr(envelope, "data", None) or {}
-    rows = data.get("items") if isinstance(data, dict) else None
+    rows = getattr(envelope, "data", None)
+    if isinstance(rows, dict):          # 담는 모양이 바뀌어도 견디게 둘 다 받는다
+        rows = rows.get("items")
     return list(rows or [])
 
 

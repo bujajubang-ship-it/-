@@ -128,3 +128,26 @@ class TwoAccountTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KnowledgeReachesPlanFeedbackTests(unittest.TestCase):
+    """기획 피드백이 사장님 지식을 실제로 근거로 받는지 본다.
+
+    한 번 비어서 나간 적이 있다 — 조회 결과가 목록인데 사전으로 읽어 늘 빈 손이었다.
+    """
+
+    def test_saved_knowledge_is_handed_to_the_reviewer(self):
+        from database import create_knowledge, delete_knowledge
+        import main
+
+        knowledge_id = create_knowledge(
+            "Low Data 판단 규칙", "영상 원칙",
+            "표본이 부족할 때 숫자를 지어내지 않는다",
+            "채널 데이터 표본이 적으면 수치를 근거로 들지 말고 구성 논리로 판단한다.",
+        )
+        try:
+            rows = main._general_principles("low data 판단")
+            self.assertTrue(rows, "지식이 기획 피드백으로 넘어가지 않았습니다.")
+            self.assertTrue(any("Low Data" in str(row.get("title") or "") for row in rows))
+        finally:
+            delete_knowledge(knowledge_id)
