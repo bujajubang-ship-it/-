@@ -22,7 +22,8 @@ class EditFeedbackProjectTests(unittest.TestCase):
         self.assertIn("loadEditFeedbackProjects()", frontend)
         self.assertIn("openEditFeedbackProject", frontend)
         self.assertIn("/api/edit-feedback/projects", frontend)
-        self.assertIn("startPlainTranscriptEditAnalysis", frontend)
+        self.assertNotIn("startPlainTranscriptEditAnalysis", frontend)
+        self.assertIn("startTranscriptGuideAnalysis", frontend)
 
     def test_project_metadata_preserves_inputs_and_report(self):
         request = main.EditFeedbackRequest(
@@ -55,6 +56,14 @@ class EditFeedbackProjectTests(unittest.TestCase):
         self.assertEqual(response.json()[0]["title"], "가스레인지")
         self.assertEqual(response.json()[0]["mode"], "legacy_edit_feedback")
         mocked.assert_called_once_with("edit", limit=200)
+
+    def test_edit_project_list_hides_old_embedded_transcript_mode(self):
+        rows = [{"id": 13, "type": "edit", "keyword": "과거 흐름", "created_at": "2026-08-25"}]
+        full = {**rows[0], "report": {"_project": {"mode": "plain_transcript_flow"}}}
+        with patch.object(main, "list_history", return_value=rows), patch.object(main, "get_history", return_value=full):
+            response = self.client.get("/api/edit-feedback/projects")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
 
 
 if __name__ == "__main__":

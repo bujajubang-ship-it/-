@@ -20,6 +20,7 @@ from plain_transcript_edit import (
     split_sentences,
     transcript_hash,
     validate_result,
+    render_plain_text,
 )
 from strategy_brain.contracts import EvidenceEnvelope
 from strategy_brain.retrieval import StrategyRetrieval
@@ -27,6 +28,8 @@ from strategy_brain.retrieval import StrategyRetrieval
 
 ACTIVE_STATUSES = frozenset({"queued", "processing"})
 TERMINAL_STATUSES = frozenset({"done", "failed"})
+HISTORY_TYPE = "transcript_edit_guide"
+PROJECT_MODE = "transcript_edit_guide"
 
 
 def utc_now() -> str:
@@ -487,6 +490,14 @@ class PlainTranscriptEditJobManager:
             retention_data_available=retention_evidence_available(evidence),
         )
         now = utc_now()
+        project_metadata = {
+            "schema_version": 1, "mode": PROJECT_MODE,
+            "title": request.get("title"), "topic": request.get("topic"),
+            "target_duration_seconds": request.get("target_duration_seconds"),
+            "purpose": request.get("purpose"), "additional_request": request.get("additional_request"),
+            "script": request.get("script"), "transcript_hash": transcript_hash(str(request.get("script") or "")),
+            "current_version": 1,
+        }
         version = {
             "version": 1, "result": result, "user_request": "",
             "revision_summary": result.get("revision_summary") or "최초 전체 대본 분석",
@@ -494,22 +505,21 @@ class PlainTranscriptEditJobManager:
             "expected_duration_seconds": result.get("recommended_duration_seconds"),
             "created_at": now,
         }
+        version["employee_guide_text"] = render_plain_text(
+            {"_project": project_metadata, "sentences": sentences}, version,
+        )
+        project_metadata.update({
+            "last_revision_summary": version["revision_summary"],
+            "analysis_elapsed_seconds": round(time.perf_counter() - started, 3),
+        })
         project = {
-            "_project": {
-                "schema_version": 1, "mode": "plain_transcript_flow",
-                "title": request.get("title"), "topic": request.get("topic"),
-                "target_duration_seconds": request.get("target_duration_seconds"),
-                "purpose": request.get("purpose"), "additional_request": request.get("additional_request"),
-                "script": request.get("script"), "transcript_hash": transcript_hash(str(request.get("script") or "")),
-                "current_version": 1, "last_revision_summary": version["revision_summary"],
-                "analysis_elapsed_seconds": round(time.perf_counter() - started, 3),
-            },
+            "_project": project_metadata,
             "sentences": sentences, "duplicate_candidates": checkpoint["duplicates"],
             "evidence_cache": evidence, "versions": [version], "current_result": result,
             "conversation": [],
         }
         history_id = await asyncio.to_thread(
-            self.history_writer, "edit", str(request.get("title") or request.get("topic") or "대본 편집")[:300], project,
+            self.history_writer, HISTORY_TYPE, str(request.get("title") or request.get("topic") or "자막 편집 가이드")[:300], project,
         )
         response = {"history_id": history_id, "version": 1, "project": project}
         self.store.update(
@@ -523,10 +533,10 @@ class PlainTranscriptEditJobManager:
         job_id, request = str(job["job_id"]), dict(job.get("request") or {})
         history_id = int(request.get("history_id") or 0)
         row = await asyncio.to_thread(self.history_reader, history_id)
-        if not row or row.get("type") != "edit":
+        if not row or row.get("type") != HISTORY_TYPE:
             raise ValueError("수정할 편집 프로젝트를 찾지 못했습니다.")
         project = dict(row.get("report") or {})
-        if (project.get("_project") or {}).get("mode") != "plain_transcript_flow":
+        if (project.get("_project") or {}).get("mode") != PROJECT_MODE:
             raise ValueError("대본 기반 영상 흐름 프로젝트가 아닙니다.")
         sentences = project.get("sentences") or []
         versions = list(project.get("versions") or [])
@@ -566,6 +576,7 @@ class PlainTranscriptEditJobManager:
             "expected_duration_seconds": result.get("recommended_duration_seconds"),
             "created_at": utc_now(),
         }
+        version["employee_guide_text"] = render_plain_text(project, version)
         versions.append(version)
         project["versions"] = versions
         project["current_result"] = result

@@ -192,7 +192,7 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .edit-projects-empty.error { color: var(--red); }
 .edit-card { max-width: 760px; }
 .edit-inputs { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
-#edit-legacy-inputs, #edit-flow-inputs { display: flex; flex-direction: column; gap: 12px; }
+#edit-legacy-inputs, #tg-inputs { display: flex; flex-direction: column; gap: 12px; }
 .edit-mode-switch { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 18px; border-radius: 10px; background: #f1f5f9; }
 .edit-mode-switch button { border: 0; border-radius: 8px; padding: 9px 13px; background: transparent; color: #64748b; font-weight: 700; cursor: pointer; }
 .edit-mode-switch button.active { background: #fff; color: var(--red); box-shadow: 0 1px 5px rgba(15,23,42,.12); }
@@ -227,12 +227,21 @@ body { font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; backgroun
 .edit-flow-final-section { border-top: 1px solid #eef2f7; padding: 12px 0; }
 .edit-flow-final-section h4 { margin: 0 0 7px; color: #334155; font-size: 13px; }
 .edit-flow-final-section ul { margin: 0; padding-left: 18px; color: #475569; font-size: 12px; line-height: 1.65; }
-.edit-flow-sentences-card summary, #edit-flow-report-section details.card > summary { padding: 16px 18px; cursor: pointer; font-weight: 700; color: #334155; }
+.edit-flow-sentences-card summary, #tg-report-section details.card > summary { padding: 16px 18px; cursor: pointer; font-weight: 700; color: #334155; }
 .edit-flow-sentence-list { max-height: 520px; overflow-y: auto; padding: 0 18px 16px; }
 .edit-flow-sentence-row { display: grid; grid-template-columns: 58px 1fr; gap: 10px; border-top: 1px solid #f1f5f9; padding: 9px 0; font-size: 12px; line-height: 1.55; }
 .edit-flow-sentence-row b { color: #7c3aed; }
-#edit-flow-evidence-list, #edit-flow-version-history { padding: 0 18px 14px; }
+#tg-evidence-list, #tg-version-history { padding: 0 18px 14px; }
 .edit-flow-revision-status { min-height: 20px; margin-top: 10px; color: #64748b; font-size: 12px; }
+.tab-btn-transcript-guide { color: #7c3aed !important; border: 1px solid #c4b5fd !important; }
+.tab-btn-transcript-guide.active { color: #fff !important; background: #7c3aed !important; }
+#tg-inputs > input, #tg-inputs textarea, .edit-flow-input-row input { width: 100%; padding: 14px 16px; border: 2px solid var(--border); border-radius: 12px; font: inherit; line-height: 1.55; outline: none; resize: vertical; }
+#tg-inputs > input:focus, #tg-inputs textarea:focus, .edit-flow-input-row input:focus { border-color: #8b5cf6; }
+#tg-analyze-btn { padding: 16px; background: #7c3aed; color: #fff; border: 0; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; }
+#tg-analyze-btn:disabled { opacity: .5; cursor: not-allowed; }
+.edit-flow-report-actions .tg-primary-copy { background: #7c3aed; border-color: #7c3aed; color: #fff; font-size: 13px; }
+.edit-flow-report-actions .tg-primary-copy:hover { background: #6d28d9; border-color: #6d28d9; color: #fff; }
+.tg-employee-guide-text { margin: 0; padding: 20px; max-height: 720px; overflow: auto; white-space: pre-wrap; word-break: keep-all; color: #1e293b; background: #fafafa; font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .edit-keyword-row input { width: 100%; padding: 14px 18px; border: 2px solid var(--border); border-radius: 12px; font-size: 15px; outline: none; transition: border-color .2s; }
 .edit-keyword-row input:focus { border-color: var(--red); }
 #edit-script-input { width: 100%; padding: 16px 18px; border: 2px solid var(--border); border-radius: 12px; font-size: 14px; line-height: 1.7; outline: none; resize: vertical; font-family: inherit; transition: border-color .2s; }

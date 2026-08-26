@@ -16,6 +16,7 @@ from plain_transcript_edit import (
     analyze_duplicates,
     render_csv,
     render_markdown,
+    render_plain_text,
     split_sentences,
     validate_result,
 )
@@ -114,6 +115,12 @@ class SentenceAndExportTests(unittest.TestCase):
         rows = list(csv.DictReader(io.StringIO(csv_text.lstrip("\ufeff"))))
         self.assertEqual(rows[0]["sentence_start_id"], "S007")
         self.assertEqual(rows[0]["action"], "이동")
+        plain_text = render_plain_text({"title": "주방 동선"}, version)
+        self.assertTrue(plain_text.startswith("[편집 담당자 전달용 최종본]"))
+        self.assertIn("[전체 흐름]", plain_text)
+        self.assertIn("[상세 편집 순서]", plain_text)
+        self.assertIn('시작 자막: "실사용자: 1년 동안 사용해보니 설거지 시간이 실제로 줄었습니다."', plain_text)
+        self.assertIn("[완전 삭제 추천]", plain_text)
 
     def test_thirty_minute_scale_transcript_keeps_stable_ids(self):
         long_script = "\n".join(
@@ -174,6 +181,7 @@ class BackgroundJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done["status"], "done")
         self.assertEqual(done["sentence_count"], 8)
         history_id = done["result"]["history_id"]
+        self.assertEqual(self.reader(history_id)["type"], "transcript_edit_guide")
         for message in ("실사용 후기를 더 앞에 둬.", "A/S는 마지막으로 보내."):
             revision = self.manager.enqueue_revision(history_id, message)
             self.assertTrue(await self.manager.process_once())
@@ -181,7 +189,9 @@ class BackgroundJobTests(unittest.IsolatedAsyncioTestCase):
         project = self.reader(history_id)["report"]
         self.assertEqual([row["version"] for row in project["versions"]], [1, 2, 3])
         self.assertEqual(project["_project"]["current_version"], 3)
+        self.assertEqual(project["_project"]["mode"], "transcript_edit_guide")
         self.assertEqual(len(project["conversation"]), 4)
+        self.assertIn("[상세 편집 순서]", project["versions"][-1]["employee_guide_text"])
         self.assertEqual(project["_project"]["transcript_hash"], initial["transcript_hash"])
 
     async def test_same_transcript_reuses_sentence_and_evidence_checkpoint(self):
@@ -214,16 +224,22 @@ class ApiAndUiTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
 
-    def test_page_has_flow_mode_progress_table_revision_and_exports(self):
-        response = self.client.get("/?tab=edit")
+    def test_page_has_independent_transcript_guide_tab_and_legacy_edit_is_unchanged(self):
+        response = self.client.get("/?tab=transcript-guide")
         self.assertEqual(response.status_code, 200)
         for element_id in (
-            "edit-mode-flow", "edit-flow-script-input", "edit-flow-live-status",
-            "edit-flow-table-body", "edit-flow-revision-input", "edit-flow-version-select",
+            "tab-transcript-guide", "pane-transcript-guide", "tg-script-input", "tg-live-status",
+            "tg-table-body", "tg-revision-input", "tg-version-select", "tg-employee-guide-text",
         ):
             self.assertIn(f'id="{element_id}"', response.text)
-        self.assertIn("downloadEditFlow('markdown')", response.text)
-        self.assertIn("downloadEditFlow('csv')", response.text)
+        self.assertIn("📋 직원용 편집 가이드 전체 복사", response.text)
+        self.assertIn("downloadTranscriptGuide('markdown')", response.text)
+        self.assertIn("downloadTranscriptGuide('txt')", response.text)
+        self.assertNotIn('id="edit-mode-flow"', response.text)
+        self.assertIn('id="edit-keyword-input"', response.text)
+        self.assertIn('onclick="startEditAnalysis()"', response.text)
+        edit_pane = response.text.split('id="pane-edit"', 1)[1].split('id="pane-transcript-guide"', 1)[0]
+        self.assertNotIn('id="tg-', edit_pane)
 
     def test_create_job_route_is_background_and_has_status_url(self):
         class FakeManager:
@@ -233,30 +249,54 @@ class ApiAndUiTests(unittest.TestCase):
                 return {"job_id": "a" * 32}
         manager = FakeManager()
         with patch.object(main, "PLAIN_TRANSCRIPT_EDIT_JOBS", manager):
-            response = self.client.post("/api/edit-feedback/flow-jobs", json={
+            response = self.client.post("/api/transcript-edit-guides/jobs", json={
                 "title": "동선", "topic": "좁은 주방", "script": SCRIPT,
                 "target_duration_seconds": 600, "purpose": "상담", "additional_request": "",
             })
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["job_id"], "a" * 32)
         self.assertEqual(manager.request["script"], SCRIPT)
+        self.assertEqual(
+            response.json()["status_url"],
+            "/api/transcript-edit-guides/jobs/" + "a" * 32,
+        )
+        self.assertEqual(self.client.post("/api/edit-feedback/flow-jobs", json={}).status_code, 405)
 
-    def test_markdown_and_csv_download_latest_or_selected_version(self):
+    def test_project_list_uses_dedicated_history_type(self):
+        summaries = [{"id": 21, "type": "transcript_edit_guide", "keyword": "동선", "created_at": "2026-08-26"}]
+        row = {
+            **summaries[0],
+            "report": {
+                "_project": {"mode": "transcript_edit_guide", "title": "동선", "topic": "좁은 주방", "current_version": 2},
+                "current_result": {"recommended_duration_seconds": 600},
+            },
+        }
+        with patch.object(main, "list_history", return_value=summaries) as mocked, patch.object(main, "get_history", return_value=row):
+            response = self.client.get("/api/transcript-edit-guides/projects")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()[0]["type"], "transcript_edit_guide")
+        self.assertEqual(response.json()[0]["current_version"], 2)
+        mocked.assert_called_once_with("transcript_edit_guide", limit=200)
+
+    def test_markdown_txt_and_csv_download_latest_or_selected_version(self):
         sentences = split_sentences(SCRIPT)
         project = {
-            "_project": {"mode": "plain_transcript_flow", "title": "동선"},
+            "_project": {"mode": "transcript_edit_guide", "title": "동선"},
             "sentences": sentences,
             "versions": [
                 {"version": 1, "result": valid_result("v1")},
                 {"version": 2, "result": valid_result("v2")},
             ],
         }
-        row = {"id": 7, "type": "edit", "keyword": "동선", "report": project}
+        row = {"id": 7, "type": "transcript_edit_guide", "keyword": "동선", "report": project}
         with patch.object(main, "get_history", return_value=row):
-            markdown = self.client.get("/api/edit-feedback/projects/7/download/markdown?version=1")
-            csv_response = self.client.get("/api/edit-feedback/projects/7/download/csv")
+            markdown = self.client.get("/api/transcript-edit-guides/projects/7/download/markdown?version=1")
+            txt_response = self.client.get("/api/transcript-edit-guides/projects/7/download/txt?version=2")
+            csv_response = self.client.get("/api/transcript-edit-guides/projects/7/download/csv")
         self.assertEqual(markdown.status_code, 200)
         self.assertIn("버전: v1", markdown.text)
+        self.assertEqual(txt_response.status_code, 200)
+        self.assertIn("[편집 담당자 전달용 최종본]", txt_response.text)
         self.assertEqual(csv_response.status_code, 200)
         self.assertIn("sentence_start_id", csv_response.text)
 

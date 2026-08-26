@@ -1,4 +1,4 @@
-"""Live browser smoke for the plain-transcript edit-feedback flow.
+"""Live browser smoke for the independent transcript editing guide tab.
 
 Run against a local server with a disposable DB:
     python tests/browser_plain_transcript_e2e.py http://127.0.0.1:8765
@@ -44,49 +44,50 @@ def run(base_url: str) -> dict[str, object]:
         )
         context = browser.new_context(permissions=["clipboard-read", "clipboard-write"])
         page = context.new_page()
-        page.goto(f"{base_url}/?tab=edit", wait_until="networkidle")
-        existing = page.locator(".edit-project-card", has_text="[SMOKE] 전체 대본 편집 흐름")
+        page.goto(f"{base_url}/?tab=transcript-guide", wait_until="networkidle")
+        page.locator("#pane-transcript-guide:not(.hidden)").wait_for()
+        existing = page.locator("#tg-projects-list .edit-project-card", has_text="[SMOKE] 전체 대본 편집 흐름")
         if existing.count():
             existing.first.click()
-            page.locator("#edit-flow-report-section:not(.hidden)").wait_for(timeout=30_000)
+            page.locator("#tg-report-section:not(.hidden)").wait_for(timeout=30_000)
         else:
-            page.locator("#edit-mode-flow").click()
-            page.locator("#edit-flow-title-input").fill("[SMOKE] 전체 대본 편집 흐름")
-            page.locator("#edit-flow-topic-input").fill("초음파세척기 장기 사용과 구매 기준")
-            page.locator("#edit-flow-target-input").fill("5")
-            page.locator("#edit-flow-purpose-input").fill("구매 상담")
-            page.locator("#edit-flow-script-input").fill(SCRIPT)
-            page.locator("#edit-flow-request-input").fill("실사용 증거를 앞에 두고 A/S는 마지막에 배치")
-            page.locator("#edit-analyze-btn").click()
-            page.locator("#edit-flow-report-section:not(.hidden)").wait_for(timeout=600_000)
-        assert page.locator("#edit-flow-overall-list li").count() > 0
-        assert page.locator("#edit-flow-table-body tr").count() > 0
-        assert "S001" in (page.locator("#edit-flow-sentence-list").text_content() or "")
-        history_id = page.evaluate("currentEditFeedbackProjectId")
+            page.locator("#tg-title-input").fill("[SMOKE] 전체 대본 편집 흐름")
+            page.locator("#tg-topic-input").fill("초음파세척기 장기 사용과 구매 기준")
+            page.locator("#tg-target-input").fill("5")
+            page.locator("#tg-purpose-input").fill("구매 상담")
+            page.locator("#tg-script-input").fill(SCRIPT)
+            page.locator("#tg-request-input").fill("실사용 증거를 앞에 두고 A/S는 마지막에 배치")
+            page.locator("#tg-analyze-btn").click()
+            page.locator("#tg-report-section:not(.hidden)").wait_for(timeout=600_000)
+        assert page.locator("#tg-overall-list li").count() > 0
+        assert page.locator("#tg-table-body tr").count() > 0
+        assert "S001" in (page.locator("#tg-sentence-list").text_content() or "")
+        assert "[상세 편집 순서]" in (page.locator("#tg-employee-guide-text").text_content() or "")
+        history_id = page.evaluate("currentTranscriptGuideProjectId")
 
-        if page.locator("#edit-flow-version-select option").count() < 2:
-            page.locator("#edit-flow-revision-input").fill("실사용 후기를 더 앞에 두고 A/S는 마지막으로 보내.")
-            page.locator("#edit-flow-revision-btn").click()
-            page.locator("#edit-flow-version-select option[value='2']").wait_for(
+        if page.locator("#tg-version-select option").count() < 2:
+            page.locator("#tg-revision-input").fill("실사용 후기를 더 앞에 두고 A/S는 마지막으로 보내.")
+            page.locator("#tg-revision-btn").click()
+            page.locator("#tg-version-select option[value='2']").wait_for(
                 state="attached", timeout=600_000,
             )
-        page.locator("#edit-flow-version-select").select_option("2")
-        assert "v2" in page.locator("#edit-flow-report-title").inner_text()
+        page.locator("#tg-version-select").select_option("2")
+        assert "v2" in page.locator("#tg-report-title").inner_text()
 
-        page.get_by_role("button", name="전체 복사").click()
-        page.locator("#edit-flow-revision-status").filter(has_text="복사했습니다").wait_for()
-        assert "전체 영상 흐름" in page.evaluate("navigator.clipboard.readText()")
-        for label in ("Markdown", "CSV"):
+        page.get_by_role("button", name="📋 직원용 편집 가이드 전체 복사").click()
+        page.locator("#tg-revision-status").filter(has_text="복사했습니다").wait_for()
+        assert "[상세 편집 순서]" in page.evaluate("navigator.clipboard.readText()")
+        for label in ("Markdown 다운로드", "TXT 다운로드"):
             with page.expect_download() as download_info:
                 page.get_by_role("button", name=label, exact=True).click()
             download_names.append(download_info.value.suggested_filename)
 
         page.reload(wait_until="networkidle")
-        page.locator(f".edit-project-card[onclick='openEditFeedbackProject({history_id})']").click()
-        page.locator("#edit-flow-report-section:not(.hidden)").wait_for(timeout=30_000)
-        assert "v2" in page.locator("#edit-flow-report-title").inner_text()
-        assert page.locator("#edit-flow-version-select option").count() == 2
-        screenshot = Path("/tmp/plain-transcript-e2e.png")
+        page.locator(f".edit-project-card[onclick='openTranscriptGuideProject({history_id})']").click()
+        page.locator("#tg-report-section:not(.hidden)").wait_for(timeout=30_000)
+        assert "v2" in page.locator("#tg-report-title").inner_text()
+        assert page.locator("#tg-version-select option").count() == 2
+        screenshot = Path("/tmp/transcript-guide-e2e.png")
         page.screenshot(path=str(screenshot), full_page=True)
         browser.close()
     return {

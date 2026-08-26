@@ -64,6 +64,9 @@ from worksheet_ai_service import WorksheetAIService
 from video_feedback_jobs import VideoFeedbackJobManager
 from plain_transcript_edit import render_csv as render_transcript_edit_csv
 from plain_transcript_edit import render_markdown as render_transcript_edit_markdown
+from plain_transcript_edit import render_plain_text as render_transcript_edit_text
+from plain_transcript_edit_jobs import HISTORY_TYPE as TRANSCRIPT_EDIT_GUIDE_HISTORY_TYPE
+from plain_transcript_edit_jobs import PROJECT_MODE as TRANSCRIPT_EDIT_GUIDE_MODE
 from plain_transcript_edit_jobs import PlainTranscriptEditJobManager
 from heatmap_service import fetch_heatmap, summarize_for_prompt
 from owner_auth import OwnerAuthenticator, OwnerAuthMiddleware, OwnerAuthSettings
@@ -859,18 +862,18 @@ async def edit_feedback(req: EditFeedbackRequest):
     )
 
 
-@app.post("/api/edit-feedback/flow-jobs")
+@app.post("/api/transcript-edit-guides/jobs")
 async def create_plain_transcript_edit_job(req: PlainTranscriptEditRequest):
     job = PLAIN_TRANSCRIPT_EDIT_JOBS.enqueue_initial(req.model_dump())
     if PLAIN_TRANSCRIPT_EDIT_JOBS._worker_task is None:
         asyncio.create_task(PLAIN_TRANSCRIPT_EDIT_JOBS.process_once())
     return JSONResponse({
         "ok": True, "job_id": job["job_id"],
-        "status_url": f"/api/edit-feedback/flow-jobs/{job['job_id']}",
+        "status_url": f"/api/transcript-edit-guides/jobs/{job['job_id']}",
     }, status_code=202)
 
 
-@app.get("/api/edit-feedback/flow-jobs/{job_id}")
+@app.get("/api/transcript-edit-guides/jobs/{job_id}")
 async def get_plain_transcript_edit_job(job_id: str):
     if not re.fullmatch(r"[a-f0-9]{32}", job_id):
         return JSONResponse({"error": "올바르지 않은 작업 ID입니다."}, status_code=400)
@@ -889,46 +892,68 @@ async def list_edit_feedback_projects():
             continue
         report = row.get("report") or {}
         metadata = report.get("_project") or {}
-        flow_mode = metadata.get("mode") == "plain_transcript_flow"
-        current = report.get("current_result") or {}
+        if metadata.get("mode") in {"plain_transcript_flow", TRANSCRIPT_EDIT_GUIDE_MODE}:
+            continue
         projects.append({
             "id": int(row["id"]), "type": "edit", "keyword": row.get("keyword") or "",
             "created_at": str(row.get("created_at") or ""),
-            "mode": "plain_transcript_flow" if flow_mode else "legacy_edit_feedback",
+            "mode": "legacy_edit_feedback",
             "title": metadata.get("title") or metadata.get("name") or row.get("keyword") or "",
             "topic": metadata.get("topic") or row.get("keyword") or "",
-            "current_version": int(metadata.get("current_version") or (1 if flow_mode else 0)),
+            "current_version": 0,
+            "expected_duration_seconds": None,
+            "last_revision_summary": metadata.get("last_revision_summary") or "",
+        })
+    return projects
+
+
+@app.get("/api/transcript-edit-guides/projects")
+async def list_transcript_edit_guide_projects():
+    projects = []
+    for summary in list_history(TRANSCRIPT_EDIT_GUIDE_HISTORY_TYPE, limit=200):
+        row = get_history(int(summary["id"]))
+        if not row:
+            continue
+        report = row.get("report") or {}
+        metadata = report.get("_project") or {}
+        current = report.get("current_result") or {}
+        projects.append({
+            "id": int(row["id"]), "type": TRANSCRIPT_EDIT_GUIDE_HISTORY_TYPE,
+            "keyword": row.get("keyword") or "", "created_at": str(row.get("created_at") or ""),
+            "title": metadata.get("title") or row.get("keyword") or "",
+            "topic": metadata.get("topic") or "",
+            "current_version": int(metadata.get("current_version") or 1),
             "expected_duration_seconds": current.get("recommended_duration_seconds"),
             "last_revision_summary": metadata.get("last_revision_summary") or "",
         })
     return projects
 
 
-@app.post("/api/edit-feedback/projects/{history_id}/revisions")
+@app.post("/api/transcript-edit-guides/projects/{history_id}/revisions")
 async def revise_plain_transcript_edit_project(
     history_id: int, req: PlainTranscriptEditRevisionRequest,
 ):
     row = get_history(history_id)
     if not row:
         return JSONResponse({"error": "편집 프로젝트를 찾지 못했습니다."}, status_code=404)
-    if ((row.get("report") or {}).get("_project") or {}).get("mode") != "plain_transcript_flow":
-        return JSONResponse({"error": "대본 기반 영상 흐름 프로젝트가 아닙니다."}, status_code=409)
+    if row.get("type") != TRANSCRIPT_EDIT_GUIDE_HISTORY_TYPE or ((row.get("report") or {}).get("_project") or {}).get("mode") != TRANSCRIPT_EDIT_GUIDE_MODE:
+        return JSONResponse({"error": "자막 편집 가이드 프로젝트가 아닙니다."}, status_code=409)
     job = PLAIN_TRANSCRIPT_EDIT_JOBS.enqueue_revision(history_id, req.message.strip())
     if PLAIN_TRANSCRIPT_EDIT_JOBS._worker_task is None:
         asyncio.create_task(PLAIN_TRANSCRIPT_EDIT_JOBS.process_once())
     return JSONResponse({
         "ok": True, "job_id": job["job_id"],
-        "status_url": f"/api/edit-feedback/flow-jobs/{job['job_id']}",
+        "status_url": f"/api/transcript-edit-guides/jobs/{job['job_id']}",
     }, status_code=202)
 
 
-def _plain_transcript_project_version(history_id: int, version: int | None = None):
+def _transcript_edit_guide_version(history_id: int, version: int | None = None):
     row = get_history(history_id)
     if not row:
-        raise KeyError("편집 프로젝트를 찾지 못했습니다.")
+        raise KeyError("자막 편집 가이드 프로젝트를 찾지 못했습니다.")
     project = row.get("report") or {}
-    if (project.get("_project") or {}).get("mode") != "plain_transcript_flow":
-        raise ValueError("대본 기반 영상 흐름 프로젝트가 아닙니다.")
+    if row.get("type") != TRANSCRIPT_EDIT_GUIDE_HISTORY_TYPE or (project.get("_project") or {}).get("mode") != TRANSCRIPT_EDIT_GUIDE_MODE:
+        raise ValueError("자막 편집 가이드 프로젝트가 아닙니다.")
     versions = project.get("versions") or []
     selected = next(
         (item for item in versions if int(item.get("version") or 0) == int(version or 0)),
@@ -939,12 +964,12 @@ def _plain_transcript_project_version(history_id: int, version: int | None = Non
     return project, selected
 
 
-@app.get("/api/edit-feedback/projects/{history_id}/download/{kind}")
+@app.get("/api/transcript-edit-guides/projects/{history_id}/download/{kind}")
 async def download_plain_transcript_edit_project(
     history_id: int, kind: str, version: int | None = None,
 ):
     try:
-        project, selected = _plain_transcript_project_version(history_id, version)
+        project, selected = _transcript_edit_guide_version(history_id, version)
     except KeyError as exc:
         return JSONResponse({"error": str(exc)}, status_code=404)
     except (ValueError, LookupError) as exc:
@@ -952,13 +977,15 @@ async def download_plain_transcript_edit_project(
     version_number = int(selected.get("version") or 0)
     if kind == "markdown":
         content, media_type, suffix = render_transcript_edit_markdown(project.get("_project") or {}, selected), "text/markdown; charset=utf-8", "md"
+    elif kind == "txt":
+        content, media_type, suffix = render_transcript_edit_text(project, selected), "text/plain; charset=utf-8", "txt"
     elif kind == "csv":
         content, media_type, suffix = render_transcript_edit_csv(selected.get("result") or {}), "text/csv; charset=utf-8", "csv"
     else:
-        return JSONResponse({"error": "markdown 또는 csv만 다운로드할 수 있습니다."}, status_code=400)
+        return JSONResponse({"error": "markdown, txt 또는 csv만 다운로드할 수 있습니다."}, status_code=400)
     return Response(
         content=content, media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="edit-flow-v{version_number}.{suffix}"'},
+        headers={"Content-Disposition": f'attachment; filename="transcript-edit-guide-v{version_number}.{suffix}"'},
     )
 
 

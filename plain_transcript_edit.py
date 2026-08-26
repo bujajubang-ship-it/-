@@ -401,6 +401,139 @@ def render_markdown(project: dict[str, Any], version: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_plain_text(project: dict[str, Any], version: dict[str, Any]) -> str:
+    """Render the editor hand-off as readable text, never developer data."""
+
+    result = version.get("result") or {}
+    metadata = project.get("_project") or project
+    title = metadata.get("title") or metadata.get("topic") or "자막 편집 가이드"
+    sentences = project.get("sentences") or []
+    by_id = {str(row.get("id") or ""): str(row.get("text") or "") for row in sentences}
+
+    def describe_reference(reference: Any) -> str:
+        text = str(reference or "")
+        match = re.fullmatch(r"(S\d{3,})(?:~(S\d{3,}))?", text)
+        if not match:
+            return text
+        start_id, end_id = match.group(1), match.group(2) or match.group(1)
+        start_text, end_text = by_id.get(start_id), by_id.get(end_id)
+        if not start_text:
+            return text
+        return f'{text} · "{start_text}"' + (f' ~ "{end_text}"' if end_id != start_id and end_text else "")
+    duration_seconds = float(
+        (result.get("final_instructions") or {}).get("expected_duration_seconds")
+        or result.get("recommended_duration_seconds") or 0
+    )
+    duration_minutes = duration_seconds / 60
+    duration_label = (
+        f"약 {duration_minutes:.1f}분" if duration_minutes and duration_minutes % 1
+        else f"약 {int(duration_minutes)}분"
+    )
+    divider = "━" * 18
+    lines = [
+        "[편집 담당자 전달용 최종본]",
+        "",
+        divider,
+        f"{title} 영상 편집 가이드",
+        f"버전: v{int(version.get('version') or 1)}",
+        f"목표 길이: {duration_label}",
+        divider,
+        "",
+        "[핵심 요약]",
+        f"핵심 메시지: {result.get('core_message') or '-'}",
+        f"현재 대본의 가장 큰 문제: {result.get('biggest_problem') or '-'}",
+        f"가장 강한 오프닝: {result.get('strongest_opening') or '-'}",
+        f"판단 근거: {result.get('data_basis_note') or '-'}",
+        "",
+        "[전체 흐름]",
+        "",
+    ]
+    for row in result.get("overall_flow") or []:
+        lines.extend([
+            f"{int(row.get('order') or 0)}. {row.get('title') or ''}",
+            f"   사용 구간: {row.get('sentence_start_id') or ''}~{row.get('sentence_end_id') or ''}",
+            f"   역할: {row.get('purpose') or ''}",
+            f"   이유: {row.get('reason') or ''}",
+            f"   화면: {row.get('transition_note') or '영상 화면 직접 확인 필요'}",
+        ])
+    lines.extend(["", divider, "[상세 편집 순서]", divider, ""])
+    for row in result.get("edit_table") or []:
+        screen_note = " · ".join(filter(None, [
+            str(row.get("transition_note") or ""), str(row.get("broll_note") or "")
+        ])) or "영상 화면 직접 확인 필요"
+        lines.extend([
+            f"{int(row.get('final_order') or 0)}. {row.get('purpose') or '편집 구간'}",
+            "",
+            "사용 구간:",
+            f"{row.get('sentence_start_id') or ''}~{row.get('sentence_end_id') or ''}",
+            "",
+            f'시작 자막: "{row.get("start_sentence") or ""}"',
+            f'끝 자막: "{row.get("end_sentence") or ""}"',
+            "",
+            f"처리: {row.get('action') or ''}",
+            f"편집 지시: {row.get('edit_instruction') or ''}",
+            f"이유: {row.get('reason') or ''}",
+            f"근거: {' · '.join(str(value) for value in row.get('evidence_basis') or []) or '-'}",
+            f"화면: {screen_note}",
+            f"예상 사용 분량: {float(row.get('estimated_seconds') or 0):.1f}초",
+            "",
+        ])
+    lines.extend([divider, "[완전 삭제 추천]", divider, ""])
+    deletions = result.get("deletions") or []
+    if not deletions:
+        lines.extend(["완전 삭제 추천 없음", ""])
+    for row in deletions:
+        lines.extend([
+            f"{row.get('sentence_start_id') or ''}~{row.get('sentence_end_id') or ''} 삭제",
+            f'시작: "{row.get("start_sentence") or ""}"',
+            f'끝: "{row.get("end_sentence") or ""}"',
+            f"삭제 이유: {row.get('reason') or ''}",
+            "",
+        ])
+    lines.extend([divider, "[중복 설명]", divider, ""])
+    duplicates = result.get("duplicates") or []
+    if not duplicates:
+        lines.extend(["중복 설명 없음", ""])
+    for row in duplicates:
+        lines.extend([
+            f"주제: {row.get('topic') or ''}",
+            "같은 내용을 말하는 구간:",
+            *[f"- {describe_reference(value)}" for value in row.get("candidates") or []],
+            f"최종 사용: {describe_reference(row.get('selected'))}",
+            f"이유: {row.get('reason') or ''}",
+            f"나머지 구간: {row.get('remaining_action') or ''}",
+            "",
+        ])
+    lines.extend([divider, "[축약 추천]", divider, ""])
+    condensations = result.get("condensations") or []
+    if not condensations:
+        lines.extend(["축약 추천 없음", ""])
+    for row in condensations:
+        lines.extend([
+            "유지:",
+            *[f"- {describe_reference(value)}" for value in row.get("keep_sentence_ids") or []],
+            "삭제:",
+            *[f"- {describe_reference(value)}" for value in row.get("delete_sentence_ids") or []],
+            f"축약 후 역할: {row.get('purpose_after_condensing') or ''}",
+            "",
+        ])
+    final = result.get("final_instructions") or {}
+    lines.extend([divider, "[최종 확인 목록]", divider, ""])
+    for label, key in (
+        ("이동할 문장 묶음", "move_sentence_groups"),
+        ("B-roll·제품 화면 추천 위치", "broll_positions"),
+        ("강조 자막 추천", "caption_emphasis"),
+        ("연결 멘트가 필요한 위치", "connection_lines_needed"),
+        ("반드시 유지할 핵심 발언", "must_keep_statements"),
+        ("영상 화면을 직접 확인해야 하는 항목", "screen_review_required"),
+    ):
+        lines.append(f"{label}:")
+        values = final.get(key) or []
+        lines.extend([f"- {value}" for value in values] or ["- 없음"])
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+
 CSV_FIELDS = [
     "final_order", "sentence_start_id", "sentence_end_id", "start_sentence",
     "end_sentence", "action", "purpose", "edit_instruction",
