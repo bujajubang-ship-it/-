@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>콘텐츠 리서처 — 부자주방</title>
   <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="style.css?v=20260824-mobile-edit-progress" />
+  <link rel="stylesheet" href="style.css?v=20260826-transcript-guide-tab" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
@@ -26,6 +26,7 @@
         <button class="tab-btn tab-btn-trend" id="tab-topic" onclick="switchTab('topic')">주제 추천</button>
         <button class="tab-btn tab-btn-trend" id="tab-jjachi" onclick="switchTab('jjachi')">🔥 짜치는 기획</button>
         <button class="tab-btn" id="tab-edit" onclick="switchTab('edit')">편집 피드백</button>
+        <button class="tab-btn tab-btn-transcript-guide" id="tab-transcript-guide" onclick="switchTab('transcript-guide')">📝 자막 편집 가이드</button>
         <button class="tab-btn" id="tab-channel" onclick="switchTab('channel')">채널 분석</button>
         <button class="tab-btn" id="tab-sns" onclick="switchTab('sns')">📣 SNS 변환</button>
         <button class="tab-btn" id="tab-blog" onclick="switchTab('blog')">📝 블로그 기획</button>
@@ -469,16 +470,34 @@
 
     <!-- ===== ✏️ 편집 피드백 탭 ===== -->
     <div id="pane-edit" class="hidden">
+      <section class="edit-projects-section" aria-labelledby="edit-projects-title">
+        <div class="edit-projects-header">
+          <div>
+            <h2 id="edit-projects-title">편집 피드백 프로젝트</h2>
+            <p>지금까지 받은 편집 피드백을 프로젝트별로 다시 볼 수 있습니다.</p>
+          </div>
+          <div class="edit-projects-actions">
+            <span id="edit-projects-count">0개</span>
+            <button type="button" onclick="newEditFeedbackProject()">+ 새 프로젝트</button>
+          </div>
+        </div>
+        <div id="edit-projects-list" class="edit-projects-list">
+          <div class="edit-projects-empty">프로젝트를 불러오는 중입니다.</div>
+        </div>
+      </section>
+
       <section class="search-section" id="edit-input-section">
         <div class="search-card edit-card">
-          <h1>촬영한 영상의 편집 피드백을 받으세요</h1>
-          <p class="search-desc">키워드와 영상 대본을 입력하면 시장 데이터와 비교 분석해서<br>어디를 살리고 어디를 삭제할지, 제목과 썸네일은 어떻게 할지 알려드립니다.</p>
+          <h1 id="edit-input-title">촬영한 영상의 편집 피드백을 받으세요</h1>
+          <p class="search-desc" id="edit-input-desc">키워드와 영상 대본을 입력하면 시장 데이터와 비교 분석해서<br>어디를 살리고 어디를 삭제할지, 제목과 썸네일은 어떻게 할지 알려드립니다.</p>
           <div class="edit-inputs">
-            <div class="edit-keyword-row">
-              <input type="text" id="edit-keyword-input" placeholder="영상 키워드 (예: 가스레인지 청소)" autocomplete="off" />
+            <div id="edit-legacy-inputs">
+              <div class="edit-keyword-row">
+                <input type="text" id="edit-keyword-input" placeholder="영상 키워드 (예: 가스레인지 청소)" autocomplete="off" />
+              </div>
+              <input type="url" id="edit-product-url" placeholder="스마트스토어 상품 URL (선택 — 제품 소개 영상일 경우 입력)" autocomplete="off" />
+              <textarea id="edit-script-input" placeholder="영상 대본 또는 내용을 붙여넣으세요&#10;&#10;예시:&#10;안녕하세요 오늘은 가스레인지 청소하는 방법을 알려드릴게요&#10;먼저 버너를 분리하고..." rows="10"></textarea>
             </div>
-            <input type="url" id="edit-product-url" placeholder="스마트스토어 상품 URL (선택 — 제품 소개 영상일 경우 입력)" autocomplete="off" />
-            <textarea id="edit-script-input" placeholder="영상 대본 또는 내용을 붙여넣으세요&#10;&#10;예시:&#10;안녕하세요 오늘은 가스레인지 청소하는 방법을 알려드릴게요&#10;먼저 버너를 분리하고..." rows="10"></textarea>
             <button id="edit-analyze-btn" onclick="startEditAnalysis()">편집 피드백 받기</button>
           </div>
         </div>
@@ -581,6 +600,140 @@
             <textarea id="edit-chat-input" class="edit-chat-textarea" rows="1" placeholder="편집 방향에 대해 자유롭게 질문하세요..." oninput="chatInputResize(this)" onkeydown="editChatKeydown(event)"></textarea>
             <button id="edit-chat-send-btn" class="edit-chat-send-btn" onclick="sendEditChat()">전송</button>
           </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- ===== 📝 자막 편집 가이드 탭 ===== -->
+    <div id="pane-transcript-guide" class="hidden">
+      <section class="edit-projects-section" aria-labelledby="tg-projects-title">
+        <div class="edit-projects-header">
+          <div>
+            <h2 id="tg-projects-title">자막 편집 가이드 프로젝트</h2>
+            <p>전체 자막과 v1·v2·v3 편집안을 프로젝트별로 다시 열고 이어서 수정할 수 있습니다.</p>
+          </div>
+          <div class="edit-projects-actions">
+            <span id="tg-projects-count">0개</span>
+            <button type="button" onclick="newTranscriptGuideProject()">+ 새 프로젝트</button>
+          </div>
+        </div>
+        <div id="tg-projects-list" class="edit-projects-list">
+          <div class="edit-projects-empty">프로젝트를 불러오는 중입니다.</div>
+        </div>
+      </section>
+
+      <section class="search-section" id="tg-input-section">
+        <div class="search-card edit-card">
+          <h1>전체 자막으로 직원용 편집 지시서를 만드세요</h1>
+          <p class="search-desc">타임코드는 필요 없습니다. 원문 문장에 S001… ID를 붙이고 전체 흐름·이동·삭제·축약을 실제 자막 기준으로 설계합니다.</p>
+          <div class="edit-inputs" id="tg-inputs">
+            <input type="text" id="tg-title-input" placeholder="프로젝트 제목" autocomplete="off" />
+            <input type="text" id="tg-topic-input" placeholder="영상 주제" autocomplete="off" />
+            <div class="edit-flow-input-row">
+              <label>목표 영상 길이(분)<input type="number" id="tg-target-input" min="0" max="360" step="0.5" value="10" /></label>
+              <label>영상 목적<input type="text" id="tg-purpose-input" placeholder="예: 구매 상담, 현장 소개" /></label>
+            </div>
+            <textarea id="tg-script-input" placeholder="타임코드 없이 전체 영상 자막을 처음부터 끝까지 그대로 붙여넣으세요. 원문은 변경하지 않습니다." rows="16"></textarea>
+            <textarea id="tg-request-input" placeholder="추가 요청사항 (선택)&#10;예: 실사용 후기를 앞에 두고 A/S는 마지막에 배치" rows="3"></textarea>
+            <button id="tg-analyze-btn" onclick="startTranscriptGuideAnalysis()">자막 편집 가이드 만들기</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="progress-section hidden" id="tg-progress-section">
+        <div class="progress-card">
+          <div class="progress-spinner"></div>
+          <div class="progress-steps" id="tg-progress-steps"></div>
+          <div id="tg-live-status" class="edit-flow-live-status">
+            <div><span>현재 단계</span><b id="tg-current-step">준비</b></div>
+            <div><span>실제 진행률</span><b id="tg-percent">0%</b></div>
+            <div><span>마지막 heartbeat</span><b id="tg-heartbeat">-</b></div>
+            <div><span>분석 문장</span><b id="tg-sentence-progress">0 / 0</b></div>
+            <div><span>사용 근거</span><b id="tg-evidence-count">0</b></div>
+            <div><span>재시도 상태</span><b id="tg-retry">none</b></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="report-section hidden" id="tg-report-section">
+        <div class="report-header">
+          <div>
+            <h2 id="tg-report-title">자막 편집 가이드</h2>
+            <p class="report-subtitle">원문 문장 ID · 전체 흐름 · 직원용 편집 지시서</p>
+          </div>
+          <div class="edit-flow-report-actions">
+            <select id="tg-version-select" onchange="selectTranscriptGuideVersion(this.value)"></select>
+            <button type="button" id="tg-copy-btn" class="tg-primary-copy" onclick="copyTranscriptGuide()">📋 직원용 편집 가이드 전체 복사</button>
+            <button type="button" onclick="downloadTranscriptGuide('markdown')">Markdown 다운로드</button>
+            <button type="button" onclick="downloadTranscriptGuide('txt')">TXT 다운로드</button>
+            <button type="button" class="reset-btn" onclick="newTranscriptGuideProject()">← 새 프로젝트</button>
+          </div>
+        </div>
+
+        <div id="tg-guide-area">
+          <div class="edit-flow-summary-grid">
+            <div><span>추천 최종 영상 길이</span><b id="tg-duration">-</b></div>
+            <div><span>영상의 핵심 메시지</span><b id="tg-core-message">-</b></div>
+            <div><span>가장 강한 오프닝</span><b id="tg-opening">-</b></div>
+            <div><span>현재 대본의 가장 큰 문제</span><b id="tg-biggest-problem">-</b></div>
+          </div>
+          <div id="tg-data-note" class="edit-flow-data-note"></div>
+
+          <div class="card">
+            <div class="card-header"><span class="card-icon">🧭</span> 1. 전체 영상 흐름</div>
+            <ol id="tg-overall-list" class="edit-flow-overall-list"></ol>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><span class="card-icon">📋</span> 2. 문장 기준 상세 편집 가이드</div>
+            <div class="edit-flow-table-wrap"><table class="edit-flow-table">
+              <thead><tr><th>최종 순서</th><th>원본 문장 범위</th><th>시작 문장</th><th>끝 문장</th><th>처리</th><th>영상 내 역할</th><th>배치 이유</th><th>연결·화면 주의사항</th><th>예상 분량</th></tr></thead>
+              <tbody id="tg-table-body"></tbody>
+            </table></div>
+          </div>
+
+          <div class="edit-flow-three-col">
+            <div class="card"><div class="card-header">완전 삭제 추천</div><div id="tg-deletions"></div></div>
+            <div class="card"><div class="card-header">중복 설명 선택</div><div id="tg-duplicates"></div></div>
+            <div class="card"><div class="card-header">축약 추천</div><div id="tg-condensations"></div></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><span class="card-icon">🛠️</span> 3. 직원용 최종 편집 지시서</div>
+            <div id="tg-final-instructions" class="edit-flow-final-grid"></div>
+          </div>
+
+          <div class="card tg-employee-guide-card">
+            <div class="card-header"><span class="card-icon">📄</span> 편집 담당자 전달용 최종본</div>
+            <pre id="tg-employee-guide-text" class="tg-employee-guide-text"></pre>
+          </div>
+
+          <details class="card edit-flow-sentences-card">
+            <summary>원문 문장 ID 전체 보기 <span id="tg-sentence-count"></span></summary>
+            <div id="tg-sentence-list" class="edit-flow-sentence-list"></div>
+          </details>
+
+          <details class="card">
+            <summary>사용 근거와 버전 변경 기록</summary>
+            <div id="tg-evidence-list"></div>
+            <div id="tg-version-history"></div>
+          </details>
+        </div>
+
+        <div class="card edit-chat-card">
+          <div class="card-header"><span class="card-icon">💬</span> 편집안 수정 요청 <span class="edit-chat-desc">기존 결과와 관련 문장만 재사용해 새 버전으로 저장합니다</span></div>
+          <div id="tg-chat-messages" class="edit-chat-messages"></div>
+          <div class="edit-chat-chips">
+            <span class="chat-chip" onclick="setTranscriptGuideRevision(this.textContent)">실사용 후기를 더 길게 살려줘.</span>
+            <span class="chat-chip" onclick="setTranscriptGuideRevision(this.textContent)">A/S를 마지막으로 보내.</span>
+            <span class="chat-chip" onclick="setTranscriptGuideRevision(this.textContent)">영상 배경이 너무 자주 바뀌지 않게 다시 구성해.</span>
+          </div>
+          <div class="edit-chat-input-row">
+            <textarea id="tg-revision-input" class="edit-chat-textarea" rows="2" placeholder="예: S031~S037은 반드시 유지해."></textarea>
+            <button id="tg-revision-btn" class="edit-chat-send-btn" onclick="submitTranscriptGuideRevision()">수정안 생성</button>
+          </div>
+          <div id="tg-revision-status" class="edit-flow-revision-status"></div>
         </div>
       </section>
     </div>
@@ -1567,7 +1720,7 @@
 
   </main>
 
-  <script src="app.js?v=20260824-mobile-edit-progress"></script>
+  <script src="app.js?v=20260826-transcript-guide-tab"></script>
   <script>
     fetch('/api/health').then(r => r.json()).then(data => {
       const el = document.getElementById('api-status');

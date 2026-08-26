@@ -29,13 +29,21 @@ let editAnalyzing = false;
 let editChatHistory = [];
 let editChatSending = false;
 let editChatAttachments = [];
+let editFeedbackProjects = [];
+let currentEditFeedbackProjectId = null;
+let transcriptGuideAnalyzing = false;
+let transcriptGuideProjects = [];
+let currentTranscriptGuideProjectId = null;
+let currentTranscriptGuideProject = null;
+let currentTranscriptGuideVersion = null;
+let transcriptGuidePollingJobId = null;
 // kept for history backwards compatibility
 let analyzing = false;
 let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'ytsearch', 'topic', 'jjachi', 'edit', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'edit-director', 'autocut', 'chat', 'strategy', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'ytsearch', 'topic', 'jjachi', 'edit', 'transcript-guide', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'edit-director', 'autocut', 'chat', 'strategy', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
@@ -54,6 +62,8 @@ function switchTab(tab) {
   if (tab === 'autocut') acInit();
   if (tab === 'video-feedback') { loadVfHistory(); resumeVideoFeedbackJob(); }
   if (tab === 'edit-director') edInit();
+  if (tab === 'edit') loadEditFeedbackProjects();
+  if (tab === 'transcript-guide') { loadTranscriptGuideProjects(); resumeTranscriptGuideJob(); }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2510,6 +2520,84 @@ function copyShortformCaption() {
 
 // ===== ✏️ 편집 피드백 =====
 
+function formatEditFlowDuration(seconds) {
+  const value = Math.max(0, Number(seconds || 0));
+  const minutes = Math.floor(value / 60);
+  const remain = Math.round(value % 60);
+  return `${minutes}분${remain ? ` ${remain}초` : ''}`;
+}
+
+async function loadEditFeedbackProjects() {
+  const list = document.getElementById('edit-projects-list');
+  const count = document.getElementById('edit-projects-count');
+  if (!list || !count) return;
+  try {
+    const response = await fetch('/api/edit-feedback/projects');
+    if (!response.ok) throw new Error('프로젝트 목록 요청 실패');
+    const rows = await response.json();
+    editFeedbackProjects = Array.isArray(rows) ? rows : [];
+  } catch (error) {
+    list.innerHTML = '<div class="edit-projects-empty error">프로젝트 목록을 불러오지 못했습니다.</div>';
+    return;
+  }
+  count.textContent = `${editFeedbackProjects.length}개`;
+  if (!editFeedbackProjects.length) {
+    list.innerHTML = '<div class="edit-projects-empty">아직 저장된 편집 피드백이 없습니다. 첫 프로젝트를 만들어보세요.</div>';
+    return;
+  }
+  list.innerHTML = editFeedbackProjects.map(project => {
+    const active = Number(project.id) === Number(currentEditFeedbackProjectId);
+    const date = String(project.created_at || '').slice(0, 16).replace('T', ' ');
+    return `<button type="button" class="edit-project-card${active ? ' active' : ''}" onclick="openEditFeedbackProject(${Number(project.id)})">
+      <span class="edit-project-card-kicker">편집 피드백 · PROJECT #${Number(project.id)}</span>
+      <strong>${escHtml(project.title || project.keyword || '제목 없는 프로젝트')}</strong>
+      <span class="edit-project-card-date">${escHtml(project.topic || '')}<br>${escHtml(date || '날짜 없음')}</span>
+      ${project.last_revision_summary ? `<span class="edit-project-card-summary">${escHtml(project.last_revision_summary)}</span>` : ''}
+      <span class="edit-project-card-open">피드백 보기 →</span>
+    </button>`;
+  }).join('');
+}
+
+async function openEditFeedbackProject(projectId) {
+  if (editAnalyzing) return;
+  const list = document.getElementById('edit-projects-list');
+  try {
+    if (list) list.setAttribute('aria-busy', 'true');
+    const response = await fetch(`/api/history/${Number(projectId)}`);
+    if (!response.ok) throw new Error('프로젝트를 찾지 못했습니다.');
+    const project = await response.json();
+    if (project.type !== 'edit') throw new Error('편집 피드백 프로젝트가 아닙니다.');
+    currentEditFeedbackProjectId = Number(project.id);
+    const report = project.report || {};
+    const inputs = report._project || {};
+    document.getElementById('edit-keyword-input').value = project.keyword || inputs.name || '';
+    document.getElementById('edit-script-input').value = typeof inputs.script === 'string' ? inputs.script : '';
+    document.getElementById('edit-product-url').value = typeof inputs.product_url === 'string' ? inputs.product_url : '';
+    document.getElementById('edit-input-section').classList.add('hidden');
+    document.getElementById('edit-progress-section').classList.add('hidden');
+    renderEditReport(report, project.keyword || inputs.name || '편집 피드백');
+    document.getElementById('edit-report-section').classList.remove('hidden');
+    await loadEditFeedbackProjects();
+    document.getElementById('edit-report-section').scrollIntoView({behavior: 'smooth', block: 'start'});
+  } catch (error) {
+    alert(error.message || '프로젝트를 열지 못했습니다.');
+  } finally {
+    if (list) list.removeAttribute('aria-busy');
+  }
+}
+
+function newEditFeedbackProject() {
+  if (editAnalyzing) return;
+  currentEditFeedbackProjectId = null;
+  document.getElementById('edit-keyword-input').value = '';
+  document.getElementById('edit-product-url').value = '';
+  document.getElementById('edit-script-input').value = '';
+  resetToEdit();
+  loadEditFeedbackProjects();
+  document.getElementById('edit-input-section').scrollIntoView({behavior: 'smooth', block: 'start'});
+  document.getElementById('edit-keyword-input').focus();
+}
+
 function resetToEdit() {
   document.getElementById('edit-report-section').classList.add('hidden');
   document.getElementById('edit-progress-section').classList.add('hidden');
@@ -2713,7 +2801,185 @@ function startEditAnalysis() {
   if (!keyword) { document.getElementById('edit-keyword-input').focus(); return; }
   if (!script) { document.getElementById('edit-script-input').focus(); return; }
   const product_url = (document.getElementById('edit-product-url')?.value || '').trim();
+  currentEditFeedbackProjectId = null;
   runEditAnalysis(keyword, script, product_url);
+}
+
+// ===== 📝 자막 편집 가이드 =====
+
+async function loadTranscriptGuideProjects() {
+  const list = document.getElementById('tg-projects-list');
+  const count = document.getElementById('tg-projects-count');
+  if (!list || !count) return;
+  try {
+    const response = await fetch('/api/transcript-edit-guides/projects');
+    if (!response.ok) throw new Error('프로젝트 목록 요청 실패');
+    const rows = await response.json();
+    transcriptGuideProjects = Array.isArray(rows) ? rows : [];
+  } catch (error) {
+    list.innerHTML = '<div class="edit-projects-empty error">자막 편집 가이드 프로젝트를 불러오지 못했습니다.</div>';
+    return;
+  }
+  count.textContent = `${transcriptGuideProjects.length}개`;
+  if (!transcriptGuideProjects.length) {
+    list.innerHTML = '<div class="edit-projects-empty">아직 저장된 자막 편집 가이드가 없습니다.</div>';
+    return;
+  }
+  list.innerHTML = transcriptGuideProjects.map(project => {
+    const active = Number(project.id) === Number(currentTranscriptGuideProjectId);
+    const date = String(project.created_at || '').slice(0, 16).replace('T', ' ');
+    const duration = project.expected_duration_seconds ? ` · 예상 ${formatEditFlowDuration(project.expected_duration_seconds)}` : '';
+    return `<button type="button" class="edit-project-card${active ? ' active' : ''}" onclick="openTranscriptGuideProject(${Number(project.id)})">
+      <span class="edit-project-card-kicker">자막 편집 가이드 · PROJECT #${Number(project.id)}</span>
+      <strong>${escHtml(project.title || '제목 없는 프로젝트')}</strong>
+      <span class="edit-project-card-date">${escHtml(project.topic || '')} · v${Number(project.current_version || 1)}${duration}<br>${escHtml(date || '날짜 없음')}</span>
+      ${project.last_revision_summary ? `<span class="edit-project-card-summary">${escHtml(project.last_revision_summary)}</span>` : ''}
+      <span class="edit-project-card-open">가이드 보기 →</span>
+    </button>`;
+  }).join('');
+}
+
+async function openTranscriptGuideProject(projectId) {
+  if (transcriptGuideAnalyzing) return;
+  const list = document.getElementById('tg-projects-list');
+  try {
+    list?.setAttribute('aria-busy', 'true');
+    const response = await fetch(`/api/history/${Number(projectId)}`);
+    if (!response.ok) throw new Error('프로젝트를 찾지 못했습니다.');
+    const row = await response.json();
+    if (row.type !== 'transcript_edit_guide') throw new Error('자막 편집 가이드 프로젝트가 아닙니다.');
+    currentTranscriptGuideProjectId = Number(row.id);
+    currentTranscriptGuideProject = row.report || null;
+    if (!currentTranscriptGuideProject) throw new Error('저장된 편집안이 없습니다.');
+    document.getElementById('tg-input-section').classList.add('hidden');
+    document.getElementById('tg-progress-section').classList.add('hidden');
+    renderTranscriptGuideProject(currentTranscriptGuideProject);
+    document.getElementById('tg-report-section').classList.remove('hidden');
+    await loadTranscriptGuideProjects();
+    document.getElementById('tg-report-section').scrollIntoView({behavior: 'smooth', block: 'start'});
+  } catch (error) {
+    alert(error.message || '프로젝트를 열지 못했습니다.');
+  } finally {
+    list?.removeAttribute('aria-busy');
+  }
+}
+
+function newTranscriptGuideProject() {
+  if (transcriptGuideAnalyzing) return;
+  currentTranscriptGuideProjectId = null;
+  currentTranscriptGuideProject = null;
+  currentTranscriptGuideVersion = null;
+  for (const id of ['tg-title-input', 'tg-topic-input', 'tg-purpose-input', 'tg-script-input', 'tg-request-input']) {
+    const input = document.getElementById(id);
+    if (input) input.value = '';
+  }
+  document.getElementById('tg-target-input').value = '10';
+  document.getElementById('tg-report-section').classList.add('hidden');
+  document.getElementById('tg-progress-section').classList.add('hidden');
+  document.getElementById('tg-input-section').classList.remove('hidden');
+  document.getElementById('tg-analyze-btn').disabled = false;
+  loadTranscriptGuideProjects();
+  document.getElementById('tg-input-section').scrollIntoView({behavior: 'smooth', block: 'start'});
+  document.getElementById('tg-title-input').focus();
+}
+
+async function startTranscriptGuideAnalysis() {
+  if (transcriptGuideAnalyzing) return;
+  const title = document.getElementById('tg-title-input').value.trim();
+  const topic = document.getElementById('tg-topic-input').value.trim();
+  const script = document.getElementById('tg-script-input').value.trim();
+  const targetMinutes = Number(document.getElementById('tg-target-input').value || 0);
+  const purpose = document.getElementById('tg-purpose-input').value.trim();
+  const additionalRequest = document.getElementById('tg-request-input').value.trim();
+  if (!title) { document.getElementById('tg-title-input').focus(); return; }
+  if (!topic) { document.getElementById('tg-topic-input').focus(); return; }
+  if (script.length < 10) { document.getElementById('tg-script-input').focus(); return; }
+  transcriptGuideAnalyzing = true;
+  currentTranscriptGuideProjectId = null;
+  document.getElementById('tg-analyze-btn').disabled = true;
+  document.getElementById('tg-input-section').classList.add('hidden');
+  document.getElementById('tg-report-section').classList.add('hidden');
+  document.getElementById('tg-progress-section').classList.remove('hidden');
+  document.getElementById('tg-progress-steps').innerHTML = '<div class="progress-step active"><span class="step-icon">⏳</span><span>background job 생성 중</span></div>';
+  try {
+    const response = await fetch('/api/transcript-edit-guides/jobs', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        title, topic, script, target_duration_seconds: Math.max(0, targetMinutes * 60),
+        purpose, additional_request: additionalRequest,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || data.detail?.[0]?.msg || '작업을 시작하지 못했습니다.');
+    localStorage.setItem('transcriptEditGuideJobId', data.job_id);
+    await pollTranscriptGuideJob(data.job_id, false);
+  } catch (error) {
+    document.getElementById('tg-progress-steps').innerHTML = `<div class="progress-step error"><span class="step-icon">⚠️</span><span>${escHtml(error.message || '분석 실패')}</span></div>`;
+  } finally {
+    transcriptGuideAnalyzing = false;
+    document.getElementById('tg-analyze-btn').disabled = false;
+  }
+}
+
+function updateTranscriptGuideJobStatus(job) {
+  document.getElementById('tg-current-step').textContent = job.progress_message || job.progress_step || '-';
+  document.getElementById('tg-percent').textContent = `${Number(job.progress_percent || 0)}%`;
+  document.getElementById('tg-heartbeat').textContent = String(job.heartbeat_at || job.updated_at || '-').slice(0, 19).replace('T', ' ');
+  document.getElementById('tg-sentence-progress').textContent = `${Number(job.analyzed_sentence_count || 0)} / ${Number(job.sentence_count || 0)}`;
+  document.getElementById('tg-evidence-count').textContent = String(Number(job.evidence_count || 0));
+  document.getElementById('tg-retry').textContent = job.retry_state || 'none';
+  document.getElementById('tg-progress-steps').innerHTML = `<div class="progress-step ${job.status === 'failed' ? 'error' : 'active'}"><span class="step-icon">${job.status === 'failed' ? '⚠️' : '⏳'}</span><span>${escHtml(job.progress_message || '')}</span></div>`;
+}
+
+async function pollTranscriptGuideJob(jobId, revision) {
+  if (transcriptGuidePollingJobId === jobId) return;
+  transcriptGuidePollingJobId = jobId;
+  try {
+    for (let attempt = 0; attempt < 1200; attempt += 1) {
+      const response = await fetch(`/api/transcript-edit-guides/jobs/${encodeURIComponent(jobId)}`, {cache: 'no-store'});
+      const job = await response.json();
+      if (!response.ok) throw new Error(job.error || '작업 상태를 확인하지 못했습니다.');
+      updateTranscriptGuideJobStatus(job);
+      if (revision) document.getElementById('tg-revision-status').textContent = job.progress_message || '';
+      if (job.status === 'done') {
+        localStorage.removeItem('transcriptEditGuideJobId');
+        currentTranscriptGuideProjectId = Number(job.result?.history_id || 0) || currentTranscriptGuideProjectId;
+        currentTranscriptGuideProject = job.result?.project || null;
+        if (!currentTranscriptGuideProject) throw new Error('완료된 자막 편집 가이드가 없습니다.');
+        renderTranscriptGuideProject(currentTranscriptGuideProject);
+        document.getElementById('tg-input-section').classList.add('hidden');
+        document.getElementById('tg-progress-section').classList.add('hidden');
+        document.getElementById('tg-report-section').classList.remove('hidden');
+        document.getElementById('tg-revision-status').textContent = revision ? `v${Number(job.result?.version || 1)} 저장 완료` : '';
+        await loadTranscriptGuideProjects();
+        document.getElementById('tg-report-section').scrollIntoView({behavior: 'smooth', block: 'start'});
+        return;
+      }
+      if (job.status === 'failed') {
+        localStorage.removeItem('transcriptEditGuideJobId');
+        throw new Error(job.progress_message || '분석에 실패했습니다.');
+      }
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+    throw new Error('분석 대기 시간이 초과되었습니다. 프로젝트 목록에서 상태를 다시 확인해주세요.');
+  } finally {
+    transcriptGuidePollingJobId = null;
+  }
+}
+
+async function resumeTranscriptGuideJob() {
+  const jobId = localStorage.getItem('transcriptEditGuideJobId');
+  if (!jobId || transcriptGuidePollingJobId) return;
+  document.getElementById('tg-input-section')?.classList.add('hidden');
+  document.getElementById('tg-progress-section')?.classList.remove('hidden');
+  transcriptGuideAnalyzing = true;
+  try {
+    await pollTranscriptGuideJob(jobId, false);
+  } catch (error) {
+    document.getElementById('tg-progress-steps').innerHTML = `<div class="progress-step error"><span class="step-icon">⚠️</span><span>${escHtml(error.message || '')}</span></div>`;
+  } finally {
+    transcriptGuideAnalyzing = false;
+  }
 }
 
 async function runEditAnalysis(keyword, script, product_url = '') {
@@ -2736,6 +3002,7 @@ async function runEditAnalysis(keyword, script, product_url = '') {
         s.querySelector('.step-icon').textContent = '✅';
       });
       addStep('분석 완료!', 'done');
+      currentEditFeedbackProjectId = Number(data.history_id || 0) || null;
       setTimeout(() => {
         document.getElementById('edit-progress-section').classList.add('hidden');
         renderEditReport(data.report, keyword);
@@ -2743,6 +3010,7 @@ async function runEditAnalysis(keyword, script, product_url = '') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
         editAnalyzing = false;
         document.getElementById('edit-analyze-btn').disabled = false;
+        loadEditFeedbackProjects();
       }, 600);
     },
     (msg) => {
@@ -2897,6 +3165,115 @@ function renderEditReport(r, keyword) {
 
   // 편집 채팅 컨텍스트 초기화
   initEditChat(r, keyword);
+}
+
+function transcriptGuideListHtml(values, empty = '해당 없음') {
+  const rows = Array.isArray(values) ? values : [];
+  return rows.length ? `<ul>${rows.map(value => `<li>${escHtml(String(value))}</li>`).join('')}</ul>` : `<span>${empty}</span>`;
+}
+
+function renderTranscriptGuideProject(project, requestedVersion = null) {
+  const metadata = project._project || {};
+  const versions = project.versions || [];
+  const version = versions.find(item => Number(item.version) === Number(requestedVersion)) || versions[versions.length - 1];
+  if (!version) return;
+  currentTranscriptGuideVersion = Number(version.version || 1);
+  const result = version.result || project.current_result || {};
+  document.getElementById('tg-report-title').textContent = `${metadata.title || metadata.topic || '자막 편집 가이드'} · v${currentTranscriptGuideVersion}`;
+  const selector = document.getElementById('tg-version-select');
+  selector.innerHTML = versions.map(item => {
+    const created = String(item.created_at || '').slice(0, 16).replace('T', ' ');
+    return `<option value="${Number(item.version)}" ${Number(item.version) === currentTranscriptGuideVersion ? 'selected' : ''}>v${Number(item.version)}${created ? ` · ${escHtml(created)}` : ''}</option>`;
+  }).join('');
+  document.getElementById('tg-duration').textContent = formatEditFlowDuration(result.recommended_duration_seconds || result.final_instructions?.expected_duration_seconds);
+  document.getElementById('tg-core-message').textContent = result.core_message || '-';
+  document.getElementById('tg-opening').textContent = result.strongest_opening || '-';
+  document.getElementById('tg-biggest-problem').textContent = result.biggest_problem || '-';
+  document.getElementById('tg-data-note').textContent = result.data_basis_note || '';
+
+  document.getElementById('tg-overall-list').innerHTML = (result.overall_flow || []).map(item => `<li><b>${escHtml(item.title || '')}</b> · ${escHtml(item.sentence_start_id || '')}~${escHtml(item.sentence_end_id || '')} · ${escHtml(item.action || '')}<small>${escHtml(item.purpose || '')} · ${escHtml(item.reason || '')}<br>${escHtml(item.transition_note || '')}</small></li>`).join('');
+  document.getElementById('tg-table-body').innerHTML = (result.edit_table || []).map(row => `<tr>
+    <td>${Number(row.final_order || 0)}</td><td><b>${escHtml(row.sentence_start_id || '')}~${escHtml(row.sentence_end_id || '')}</b></td>
+    <td>${escHtml(row.start_sentence || '')}</td><td>${escHtml(row.end_sentence || '')}</td>
+    <td><span class="edit-flow-action">${escHtml(row.action || '')}</span></td><td>${escHtml(row.purpose || '')}<br><small>${escHtml(row.edit_instruction || '')}</small></td>
+    <td>${escHtml(row.reason || '')}<br><small>${(row.evidence_basis || []).map(escHtml).join(' · ')}</small></td>
+    <td>${escHtml(row.transition_note || '')}<br><small>${escHtml(row.broll_note || '')}</small></td><td>${formatEditFlowDuration(row.estimated_seconds || 0)}</td>
+  </tr>`).join('');
+
+  document.getElementById('tg-deletions').innerHTML = (result.deletions || []).map(item => `<div class="edit-flow-list-item"><b>${escHtml(item.sentence_start_id)}~${escHtml(item.sentence_end_id)}</b><br>${escHtml(item.start_sentence || '')}${item.start_sentence !== item.end_sentence ? ` … ${escHtml(item.end_sentence || '')}` : ''}<br><small>${escHtml(item.reason || '')}</small></div>`).join('') || '<div class="edit-flow-list-item">완전 삭제 없음</div>';
+  document.getElementById('tg-duplicates').innerHTML = (result.duplicates || []).map(item => `<div class="edit-flow-list-item"><b>${escHtml(item.topic || '')}</b><br>후보: ${(item.candidates || []).map(escHtml).join(' · ')}<br>최종 선택: ${escHtml(item.selected || '')}<br><small>${escHtml(item.reason || '')} · ${escHtml(item.remaining_action || '')}</small></div>`).join('') || '<div class="edit-flow-list-item">중복 후보 없음</div>';
+  document.getElementById('tg-condensations').innerHTML = (result.condensations || []).map(item => `<div class="edit-flow-list-item"><b>유지 ${(item.keep_sentence_ids || []).map(escHtml).join(' · ')}</b><br>삭제 ${(item.delete_sentence_ids || []).map(escHtml).join(' · ')}<br><small>${escHtml(item.purpose_after_condensing || '')}</small></div>`).join('') || '<div class="edit-flow-list-item">축약 없음</div>';
+
+  const final = result.final_instructions || {};
+  const finalSections = [
+    ['최종 영상 흐름', 'final_flow'], ['최종 문장 배치 순서', 'final_sentence_order'],
+    ['삭제할 문장', 'delete_sentences'], ['축약할 문장', 'condense_sentences'],
+    ['이동할 문장 묶음', 'move_sentence_groups'], ['중복 내용 선택 결과', 'duplicate_decisions'],
+    ['B-roll·제품 화면 추천 위치', 'broll_positions'], ['강조 자막 추천', 'caption_emphasis'],
+    ['연결 멘트가 필요한 위치', 'connection_lines_needed'], ['반드시 유지할 핵심 발언', 'must_keep_statements'],
+    ['영상 화면을 직접 확인해야 하는 항목', 'screen_review_required'],
+  ];
+  document.getElementById('tg-final-instructions').innerHTML = finalSections.map(([label, key]) => `<section class="edit-flow-final-section"><h4>${label}</h4>${transcriptGuideListHtml(final[key])}</section>`).join('') +
+    `<section class="edit-flow-final-section"><h4>예상 최종 영상 길이</h4><span>${formatEditFlowDuration(final.expected_duration_seconds || result.recommended_duration_seconds)}</span></section>`;
+  document.getElementById('tg-employee-guide-text').textContent = version.employee_guide_text || '';
+
+  const sentences = project.sentences || [];
+  document.getElementById('tg-sentence-count').textContent = `(${sentences.length}문장)`;
+  document.getElementById('tg-sentence-list').innerHTML = sentences.map(row => `<div class="edit-flow-sentence-row"><b>${escHtml(row.id || '')}</b><span>${escHtml(row.text || '')}</span></div>`).join('');
+  document.getElementById('tg-evidence-list').innerHTML = `<h4>v${currentTranscriptGuideVersion} 사용 근거</h4>` + ((result.used_evidence || []).map(item => `<div class="edit-flow-list-item"><b>${escHtml(item.source || '')}</b> · 표본 ${Number(item.sample_size || 0)}<br>${escHtml(item.claim || '')}</div>`).join('') || '<div class="edit-flow-list-item">저장된 근거 없음</div>');
+  document.getElementById('tg-version-history').innerHTML = '<h4>버전 기록</h4>' + versions.map(item => `<div class="edit-flow-list-item"><b>v${Number(item.version)}</b> · ${escHtml(String(item.created_at || '').slice(0, 19).replace('T', ' '))}<br>${escHtml(item.revision_summary || '')}${item.user_request ? `<br><small>수정 요청: ${escHtml(item.user_request)}</small>` : ''}</div>`).join('');
+  document.getElementById('tg-chat-messages').innerHTML = (project.conversation || []).map(item => `<div class="chat-bubble ${item.role === 'user' ? 'user' : 'assistant'}"><div class="chat-bubble-inner"><small>v${Number(item.version || 1)}</small><br>${escHtml(item.content || '')}</div></div>`).join('') || '<div class="chat-bubble assistant"><div class="chat-bubble-inner">편집안을 확인했습니다. 수정 요청을 입력하면 기존 결과와 관련 문장만 사용해 새 버전을 만듭니다.</div></div>';
+}
+
+function selectTranscriptGuideVersion(version) {
+  if (currentTranscriptGuideProject) renderTranscriptGuideProject(currentTranscriptGuideProject, Number(version));
+}
+
+function setTranscriptGuideRevision(text) {
+  document.getElementById('tg-revision-input').value = text || '';
+  document.getElementById('tg-revision-input').focus();
+}
+
+async function submitTranscriptGuideRevision() {
+  if (!currentTranscriptGuideProjectId || transcriptGuideAnalyzing) return;
+  const input = document.getElementById('tg-revision-input');
+  const message = input.value.trim();
+  if (!message) { input.focus(); return; }
+  transcriptGuideAnalyzing = true;
+  document.getElementById('tg-revision-btn').disabled = true;
+  document.getElementById('tg-revision-status').textContent = '기존 편집안에서 변경할 부분을 찾는 중입니다.';
+  try {
+    const response = await fetch(`/api/transcript-edit-guides/projects/${Number(currentTranscriptGuideProjectId)}/revisions`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message}),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '수정 작업을 시작하지 못했습니다.');
+    localStorage.setItem('transcriptEditGuideJobId', data.job_id);
+    await pollTranscriptGuideJob(data.job_id, true);
+    input.value = '';
+  } catch (error) {
+    document.getElementById('tg-revision-status').textContent = `오류: ${error.message}`;
+  } finally {
+    transcriptGuideAnalyzing = false;
+    document.getElementById('tg-revision-btn').disabled = false;
+  }
+}
+
+async function copyTranscriptGuide() {
+  const text = document.getElementById('tg-employee-guide-text')?.textContent || '';
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    document.getElementById('tg-revision-status').textContent = '직원용 편집 가이드 전체를 복사했습니다.';
+  } catch (error) {
+    document.getElementById('tg-revision-status').textContent = '복사하지 못했습니다.';
+  }
+}
+
+function downloadTranscriptGuide(kind) {
+  if (!currentTranscriptGuideProjectId) return;
+  const version = currentTranscriptGuideVersion ? `?version=${Number(currentTranscriptGuideVersion)}` : '';
+  location.assign(`/api/transcript-edit-guides/projects/${Number(currentTranscriptGuideProjectId)}/download/${encodeURIComponent(kind)}${version}`);
 }
 
 function initEditChat(r, keyword) {
@@ -3219,12 +3596,13 @@ async function loadHistory(type) {
   const typeLabels = {
     topic: '주제 추천', midform: '미드폼', shortform: '숏폼', edit: '편집 피드백',
     sns: 'SNS 변환', research: '시장조사', planning: '기획', intro: '도입부', script: '대본',
-    video_feedback: '🎬 영상 피드백', edit_project: '🎞️ AI 편집 프로젝트'
+    video_feedback: '🎬 영상 피드백', edit_project: '🎞️ AI 편집 프로젝트',
+    transcript_edit_guide: '📝 자막 편집 가이드'
   };
   const typeColors = {
     topic: '#ef4444', midform: '#3b82f6', shortform: '#ec4899', edit: '#8b5cf6',
     sns: '#f97316', research: '#6366f1', planning: '#f59e0b', intro: '#10b981', script: '#ef4444',
-    video_feedback: '#0ea5e9', edit_project: '#7c3aed'
+    video_feedback: '#0ea5e9', edit_project: '#7c3aed', transcript_edit_guide: '#7c3aed'
   };
 
   list.innerHTML = '';
@@ -3282,13 +3660,8 @@ async function loadHistoryItem(id) {
       }, 100);
     },
     edit: () => {
-      switchTab('edit'); resetToEdit();
-      setTimeout(() => {
-        renderEditReport(data.report, data.keyword);
-        document.getElementById('edit-report-section').classList.remove('hidden');
-        document.getElementById('edit-input-section').classList.add('hidden');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }, 100);
+      switchTab('edit');
+      setTimeout(() => openEditFeedbackProject(data.id), 100);
     },
     // legacy history items
     research: () => {
