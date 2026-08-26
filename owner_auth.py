@@ -150,6 +150,10 @@ class OwnerAuthSettings:
     username: str
     password_hash: str
     signing_secret: str
+    # 친구용 계정(선택). 넣으면 같은 사이트에 두 번째 로그인이 생기고,
+    # 그 계정으로 들어오면 열어 준 기능만 보인다.
+    guest_username: str = ""
+    guest_password_hash: str = ""
     cookie_name: str = "yt_owner_session"
     session_ttl_seconds: int = 7 * 24 * 60 * 60
     max_failures: int = 5
@@ -171,6 +175,8 @@ class OwnerAuthSettings:
             production=production,
             username=os.getenv("OWNER_USERNAME", "").strip(),
             password_hash=os.getenv("OWNER_PASSWORD_HASH", "").strip(),
+            guest_username=os.getenv("GUEST_USERNAME", "").strip(),
+            guest_password_hash=os.getenv("GUEST_PASSWORD_HASH", "").strip(),
             signing_secret=os.getenv("AUTH_SIGNING_SECRET", ""),
             cookie_name=os.getenv("AUTH_COOKIE_NAME", "yt_owner_session").strip(),
             session_ttl_seconds=_env_int(
@@ -279,17 +285,41 @@ class OwnerAuthenticator:
         )
 
     def verify_credentials(self, username: str, password: str) -> bool:
-        # Always run the expensive password check to avoid a cheap username oracle.
-        password_ok = verify_password(password, self.settings.password_hash)
-        username_ok = _constant_time_text_equal(username, self.settings.username)
-        return password_ok and username_ok
+        return self.role_for(username, password) is not None
 
-    def issue_session(self, *, now: int | None = None) -> str:
+    def role_for(self, username: str, password: str) -> str | None:
+        """맞으면 'owner' 또는 'guest'를, 틀리면 None을 준다.
+
+        아이디가 있는지 없는지를 응답 속도로 알아채지 못하게, 두 계정 모두
+        비밀번호 검사를 끝까지 돌린다.
+        """
+        owner_password = verify_password(password, self.settings.password_hash)
+        owner_name = _constant_time_text_equal(username, self.settings.username)
+        guest_enabled = bool(self.settings.guest_username and self.settings.guest_password_hash)
+        guest_password = (
+            verify_password(password, self.settings.guest_password_hash)
+            if guest_enabled else False
+        )
+        guest_name = (
+            _constant_time_text_equal(username, self.settings.guest_username)
+            if guest_enabled else False
+        )
+        if owner_password and owner_name:
+            return "owner"
+        if guest_password and guest_name:
+            return "guest"
+        return None
+
+    def issue_session(self, *, now: int | None = None, role: str = "owner") -> str:
         issued_at = int(time.time()) if now is None else int(now)
+        username = (
+            self.settings.guest_username if role == "guest" else self.settings.username
+        )
         payload = {
             "exp": issued_at + self.settings.session_ttl_seconds,
             "iat": issued_at,
-            "sub": self.settings.username,
+            "sub": username,
+            "role": role,
             "v": SESSION_TOKEN_VERSION,
         }
         payload_raw = json.dumps(
@@ -320,7 +350,17 @@ class OwnerAuthenticator:
                 return None
             if payload.get("v") != SESSION_TOKEN_VERSION:
                 return None
-            if payload.get("sub") != self.settings.username:
+            # 계정이 둘이므로 사장님·친구 중 어느 쪽 이름인지 본다.
+            # 친구 계정을 나중에 껐다면 그 세션은 더 이상 통하지 않아야 한다.
+            subject = payload.get("sub")
+            role = payload.get("role") or "owner"
+            guest_enabled = bool(
+                self.settings.guest_username and self.settings.guest_password_hash
+            )
+            if role == "guest":
+                if not guest_enabled or subject != self.settings.guest_username:
+                    return None
+            elif subject != self.settings.username:
                 return None
             issued_at = int(payload.get("iat", 0))
             expires_at = int(payload.get("exp", 0))

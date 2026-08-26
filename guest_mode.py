@@ -31,11 +31,14 @@ _ALLOWED_EXACT = frozenset({
     "/api/chat",                  # 편집 피드백 안에 붙어 있는 후속 질문 창
     "/api/plan-feedback",         # 기획 피드백
     "/api/analyze-edit",          # 편집 피드백
+    "/api/edit-feedback",         # 편집 피드백 실행
+    "/api/edit-feedback/projects",
 })
 
 _ALLOWED_PREFIXES = (
     "/api/auth/",
     "/api/edit-",                 # 편집 피드백 진행 상태·결과
+    "/api/history/",              # 자기가 만든 편집 피드백 다시 열기 (주인 확인은 각 화면에서)
     "/api/analyze-edit/",
 )
 

@@ -171,20 +171,28 @@ OWNER_AUTH = OwnerAuthenticator(OwnerAuthSettings.from_env())
 app.add_middleware(OwnerAuthMiddleware, authenticator=OWNER_AUTH)
 
 
+def current_role(request: Request) -> str:
+    """지금 요청을 보낸 사람이 사장님인지 친구인지."""
+    if guest_mode.is_guest():
+        return "guest"                       # 사이트 자체가 친구용으로 떠 있는 경우
+    session = OWNER_AUTH.request_session(request)
+    return str((session or {}).get("role") or "owner")
+
+
 @app.middleware("http")
 async def block_hidden_features(request: Request, call_next):
     """친구 사이트에서는 열어 준 기능 말고는 서버가 막는다.
 
     화면에서 탭을 숨기는 것만으로는 주소를 직접 치면 그대로 열린다.
     """
-    if guest_mode.is_guest() and not guest_mode.path_allowed(request.url.path):
+    if current_role(request) == "guest" and not guest_mode.path_allowed(request.url.path):
         return JSONResponse({"error": guest_mode.hidden_notice()}, status_code=404)
     return await call_next(request)
 
 
 @app.get("/api/site-mode")
-async def site_mode():
-    return {"guest": guest_mode.is_guest(), "tabs": list(guest_mode.GUEST_TABS)}
+async def site_mode(request: Request):
+    return {"guest": current_role(request) == "guest", "tabs": list(guest_mode.GUEST_TABS)}
 
 
 PLAN_FEEDBACK = PlanFeedbackService()
@@ -335,7 +343,7 @@ class EditFeedbackRequest(BaseModel):
 
 
 def edit_feedback_project_report(
-    report: dict[str, Any], request: EditFeedbackRequest,
+    report: dict[str, Any], request: EditFeedbackRequest, *, account: str = "owner",
 ) -> dict[str, Any]:
     """Add reopenable project inputs without changing the legacy report shape."""
 
@@ -345,6 +353,8 @@ def edit_feedback_project_report(
         "name": request.keyword.strip(),
         "script": request.script,
         "product_url": request.product_url.strip(),
+        # 누가 만든 것인지 남긴다. 친구는 자기 것만 보고, 사장님은 다 본다.
+        "account": account,
     }
     return payload
 
@@ -515,7 +525,8 @@ async def owner_login(request: Request, credentials: OwnerLoginRequest):
             headers={"Retry-After": str(retry_after), "Cache-Control": "no-store"},
         )
 
-    if not OWNER_AUTH.verify_credentials(credentials.username, credentials.password):
+    role = OWNER_AUTH.role_for(credentials.username, credentials.password)
+    if role is None:
         OWNER_AUTH.rate_limiter.record_failure(client_key)
         retry_after = OWNER_AUTH.rate_limiter.retry_after(client_key)
         headers = {"Cache-Control": "no-store"}
@@ -533,7 +544,7 @@ async def owner_login(request: Request, credentials: OwnerLoginRequest):
     )
     response.set_cookie(
         OWNER_AUTH.settings.cookie_name,
-        OWNER_AUTH.issue_session(),
+        OWNER_AUTH.issue_session(role=role),
         max_age=OWNER_AUTH.settings.session_ttl_seconds,
         httponly=True,
         secure=OWNER_AUTH.settings.secure_cookie,
@@ -729,6 +740,7 @@ async def analyze(req: AnalyzeRequest):
     youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
     naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
     naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+    account = current_role(request)
 
     async def stream():
         if not youtube_key:
@@ -810,7 +822,7 @@ async def analyze(req: AnalyzeRequest):
 
 
 @app.post("/api/edit-feedback")
-async def edit_feedback(req: EditFeedbackRequest):
+async def edit_feedback(req: EditFeedbackRequest, request: Request):
     youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
     naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
     naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
@@ -903,7 +915,7 @@ async def edit_feedback(req: EditFeedbackRequest):
             # project restores both the result and the source context. Legacy
             # edit history rows remain readable because the report shape stays
             # top-level and this metadata is purely additive.
-            report = edit_feedback_project_report(report, req)
+            report = edit_feedback_project_report(report, req, account=account)
             history_id = save_history("edit", req.keyword, report)
             yield sse({
                 "step": "done", "report": report, "keyword": req.keyword,
@@ -944,7 +956,8 @@ async def get_plain_transcript_edit_job(job_id: str):
 
 
 @app.get("/api/edit-feedback/projects")
-async def list_edit_feedback_projects():
+async def list_edit_feedback_projects(request: Request):
+    role = current_role(request)
     projects = []
     for summary in list_history("edit", limit=200):
         row = get_history(int(summary["id"]))
@@ -954,7 +967,12 @@ async def list_edit_feedback_projects():
         metadata = report.get("_project") or {}
         if metadata.get("mode") in {"plain_transcript_flow", TRANSCRIPT_EDIT_GUIDE_MODE}:
             continue
+        # 친구는 자기가 만든 것만 본다. 사장님은 친구 것까지 다 본다.
+        # 계정이 생기기 전에 만들어진 것은 전부 사장님 것이다.
+        if role == "guest" and metadata.get("account") != "guest":
+            continue
         projects.append({
+            "account": metadata.get("account") or "owner",
             "id": int(row["id"]), "type": "edit", "keyword": row.get("keyword") or "",
             "created_at": str(row.get("created_at") or ""),
             "mode": "legacy_edit_feedback",
@@ -4128,11 +4146,17 @@ async def history_list(type: str = ""):
 
 
 @app.get("/api/history/{id}")
-async def history_get(id: int):
+async def history_get(id: int, request: Request):
     item = get_history(id)
     if not item:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="없음")
+    # 목록에서 걸러도 번호를 직접 넣으면 열린다. 여기서도 주인을 확인한다.
+    if current_role(request) == "guest":
+        account = ((item.get("report") or {}).get("_project") or {}).get("account")
+        if account != "guest":
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="없음")
     return item
 
 
@@ -4652,9 +4676,9 @@ async def worksheet_autofill(request: Request):
 
 
 @app.get("/")
-async def root():
+async def root(request: Request):
     headers = {"Cache-Control": "no-store, no-cache, must-revalidate"}
-    if guest_mode.is_guest():
+    if current_role(request) == "guest":
         # 친구 화면은 열어 준 기능만 남겨 내려보낸다. 감추기만 하면 소스에 그대로 남는다.
         html = guest_mode.filter_html(Path("static/index.html").read_text(encoding="utf-8"))
         return HTMLResponse(html, headers=headers)
