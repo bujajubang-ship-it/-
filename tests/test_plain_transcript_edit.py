@@ -17,6 +17,7 @@ from plain_transcript_edit import (
     render_csv,
     render_markdown,
     render_plain_text,
+    render_vrew_prompt,
     split_sentences,
     validate_result,
 )
@@ -125,6 +126,19 @@ class SentenceAndExportTests(unittest.TestCase):
         self.assertIn("실사용자: 1년 동안 사용해보니 설거지 시간이 실제로 줄었습니다.", plain_text)
         for banned in ("S007", "[전체 흐름]", "[상세 편집 순서]", "이유:", "근거:", "화면:"):
             self.assertNotIn(banned, plain_text)
+
+    def test_vrew_prompt_splits_steps_and_marks_repeated_takes(self):
+        sentences = split_sentences(SCRIPT)
+        version = {"version": 1, "result": valid_result()}
+        prompt = render_vrew_prompt({"sentences": sentences}, version)
+        self.assertIn("1단계 — 지울 자막", prompt)
+        self.assertIn("2단계 — 남은 자막 순서", prompt)
+        # 같은 문장이 두 번 찍혔으면 몇 번째를 지울지 적어야 살릴 테이크가 안 지워진다.
+        self.assertIn("똑같은 자막이 2개 있는데 그중 2번째 것만", prompt)
+        # 여러 문장짜리 장면은 '부터 ~ 까지'로 묶어 준다.
+        self.assertIn('"대표: 오늘은 좁은 주방의 문제를 설명합니다." 부터', prompt)
+        for banned in ("S001", "S006", "이유:", "근거:"):
+            self.assertNotIn(banned, prompt)
 
     def test_thirty_minute_scale_transcript_keeps_stable_ids(self):
         long_script = "\n".join(

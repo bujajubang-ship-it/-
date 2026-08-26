@@ -3270,6 +3270,20 @@ async function copyTranscriptGuide() {
   }
 }
 
+async function copyVrewPrompt() {
+  if (!currentTranscriptGuideProjectId) return;
+  const status = document.getElementById('tg-revision-status');
+  const version = currentTranscriptGuideVersion ? `?version=${Number(currentTranscriptGuideVersion)}` : '';
+  try {
+    const response = await fetch(`/api/transcript-edit-guides/projects/${Number(currentTranscriptGuideProjectId)}/download/vrew${version}`);
+    if (!response.ok) throw new Error('failed');
+    await navigator.clipboard.writeText(await response.text());
+    if (status) status.textContent = 'Vrew 지시문을 복사했습니다. 1단계부터 붙여넣으세요 (1·2단계를 따로).';
+  } catch (error) {
+    if (status) status.textContent = 'Vrew 지시문을 복사하지 못했습니다.';
+  }
+}
+
 function downloadTranscriptGuide(kind) {
   if (!currentTranscriptGuideProjectId) return;
   const version = currentTranscriptGuideVersion ? `?version=${Number(currentTranscriptGuideVersion)}` : '';

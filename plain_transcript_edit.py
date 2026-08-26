@@ -479,6 +479,113 @@ def render_plain_text(project: dict[str, Any], version: dict[str, Any]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
+    """Vrew 에이전트 입력창에 그대로 붙여넣는 지시문.
+
+    Vrew는 자막 한 줄이 클립 하나다. 그래서 사람이 읽는 가이드와 달리
+    **자막 문장 그대로**를 지시어에 넣어야 에이전트가 클립을 찾을 수 있다.
+
+    지우기와 순서 바꾸기를 한 덩어리로 주면 에이전트가 절반만 하고 끝나는 일이
+    생긴다. 무료 요청 횟수도 제한돼 있으므로 **1단계(삭제) / 2단계(순서)** 로 나눠
+    각각 따로 붙여넣게 한다.
+
+    똑같은 자막이 여러 번 나오는 경우(재촬영 테이크)에는 몇 번째 것인지 함께 적는다.
+    안 그러면 살려야 할 테이크가 지워진다.
+    """
+
+    result = version.get("result") or {}
+    sentences = project.get("sentences") or []
+    order_by_text: dict[str, list[int]] = {}
+    for row in sentences:
+        text = str(row.get("text") or "").strip()
+        if text:
+            order_by_text.setdefault(text, []).append(int(row.get("order") or 0))
+
+    def rows_of(row: dict[str, Any]) -> list[dict[str, Any]]:
+        start_id = str(row.get("sentence_start_id") or "")
+        end_id = str(row.get("sentence_end_id") or start_id)
+        try:
+            return sentence_range(sentences, start_id, end_id)
+        except ValueError:
+            return []
+
+    delete_items: list[dict[str, Any]] = []
+    for row in result.get("deletions") or []:
+        delete_items.extend(item for item in rows_of(row) if str(item.get("text") or "").strip())
+    deleted_orders = {int(item.get("order") or 0) for item in delete_items}
+
+    def occurrence_note(item: dict[str, Any]) -> str:
+        """같은 자막이 여러 번 찍혔으면 몇 번째를 지울지 밝힌다.
+
+        전부 지우는 경우에는 번호를 붙이지 않는다 — 같은 줄이 여러 번 나오면
+        에이전트가 어느 하나만 지우라는 뜻으로 읽는다.
+        """
+        text = str(item.get("text") or "").strip()
+        orders = order_by_text.get(text) or []
+        if len(orders) < 2:
+            return ""
+        if all(order in deleted_orders for order in orders):
+            return f"   ← 똑같은 자막 {len(orders)}개 모두"
+        try:
+            nth = orders.index(int(item.get("order") or 0)) + 1
+        except ValueError:
+            return ""
+        return f"   ← 똑같은 자막이 {len(orders)}개 있는데 그중 {nth}번째 것만"
+
+    delete_lines: list[str] = []
+    seen_all_deleted: set[str] = set()
+    for item in delete_items:
+        text = str(item.get("text") or "").strip()
+        note = occurrence_note(item)
+        if note.endswith("모두"):
+            if text in seen_all_deleted:
+                continue          # 같은 줄을 두 번 적지 않는다
+            seen_all_deleted.add(text)
+        delete_lines.append(f"- {text}{note}")
+
+    scenes = sorted(result.get("edit_table") or [],
+                    key=lambda row: int(row.get("final_order") or 0))
+    order_lines: list[str] = []
+    for number, row in enumerate(scenes, 1):
+        items = [str(item.get("text") or "").strip() for item in rows_of(row)]
+        items = [text for text in items if text]
+        if not items:
+            continue
+        if len(items) == 1:
+            order_lines.append(f'{number}. "{items[0]}"')
+        else:
+            order_lines.append(f'{number}. "{items[0]}" 부터 "{items[-1]}" 까지')
+
+    divider = "\u2501" * 18
+    lines = [
+        "[Vrew 에이전트에 붙여넣을 지시문]",
+        "",
+        "\u203b 1단계와 2단계를 **따로** 붙여넣으세요. 한 번에 주면 절반만 하고 멈춥니다.",
+        "\u203b 1단계를 끝내고 결과를 확인한 뒤 2단계를 주세요.",
+        "",
+        divider,
+        "1단계 — 지울 자막 (여기부터 복사)",
+        divider,
+        "",
+        "아래 자막들을 삭제해 줘. 목록에 적힌 자막만 지우고 나머지는 그대로 둬.",
+        "자막 내용을 고치거나 새로 쓰지는 마.",
+        "",
+    ]
+    lines.extend(delete_lines or ["- (지울 자막 없음)"])
+    lines.extend([
+        "",
+        divider,
+        "2단계 — 남은 자막 순서 (1단계를 끝낸 뒤 복사)",
+        divider,
+        "",
+        "남은 자막을 아래 순서대로 옮겨 줘. 번호가 최종 순서야.",
+        "자막을 새로 지우거나 내용을 고치지는 마.",
+        "",
+    ])
+    lines.extend(order_lines or ["1. (순서 변경 없음)"])
+    return "\n".join(lines).strip() + "\n"
+
+
 CSV_FIELDS = [
     "final_order", "sentence_start_id", "sentence_end_id", "start_sentence",
     "end_sentence", "action", "purpose", "edit_instruction",

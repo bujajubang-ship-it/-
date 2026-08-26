@@ -65,6 +65,7 @@ from video_feedback_jobs import VideoFeedbackJobManager
 from plain_transcript_edit import render_csv as render_transcript_edit_csv
 from plain_transcript_edit import render_markdown as render_transcript_edit_markdown
 from plain_transcript_edit import render_plain_text as render_transcript_edit_text
+from plain_transcript_edit import render_vrew_prompt as render_transcript_edit_vrew
 from plain_transcript_edit_jobs import HISTORY_TYPE as TRANSCRIPT_EDIT_GUIDE_HISTORY_TYPE
 from plain_transcript_edit_jobs import PROJECT_MODE as TRANSCRIPT_EDIT_GUIDE_MODE
 from plain_transcript_edit_jobs import PlainTranscriptEditJobManager
@@ -979,13 +980,19 @@ async def download_plain_transcript_edit_project(
         content, media_type, suffix = render_transcript_edit_markdown(project.get("_project") or {}, selected), "text/markdown; charset=utf-8", "md"
     elif kind == "txt":
         content, media_type, suffix = render_transcript_edit_text(project, selected), "text/plain; charset=utf-8", "txt"
+    elif kind == "vrew":
+        content, media_type, suffix = render_transcript_edit_vrew(project, selected), "text/plain; charset=utf-8", "txt"
     elif kind == "csv":
         content, media_type, suffix = render_transcript_edit_csv(selected.get("result") or {}), "text/csv; charset=utf-8", "csv"
     else:
-        return JSONResponse({"error": "markdown, txt 또는 csv만 다운로드할 수 있습니다."}, status_code=400)
+        return JSONResponse({"error": "markdown, txt, vrew 또는 csv만 다운로드할 수 있습니다."}, status_code=400)
+    # Vrew 지시문은 사람이 읽는 가이드와 파일 이름이 겹치면 안 된다.
+    filename_stem = f"transcript-edit-guide-v{version_number}"
+    if kind == "vrew":
+        filename_stem += "-vrew"
     return Response(
         content=content, media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="transcript-edit-guide-v{version_number}.{suffix}"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename_stem}.{suffix}"'},
     )
 
 
