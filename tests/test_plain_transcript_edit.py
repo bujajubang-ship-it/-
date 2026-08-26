@@ -145,6 +145,33 @@ class SentenceAndExportTests(unittest.TestCase):
         for banned in ("S001", "S006", "이유:", "근거:"):
             self.assertNotIn(banned, prompt)
 
+    def test_caption_polish_may_only_remove_words(self):
+        """Vrew 자막은 찍은 말을 받아 적은 것이라 원문에 없는 글자가 들어가면 안 된다."""
+        sentences = split_sentences(SCRIPT)
+        original = "A/S 부품 공급 여부도 꼭 확인하세요."
+        base = {
+            "edit_table": [], "deletions": [], "overall_flow": [],
+            "data_basis_note": "채널 데이터 표본이 부족하여 Business PT와 대본의 논리 구조를 중심으로 판단함",
+        }
+
+        def check(polished: str):
+            result = dict(base, caption_polish=[{
+                "sentence_id": "S008", "original_text": original, "polished_text": polished,
+            }])
+            return validate_result(
+                result, sentences, numeric_data_available=False, channel_data_available=False)
+
+        # 낱말 빼기와 띄어쓰기 고치기는 말을 바꾸지 않는다.
+        check("A/S 부품 공급 여부도 확인하세요.")
+        check("A/S 부품공급 여부도 꼭 확인하세요")
+        for fabricated in (
+            "A/S 부품 공급 여부도 꼭 확인하십시오.",      # 맞춤법 교정도 원문에 없는 글자다
+            "A/S 부품은 3년간 무상 공급됩니다.",           # 없는 말
+            "A/S 부품 공급 여부도 꼭 미리 확인하세요.",     # 낱말 하나 추가
+        ):
+            with self.assertRaisesRegex(ValueError, "원문에 없는 글자"):
+                check(fabricated)
+
     def test_thirty_minute_scale_transcript_keeps_stable_ids(self):
         long_script = "\n".join(
             f"전문가: 사용법 설명 {index}입니다. 권장 온도와 A/S 기준을 확인합니다."

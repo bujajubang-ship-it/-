@@ -79,6 +79,24 @@ def analyze_duplicates(sentences: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return groups
 
 
+def _is_subsequence(polished: str, original: str) -> bool:
+    """다듬은 자막이 원문에서 '빼기만' 한 것인지 본다.
+
+    Vrew 자막은 이미 찍은 영상을 받아 적은 것이라, 원문에 없는 글자가 자막에 들어가면
+    사장님이 하지 않은 말이 화면에 뜬다. 그래서 맞춤법 교정조차 허용하지 않는다.
+    띄어쓰기만 자유롭게 둔다(줄 넘김·붙여쓰기는 말을 바꾸지 않는다).
+    """
+    source = re.sub(r"\s+", "", original)
+    target = re.sub(r"\s+", "", polished)
+    position = 0
+    for char in target:
+        position = source.find(char, position)
+        if position < 0:
+            return False
+        position += 1
+    return True
+
+
 def sentence_range(sentences: list[dict[str, Any]], start_id: str, end_id: str) -> list[dict[str, Any]]:
     by_id = {row["id"]: row for row in sentences}
     if start_id not in by_id or end_id not in by_id:
@@ -196,12 +214,16 @@ evidence에 실제 CTR/Retention 수치가 없으면 숫자를 만들지 않는�
 모든 start_sentence/end_sentence는 제공된 원문과 글자까지 정확히 같아야 한다.
 결과는 편집자가 그대로 실행할 수 있게 구체적으로 작성한다.
 
-caption_polish 는 화면에 뜨는 자막 글자만 다듬는 목록이다. 말소리는 그대로 두고 자막 글자만 고친다.
-- 최종 사용하는 문장 중 고칠 것이 있는 것만 넣는다. 삭제할 문장은 넣지 않는다.
-- 고치는 범위: 군더더기('어', '음', '자', '아', '뭐', '이제')를 빼고, 맞춤법·띄어쓰기를 바로잡고,
-  더듬거나 되풀이한 말을 한 번으로 줄이는 것까지만 한다.
-- 원문에 없는 낱말을 새로 넣지 않는다. 뜻을 바꾸지 않는다. 문장을 길게 늘이지 않는다.
-- 고칠 것이 없는 문장은 목록에 넣지 않는다. polished_text 가 original_text 와 같으면 안 된다.
+caption_polish 는 화면에 뜨는 자막에서 군더더기를 '빼기만' 하는 목록이다.
+이 자막은 이미 찍은 영상을 받아 적은 것이다. 원문에 없는 글자가 자막에 들어가면
+사장님이 하지 않은 말이 화면에 뜬다. 그러므로 다음을 반드시 지킨다.
+- **낱말을 빼는 것만 한다.** 글자를 새로 넣거나 다른 글자로 바꾸지 않는다.
+  맞춤법 교정도 하지 않는다(원문에 없는 글자가 되기 때문이다). 띄어쓰기만 자유롭게 고친다.
+- 뺄 수 있는 것: 군더더기('어', '음', '자', '아', '뭐', '이제'), 더듬어 되풀이한 말,
+  문장 끝에 붙은 의미 없는 꼬리말.
+- 뺀 뒤에도 말이 되는 문장이어야 한다. 뜻이 달라지면 그 문장은 목록에 넣지 않는다.
+- 최종 사용하는 문장 중 뺄 것이 있는 것만 넣는다. 삭제할 문장은 넣지 않는다.
+- polished_text 가 original_text 와 같으면 안 된다.
 - original_text 는 해당 문장 원문과 글자까지 정확히 같아야 한다."""
 
 
@@ -352,10 +374,11 @@ def validate_result(
             raise ValueError(f"다듬은 자막이 비어 있습니다: {sentence_id}")
         if polished == original:
             raise ValueError(f"다듬기 전후가 같습니다: {sentence_id}")
-        if len(polished) > len(original) + 5:
-            raise ValueError(f"다듬은 자막이 원문보다 길어졌습니다: {sentence_id}")
-        if difflib.SequenceMatcher(None, original, polished).ratio() < 0.55:
-            raise ValueError(f"다듬은 자막이 원문에서 너무 멀어졌습니다: {sentence_id}")
+        if not _is_subsequence(polished, original):
+            raise ValueError(
+                f"자막에 원문에 없는 글자가 들어갔습니다: {sentence_id} "
+                f"(빼는 것만 됩니다. 원문 {original!r} → {polished!r})"
+            )
     if polished_ids & deleted:
         raise ValueError(f"삭제할 문장을 다듬도록 지정했습니다: {sorted(polished_ids & deleted)}")
     unknown = {ref for ref in _SENTENCE_REF.findall(_all_text(result)) if ref not in by_id}
@@ -603,6 +626,9 @@ def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
         "이 영상은 편집 전 촬영 원본이라 NG 테이크와 촬영 중 나눈 대화가 섞여 있어.",
         "아래 세 가지 작업을 순서대로 해줘.",
         "",
+        "★ 가장 중요한 규칙: 이 영상에서 이미 말한 것 말고 새로운 말을 절대 만들지 마.",
+        "  지우기, 순서 바꾸기, 낱말 빼기만 해. 없던 말을 넣거나 다른 말로 바꾸지 마.",
+        "",
         "[작업 1] 아래 목록에 있는 자막을 삭제해 줘.",
         "- 목록에 적힌 자막만 지우고, 목록에 없는 자막은 절대 지우지 마.",
         "- 자막 글자를 고치거나 새로 쓰지 마. 이 단계는 삭제만 해.",
@@ -625,10 +651,11 @@ def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
     lines.extend(order_lines or ["1. (순서 변경 없음)"])
     lines.extend([
         "",
-        "[작업 3] 마지막으로 아래 자막의 글자를 오른쪽 문장으로 바꿔 줘.",
+        "[작업 3] 마지막으로 아래 자막에서 군더더기 말을 빼 줘.",
         "- 말소리는 그대로 두고 화면에 뜨는 자막 글자만 고치는 거야. 영상을 자르지 마.",
         "- 「원래 자막」 → 「바꿀 자막」 형식이야. 왼쪽과 똑같은 자막을 찾아 오른쪽 문장으로 바꿔 줘.",
-        "- 목록에 없는 자막은 그대로 둬. 네가 알아서 더 다듬지 마.",
+        "- 오른쪽은 왼쪽에서 낱말을 뺀 것뿐이야. 새 낱말은 하나도 없어.",
+        "- 목록에 없는 자막은 그대로 둬. 네가 알아서 더 다듬거나 맞춤법을 고치지 마.",
         "",
     ])
     lines.extend(polish_lines or ["- (다듬을 자막 없음)"])
