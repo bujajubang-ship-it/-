@@ -9,6 +9,7 @@
 열어 주는 기능
   · 편집 피드백  — 촬영한 대본을 넣으면 점수와 고칠 점
   · 기획 피드백  — 촬영 전 기획안을 넣으면 점수와 고칠 점
+  · 기획 워크시트 — 촬영할 것을 표로 정리 (자기가 쓴 줄만 보인다)
 
 닫는 것 중 특히 중요한 것
   · 자막 편집 가이드 — Vrew 에이전트를 쓰는 방식은 알리지 않는다(사장님 지시)
@@ -20,7 +21,7 @@ from __future__ import annotations
 import os
 import re
 
-GUEST_TABS = ("edit", "plan-feedback")
+GUEST_TABS = ("edit", "plan-feedback", "worksheet")
 
 # 친구 사이트에서 열어 두는 API.
 # 접두어로만 비교하면 `/api/chat` 이 `/api/chat-sessions` 까지 열어 버린다.
@@ -31,6 +32,7 @@ _ALLOWED_EXACT = frozenset({
     "/api/chat",                  # 편집 피드백 안에 붙어 있는 후속 질문 창
     "/api/plan-feedback",         # 기획 피드백
     "/api/analyze-edit",          # 편집 피드백
+    "/api/worksheet",             # 기획 워크시트 (자기 줄만 보임)
     "/api/edit-feedback",         # 편집 피드백 실행
     "/api/edit-feedback/projects",
 })
@@ -40,6 +42,7 @@ _ALLOWED_PREFIXES = (
     "/api/edit-",                 # 편집 피드백 진행 상태·결과
     "/api/history/",              # 자기가 만든 편집 피드백 다시 열기 (주인 확인은 각 화면에서)
     "/api/analyze-edit/",
+    "/api/worksheet/",            # 워크시트 줄 수정·삭제·썸네일·자동채움
 )
 
 # 로그인 화면과 정적 파일은 언제나 열려 있어야 한다.

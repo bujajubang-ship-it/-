@@ -4373,24 +4373,50 @@ async def optimize_delete(id: int):
 from database import (list_worksheet, create_worksheet_row,
                       update_worksheet_row, delete_worksheet_row)
 
+def _worksheet_account(row: dict[str, Any]) -> str:
+    """이 줄을 누가 만들었나. 계정 표시가 생기기 전 줄은 사장님 것이다."""
+    try:
+        return str((json.loads(row.get("data") or "{}") or {}).get("_account") or "owner")
+    except (ValueError, TypeError):
+        return "owner"
+
+
+def _worksheet_visible(request: Request, row: dict[str, Any]) -> bool:
+    return current_role(request) != "guest" or _worksheet_account(row) == "guest"
+
+
 @app.get("/api/worksheet")
-async def worksheet_list():
-    return list_worksheet()
+async def worksheet_list(request: Request):
+    # 친구는 자기가 쓴 줄만 본다. 사장님은 친구 것까지 다 본다.
+    return [row for row in list_worksheet() if _worksheet_visible(request, row)]
 
 @app.post("/api/worksheet")
 async def worksheet_create(request: Request):
     data = await request.json()
-    id_ = create_worksheet_row(json.dumps(data.get("data", {}), ensure_ascii=False))
+    payload = dict(data.get("data", {}) or {})
+    payload["_account"] = current_role(request)
+    id_ = create_worksheet_row(json.dumps(payload, ensure_ascii=False))
     return {"id": id_}
 
 @app.put("/api/worksheet/{id}")
 async def worksheet_update(id: int, request: Request):
+    rows = {int(row["id"]): row for row in list_worksheet()}
+    existing = rows.get(int(id))
+    if not existing or not _worksheet_visible(request, existing):
+        return JSONResponse({"error": "워크시트를 찾지 못했습니다."}, status_code=404)
     data = await request.json()
-    update_worksheet_row(id, json.dumps(data.get("data", {}), ensure_ascii=False))
+    payload = dict(data.get("data", {}) or {})
+    # 저장할 때마다 주인이 바뀌면 안 된다. 처음 만든 사람을 그대로 둔다.
+    payload["_account"] = _worksheet_account(existing)
+    update_worksheet_row(id, json.dumps(payload, ensure_ascii=False))
     return {"ok": True}
 
 @app.delete("/api/worksheet/{id}")
-async def worksheet_delete(id: int):
+async def worksheet_delete(id: int, request: Request):
+    rows = {int(row["id"]): row for row in list_worksheet()}
+    existing = rows.get(int(id))
+    if not existing or not _worksheet_visible(request, existing):
+        return JSONResponse({"error": "워크시트를 찾지 못했습니다."}, status_code=404)
     delete_worksheet_row(id)
     return {"ok": True}
 

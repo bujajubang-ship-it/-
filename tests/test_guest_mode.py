@@ -93,9 +93,14 @@ class GuestHtmlTests(unittest.TestCase):
 
     def test_hidden_features_are_cut_from_the_page_not_just_hidden(self):
         # Vrew 를 쓴다는 사실은 친구에게 알리지 않는다 — 화면 소스에도 남으면 안 된다.
-        for secret in ("Vrew", "자막 편집 가이드", "tab-transcript-guide",
-                       "짜치는", "채널 분석", "파이프라인", "전략 보관함"):
+        # 낱말이 아니라 '탭과 화면이 남아 있는지'로 본다 — 워크시트 안내문에도
+        # '파이프라인'이라는 말이 나오는데 그건 기능이 열린 것이 아니다.
+        for secret in ("Vrew", "자막 편집 가이드", "짜치는", "채널 분석", "전략 보관함"):
             self.assertNotIn(secret, self.filtered, secret)
+        for hidden in ("transcript-guide", "pipeline", "knowledge", "chat",
+                       "channel", "jjachi", "autocut", "strategy"):
+            self.assertNotIn(f'id="tab-{hidden}"', self.filtered, hidden)
+            self.assertNotIn(f'id="pane-{hidden}"', self.filtered, hidden)
 
     def test_the_two_open_features_survive(self):
         for keep in ("tab-edit", "tab-plan-feedback", "편집 피드백", "기획 피드백"):
@@ -238,3 +243,49 @@ class GuestAccountFromTheSiteTests(unittest.TestCase):
         self.assertEqual(TestClient(main.app).post(
             "/api/auth/login",
             json={"username": "giver", "password": "giver1234567"}).status_code, 401)
+
+
+class WorksheetIsolationTests(unittest.TestCase):
+    """워크시트도 계정별로 갈린다. 친구는 자기 줄만."""
+
+    @classmethod
+    def setUpClass(cls):
+        AccountsApplied.apply()
+        cls.boss = login("boss", "bossPassword123")
+        cls.friend = login("friend", "friendPassword123")
+        cls.made = []
+
+    @classmethod
+    def tearDownClass(cls):
+        for row_id in cls.made:
+            cls.boss.delete(f"/api/worksheet/{row_id}")
+        AccountsApplied.restore()
+
+    def _add(self, client, subject):
+        row_id = client.post("/api/worksheet", json={"data": {"주제": subject}}).json()["id"]
+        self.made.append(row_id)
+        return row_id
+
+    def _subjects(self, client):
+        import json as _json
+        rows = client.get("/api/worksheet").json()
+        return [_json.loads(row["data"]).get("주제") for row in rows]
+
+    def test_the_friend_only_sees_their_own_rows(self):
+        self._add(self.boss, "사장님 기획")
+        self._add(self.friend, "친구 기획")
+        self.assertNotIn("사장님 기획", self._subjects(self.friend))
+        self.assertIn("친구 기획", self._subjects(self.friend))
+        self.assertIn("사장님 기획", self._subjects(self.boss))
+
+    def test_the_friend_cannot_touch_a_row_they_do_not_own(self):
+        owner_row = self._add(self.boss, "손대면 안 되는 줄")
+        self.assertEqual(self.friend.put(
+            f"/api/worksheet/{owner_row}", json={"data": {"주제": "가로채기"}}).status_code, 404)
+        self.assertEqual(self.friend.delete(f"/api/worksheet/{owner_row}").status_code, 404)
+
+    def test_editing_does_not_hand_the_row_to_whoever_saved_last(self):
+        friend_row = self._add(self.friend, "친구가 쓴 줄")
+        self.boss.put(f"/api/worksheet/{friend_row}", json={"data": {"주제": "사장님이 고침"}})
+        # 사장님이 고쳐도 주인은 친구다 — 아니면 친구 화면에서 줄이 사라진다.
+        self.assertIn("사장님이 고침", self._subjects(self.friend))
