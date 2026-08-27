@@ -43,7 +43,7 @@ let planningAnalyzing = false;
 let introAnalyzing = false;
 let scriptAnalyzing = false;
 
-const ALL_TABS = ['midform', 'shortform', 'ytsearch', 'topic', 'jjachi', 'edit', 'transcript-guide', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'edit-director', 'autocut', 'chat', 'strategy', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
+const ALL_TABS = ['midform', 'shortform', 'ytsearch', 'topic', 'jjachi', 'edit', 'plan-feedback', 'transcript-guide', 'sns', 'decision', 'channel', 'blog', 'video-feedback', 'edit-director', 'autocut', 'chat', 'strategy', 'history', 'pipeline', 'worksheet', 'knowledge', 'research', 'planning', 'intro', 'script'];
 
 function switchTab(tab) {
   ALL_TABS.forEach(t => {
