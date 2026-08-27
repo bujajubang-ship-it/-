@@ -1,7 +1,69 @@
+import os
+import secrets
 import unittest
 from pathlib import Path
 
-import guest_mode
+# main 을 부르기 전에 계정 설정을 잡아 둔다. 인증 미들웨어는 앱이 처음 뜰 때
+# 인증기를 붙들기 때문에, 나중에 바꿔 끼우면 쿠키 서명이 어긋난다.
+os.environ.update({
+    "AUTH_MODE": "owner",
+    "OWNER_USERNAME": "boss",
+    "GUEST_USERNAME": "friend",
+    "AUTH_SIGNING_SECRET": secrets.token_urlsafe(48),
+})
+from owner_auth import hash_password  # noqa: E402
+
+os.environ["OWNER_PASSWORD_HASH"] = hash_password("bossPassword123")
+os.environ["GUEST_PASSWORD_HASH"] = hash_password("friendPassword123")
+
+import guest_mode  # noqa: E402
+import main  # noqa: E402
+from database import delete_history, save_history  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from owner_auth import OwnerAuthenticator, OwnerAuthSettings  # noqa: E402
+
+
+class AccountsApplied:
+    """이 테스트 동안만 계정 설정을 끼웠다가 원래대로 돌려놓는다.
+
+    인증 미들웨어는 앱이 처음 뜰 때 인증기를 붙들기 때문에 전역만 바꾸면
+    쿠키를 서명한 열쇠와 검사하는 열쇠가 달라진다. 그렇다고 통째로 갈아끼우면
+    같이 도는 다른 테스트가 갑자기 로그인을 요구받는다. 그래서 되돌린다.
+    """
+
+    _saved = None
+
+    @classmethod
+    def apply(cls):
+        cls._saved = (main.OWNER_AUTH, main.app.middleware_stack)
+        main.OWNER_AUTH = OwnerAuthenticator(OwnerAuthSettings.from_env())
+        main.OWNER_AUTH.guest_provider = main._db_guest_account
+        cls._middleware = [
+            item for item in main.app.user_middleware
+            if getattr(item.cls, "__name__", "") == "OwnerAuthMiddleware"
+        ]
+        cls._old_kwargs = [dict(item.kwargs) for item in cls._middleware]
+        for item in cls._middleware:
+            item.kwargs["authenticator"] = main.OWNER_AUTH
+        main.app.middleware_stack = main.app.build_middleware_stack()
+
+    @classmethod
+    def restore(cls):
+        if not cls._saved:
+            return
+        for item, kwargs in zip(cls._middleware, cls._old_kwargs):
+            item.kwargs.clear()
+            item.kwargs.update(kwargs)
+        main.OWNER_AUTH, main.app.middleware_stack = cls._saved
+        cls._saved = None
+
+
+def login(username, password):
+    client = TestClient(main.app)
+    response = client.post(
+        "/api/auth/login", json={"username": username, "password": password})
+    assert response.status_code == 200, response.text
+    return client
 
 
 class GuestPathTests(unittest.TestCase):
@@ -45,27 +107,7 @@ class TwoAccountTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import os
-        import secrets
-
-        os.environ.update({
-            "AUTH_MODE": "owner",
-            "OWNER_USERNAME": "boss", "GUEST_USERNAME": "friend",
-            "AUTH_SIGNING_SECRET": secrets.token_urlsafe(48),
-        })
-        from owner_auth import OwnerAuthenticator, OwnerAuthSettings, hash_password
-        os.environ["OWNER_PASSWORD_HASH"] = hash_password("bossPassword123")
-        os.environ["GUEST_PASSWORD_HASH"] = hash_password("friendPassword123")
-
-        import main
-        from database import delete_history, save_history
-        from fastapi.testclient import TestClient
-
-        # 다른 테스트가 main 을 먼저 불러오면 그때의 설정이 굳는다. 여기서 다시 읽는다.
-        main.OWNER_AUTH = OwnerAuthenticator(OwnerAuthSettings.from_env())
-        cls._delete_history = staticmethod(delete_history)
-
-        # 같은 DB를 여러 테스트가 함께 쓰므로 이번 판에서 만든 것만 알아볼 수 있게 표를 붙인다.
+        AccountsApplied.apply()
         cls.tag = secrets.token_hex(4)
         cls.owner_id = save_history(
             "edit", f"사장님 영상 {cls.tag}", {"_project": {"account": "owner"}})
@@ -73,14 +115,6 @@ class TwoAccountTests(unittest.TestCase):
             "edit", f"친구 영상 {cls.tag}", {"_project": {"account": "guest"}})
         cls.legacy_id = save_history(
             "edit", f"계정 표시 전에 만든 것 {cls.tag}", {"_project": {}})
-
-        def login(username, password):
-            client = TestClient(main.app)
-            response = client.post(
-                "/api/auth/login", json={"username": username, "password": password})
-            assert response.status_code == 200, response.text
-            return client
-
         cls.boss = login("boss", "bossPassword123")
         cls.friend = login("friend", "friendPassword123")
 
@@ -88,12 +122,15 @@ class TwoAccountTests(unittest.TestCase):
     def tearDownClass(cls):
         for history_id in (cls.owner_id, cls.guest_id, cls.legacy_id):
             try:
-                cls._delete_history(history_id)
+                delete_history(history_id)
             except Exception:
                 pass
+        AccountsApplied.restore()
 
     def _mine(self, client):
-        rows = client.get("/api/edit-feedback/projects").json()
+        response = client.get("/api/edit-feedback/projects")
+        rows = response.json()
+        assert isinstance(rows, list), f"{response.status_code} {rows}"
         return [row["keyword"] for row in rows if self.tag in (row.get("keyword") or "")]
 
     def test_the_friend_sees_only_their_own_work(self):
@@ -151,3 +188,53 @@ class KnowledgeReachesPlanFeedbackTests(unittest.TestCase):
             self.assertTrue(any("Low Data" in str(row.get("title") or "") for row in rows))
         finally:
             delete_knowledge(knowledge_id)
+
+
+class GuestAccountFromTheSiteTests(unittest.TestCase):
+    """Render 환경변수를 만지지 않고 사장님 화면에서 친구 계정을 정한다."""
+
+    @classmethod
+    def setUpClass(cls):
+        AccountsApplied.apply()
+        cls.boss = login("boss", "bossPassword123")
+
+    @classmethod
+    def tearDownClass(cls):
+        AccountsApplied.restore()
+
+    def tearDown(self):
+        self.boss.delete("/api/guest-account")
+
+    def test_owner_creates_the_account_and_the_friend_can_log_in(self):
+        saved = self.boss.post(
+            "/api/guest-account", json={"username": "giver", "password": "giver1234567"})
+        self.assertEqual(saved.status_code, 200)
+        friend = TestClient(main.app)
+        self.assertEqual(friend.post(
+            "/api/auth/login",
+            json={"username": "giver", "password": "giver1234567"}).status_code, 200)
+
+    def test_a_short_password_is_refused(self):
+        response = self.boss.post(
+            "/api/guest-account", json={"username": "giver", "password": "1234"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("12자", response.json()["error"])
+
+    def test_the_friend_cannot_reach_the_account_screen(self):
+        self.boss.post(
+            "/api/guest-account", json={"username": "giver", "password": "giver1234567"})
+        friend = TestClient(main.app)
+        friend.post("/api/auth/login", json={"username": "giver", "password": "giver1234567"})
+        # 친구가 자기 비밀번호를 바꾸거나 사장님 계정을 건드릴 수 있으면 안 된다.
+        self.assertEqual(friend.get("/api/guest-account").status_code, 404)
+        self.assertEqual(friend.post(
+            "/api/guest-account", json={"username": "x", "password": "y" * 12}).status_code, 404)
+        self.assertNotIn("guest-account-card", friend.get("/").text)
+
+    def test_removing_the_account_locks_the_friend_out(self):
+        self.boss.post(
+            "/api/guest-account", json={"username": "giver", "password": "giver1234567"})
+        self.boss.delete("/api/guest-account")
+        self.assertEqual(TestClient(main.app).post(
+            "/api/auth/login",
+            json={"username": "giver", "password": "giver1234567"}).status_code, 401)

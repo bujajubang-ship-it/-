@@ -280,6 +280,9 @@ class OwnerAuthenticator:
     def __init__(self, settings: OwnerAuthSettings):
         settings.validate()
         self.settings = settings
+        # 친구 계정을 어디서 읽을지. 기본은 환경변수, 앱이 DB에서 읽도록 바꿔 끼울 수 있다.
+        self.guest_provider = lambda: (
+            settings.guest_username, settings.guest_password_hash)
         self.rate_limiter = LoginRateLimiter(
             settings.max_failures, settings.failure_window_seconds
         )
@@ -295,13 +298,13 @@ class OwnerAuthenticator:
         """
         owner_password = verify_password(password, self.settings.password_hash)
         owner_name = _constant_time_text_equal(username, self.settings.username)
-        guest_enabled = bool(self.settings.guest_username and self.settings.guest_password_hash)
+        guest_username, guest_hash = self._guest_account()
+        guest_enabled = bool(guest_username and guest_hash)
         guest_password = (
-            verify_password(password, self.settings.guest_password_hash)
-            if guest_enabled else False
+            verify_password(password, guest_hash) if guest_enabled else False
         )
         guest_name = (
-            _constant_time_text_equal(username, self.settings.guest_username)
+            _constant_time_text_equal(username, guest_username)
             if guest_enabled else False
         )
         if owner_password and owner_name:
@@ -310,10 +313,17 @@ class OwnerAuthenticator:
             return "guest"
         return None
 
+    def _guest_account(self) -> tuple[str, str]:
+        try:
+            username, password_hash = self.guest_provider()
+        except Exception:
+            return "", ""
+        return str(username or "").strip(), str(password_hash or "").strip()
+
     def issue_session(self, *, now: int | None = None, role: str = "owner") -> str:
         issued_at = int(time.time()) if now is None else int(now)
         username = (
-            self.settings.guest_username if role == "guest" else self.settings.username
+            self._guest_account()[0] if role == "guest" else self.settings.username
         )
         payload = {
             "exp": issued_at + self.settings.session_ttl_seconds,
@@ -354,11 +364,9 @@ class OwnerAuthenticator:
             # 친구 계정을 나중에 껐다면 그 세션은 더 이상 통하지 않아야 한다.
             subject = payload.get("sub")
             role = payload.get("role") or "owner"
-            guest_enabled = bool(
-                self.settings.guest_username and self.settings.guest_password_hash
-            )
+            guest_username, guest_hash = self._guest_account()
             if role == "guest":
-                if not guest_enabled or subject != self.settings.guest_username:
+                if not (guest_username and guest_hash) or subject != guest_username:
                     return None
             elif subject != self.settings.username:
                 return None

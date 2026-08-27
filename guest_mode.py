@@ -50,11 +50,21 @@ def is_guest() -> bool:
     return os.getenv("SITE_MODE", "").strip().lower() == "guest"
 
 
+# 친구가 열어도 되는 화면 파일 확장자. 그 밖의 .html 은 막는다 —
+# 사장님 전용 화면(친구 계정 관리 등)이 주소만 알면 열리면 안 된다.
+_ASSET_SUFFIXES = (
+    ".css", ".js", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+    ".ico", ".webp", ".woff", ".woff2", ".ttf", ".json",
+)
+
+
 def path_allowed(path: str) -> bool:
-    """친구 사이트에서 이 주소를 열어도 되는가."""
-    if not path.startswith("/api/"):
-        return True                      # 화면·정적 파일은 통과, 내용은 앞단에서 가린다
-    return path in _ALLOWED_EXACT or path.startswith(_ALLOWED_PREFIXES)
+    """친구가 이 주소를 열어도 되는가."""
+    if path.startswith("/api/"):
+        return path in _ALLOWED_EXACT or path.startswith(_ALLOWED_PREFIXES)
+    if path in ("/", "/login", "/logout", "/favicon.ico"):
+        return True
+    return path.lower().endswith(_ASSET_SUFFIXES)
 
 
 def hidden_notice() -> str:

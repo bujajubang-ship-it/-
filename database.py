@@ -404,3 +404,43 @@ def restore_video_feedback_rows(rows: list[dict]) -> int:
         raise
     finally:
         conn.close()
+
+
+# ── 앱 설정 한 줄짜리 저장소 ──────────────────────────────────────
+# 친구 계정처럼 Render 환경변수로 넣기 번거로운 값을 여기에 둔다.
+# 표가 없으면 만든다. 운영에서도 만든다 — 새 표를 더하는 것은
+# '필요한 표가 갖춰졌는지' 검사(db_safety)를 흔들지 않는다.
+def _ensure_app_setting(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS app_setting (
+            key TEXT PRIMARY KEY,
+            value TEXT DEFAULT '',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+
+
+def get_setting(key: str) -> str:
+    with get_db() as conn:
+        _ensure_app_setting(conn)
+        row = conn.execute("SELECT value FROM app_setting WHERE key=?", (key,)).fetchone()
+        return str(row["value"]) if row else ""
+
+
+def set_setting(key: str, value: str) -> None:
+    with get_db() as conn:
+        _ensure_app_setting(conn)
+        conn.execute(
+            "INSERT INTO app_setting(key,value,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
+            (key, value),
+        )
+        conn.commit()
+
+
+def delete_setting(key: str) -> None:
+    with get_db() as conn:
+        _ensure_app_setting(conn)
+        conn.execute("DELETE FROM app_setting WHERE key=?", (key,))
+        conn.commit()

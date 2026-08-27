@@ -190,6 +190,70 @@ async def block_hidden_features(request: Request, call_next):
     return await call_next(request)
 
 
+# ── 친구 계정 (사장님만) ─────────────────────────────────────────
+# Render 환경변수로 넣는 것이 번거로워 DB에 두고 화면에서 정하도록 했다.
+GUEST_NAME_KEY, GUEST_HASH_KEY = "guest_username", "guest_password_hash"
+
+
+def _db_guest_account() -> tuple[str, str]:
+    """DB에 정해 둔 친구 계정. 없으면 환경변수 값을 쓴다."""
+    try:
+        from database import get_setting
+        username, password_hash = get_setting(GUEST_NAME_KEY), get_setting(GUEST_HASH_KEY)
+    except Exception:
+        username = password_hash = ""
+    if username and password_hash:
+        return username, password_hash
+    return OWNER_AUTH.settings.guest_username, OWNER_AUTH.settings.guest_password_hash
+
+
+OWNER_AUTH.guest_provider = _db_guest_account
+
+
+class GuestAccountRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.get("/api/guest-account")
+async def guest_account_get(request: Request):
+    if current_role(request) != "owner":
+        return JSONResponse({"error": guest_mode.hidden_notice()}, status_code=404)
+    username, password_hash = _db_guest_account()
+    return {"configured": bool(username and password_hash), "username": username}
+
+
+@app.post("/api/guest-account")
+async def guest_account_set(request: Request, body: GuestAccountRequest):
+    if current_role(request) != "owner":
+        return JSONResponse({"error": guest_mode.hidden_notice()}, status_code=404)
+    from owner_auth import hash_password
+    from database import set_setting
+    username = (body.username or "").strip()
+    if not username:
+        return JSONResponse({"error": "아이디를 입력해 주세요."}, status_code=400)
+    if username == OWNER_AUTH.settings.username:
+        return JSONResponse({"error": "사장님 아이디와 같게 만들 수 없습니다."}, status_code=400)
+    try:
+        password_hash = hash_password(body.password or "")
+    except ValueError:
+        return JSONResponse(
+            {"error": "비밀번호는 12자 이상이어야 합니다."}, status_code=400)
+    set_setting(GUEST_NAME_KEY, username)
+    set_setting(GUEST_HASH_KEY, password_hash)
+    return {"ok": True, "username": username}
+
+
+@app.delete("/api/guest-account")
+async def guest_account_delete(request: Request):
+    if current_role(request) != "owner":
+        return JSONResponse({"error": guest_mode.hidden_notice()}, status_code=404)
+    from database import delete_setting
+    delete_setting(GUEST_NAME_KEY)
+    delete_setting(GUEST_HASH_KEY)
+    return {"ok": True}
+
+
 @app.get("/api/site-mode")
 async def site_mode(request: Request):
     return {"guest": current_role(request) == "guest", "tabs": list(guest_mode.GUEST_TABS)}

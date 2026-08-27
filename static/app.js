@@ -7305,3 +7305,54 @@ async function applySiteMode() {
 }
 
 document.addEventListener('DOMContentLoaded', applySiteMode);
+
+// ── 👥 친구 계정 (사장님만 보이는 칸) ─────────────────────────────
+async function loadGuestAccount() {
+  const state = document.getElementById('guest-account-state');
+  if (!state) return;
+  try {
+    const response = await fetch('/api/guest-account');
+    if (!response.ok) { document.getElementById('guest-account-card')?.remove(); return; }
+    const data = await response.json();
+    state.textContent = data.configured
+      ? `지금 친구 아이디: ${data.username}`
+      : '아직 친구 계정이 없습니다.';
+    if (data.username) {
+      document.getElementById('guest-account-username').value = data.username;
+    }
+  } catch (error) {
+    state.textContent = '친구 계정 상태를 읽지 못했습니다.';
+  }
+}
+
+async function saveGuestAccount() {
+  const username = document.getElementById('guest-account-username')?.value?.trim() || '';
+  const password = document.getElementById('guest-account-password')?.value?.trim() || '';
+  const state = document.getElementById('guest-account-state');
+  try {
+    const response = await fetch('/api/guest-account', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '저장하지 못했습니다.');
+    document.getElementById('guest-account-password').value = '';
+    state.textContent = `저장했습니다. 친구 아이디: ${data.username}`;
+  } catch (error) {
+    state.textContent = error.message;
+  }
+}
+
+async function removeGuestAccount() {
+  const state = document.getElementById('guest-account-state');
+  try {
+    const response = await fetch('/api/guest-account', { method: 'DELETE' });
+    if (!response.ok) throw new Error('없애지 못했습니다.');
+    state.textContent = '친구 계정을 없앴습니다. 이제 친구는 들어올 수 없습니다.';
+  } catch (error) {
+    state.textContent = error.message;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', loadGuestAccount);
