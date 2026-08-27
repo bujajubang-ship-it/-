@@ -661,6 +661,19 @@
 
     <!-- ===== 📝 자막 편집 가이드 탭 ===== -->
     <div id="pane-transcript-guide" class="hidden">
+      <details class="card" id="guest-account-card">
+        <summary>👥 친구 계정 (친구에게 편집·기획 피드백만 열어주기)</summary>
+        <div style="padding:12px 0">
+          <p class="report-subtitle" id="guest-account-state">확인 중…</p>
+          <div class="edit-keyword-row" style="gap:8px;display:flex;flex-wrap:wrap">
+            <input type="text" id="guest-account-username" placeholder="친구 아이디 (예: giver)" autocomplete="off" />
+            <input type="text" id="guest-account-password" placeholder="비밀번호 (12자 이상)" autocomplete="off" />
+            <button type="button" onclick="saveGuestAccount()">저장</button>
+            <button type="button" class="reset-btn" onclick="removeGuestAccount()">계정 없애기</button>
+          </div>
+          <p class="report-subtitle">저장하면 바로 적용됩니다. 친구는 편집 피드백과 기획 피드백만 보이고, 사장님 자료는 보이지 않습니다.</p>
+        </div>
+      </details>
       <section class="edit-projects-section" aria-labelledby="tg-projects-title">
         <div class="edit-projects-header">
           <div>
@@ -766,19 +779,6 @@
           </details>
 
 
-          <details class="card" id="guest-account-card">
-            <summary>👥 친구 계정 (친구에게 편집·기획 피드백만 열어주기)</summary>
-            <div style="padding:12px 0">
-              <p class="report-subtitle" id="guest-account-state">확인 중…</p>
-              <div class="edit-keyword-row" style="gap:8px;display:flex;flex-wrap:wrap">
-                <input type="text" id="guest-account-username" placeholder="친구 아이디 (예: giver)" autocomplete="off" />
-                <input type="text" id="guest-account-password" placeholder="비밀번호 (12자 이상)" autocomplete="off" />
-                <button type="button" onclick="saveGuestAccount()">저장</button>
-                <button type="button" class="reset-btn" onclick="removeGuestAccount()">계정 없애기</button>
-              </div>
-              <p class="report-subtitle">저장하면 바로 적용됩니다. 친구는 편집 피드백과 기획 피드백만 보이고, 사장님 자료는 보이지 않습니다.</p>
-            </div>
-          </details>
           <details class="card">
             <summary>사용 근거와 버전 변경 기록</summary>
             <div id="tg-evidence-list"></div>
