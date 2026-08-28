@@ -987,7 +987,15 @@ async def edit_feedback(req: EditFeedbackRequest, request: Request):
 
             yield sse({"step": "analyzing", "message": "AI가 대본 분석 중... (보통 20~40초 소요)"})
             analyzer = Analyzer()
-            _task = asyncio.create_task(analyzer.analyze_edit_feedback(req.keyword, script_with_product, videos_with_comments, naver_results, viewtrap_refs))
+            # 사장님은 지식 원문까지, 친구는 한 줄 요약 규칙만 근거로 받는다.
+            try:
+                from database import list_knowledge
+                kb = list_knowledge(active_only=True)
+            except Exception:
+                kb = []
+            _task = asyncio.create_task(analyzer.analyze_edit_feedback(
+                req.keyword, script_with_product, videos_with_comments, naver_results,
+                viewtrap_refs, knowledge=kb, rules_only=(account != "owner")))
             while not _task.done():
                 yield sse({"step": "ping"})
                 await asyncio.sleep(8)

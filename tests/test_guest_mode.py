@@ -344,3 +344,33 @@ class OwnerDataStaysWithTheOwnerTests(unittest.TestCase):
             self.assertLess(len(guest_rows), len(owner_rows))
         finally:
             delete_knowledge(knowledge_id)
+
+
+class EditFeedbackKnowledgeTests(unittest.TestCase):
+    """편집 피드백도 지식을 근거로 쓴다. 사장님은 원문까지, 친구는 규칙만."""
+
+    def test_owner_gets_the_lecture_text_and_the_guest_gets_rules(self):
+        from analyzer import Analyzer
+
+        analyzer = Analyzer.__new__(Analyzer)
+        lecture = "돈 주고 배운 강의 본문이다. " * 20
+        knowledge = [{
+            "title": "비즈니스PT 원고작성 심화",
+            "summary": "훅은 첫 15초에 시청자 문제를 보여준다",
+            "content": lecture,
+        }]
+        owner_block = analyzer._kb_text(knowledge, per=1800, budget=30000, full=True)
+        guest_block = analyzer._kb_rules(knowledge)
+
+        self.assertIn("강의 본문", owner_block)
+        self.assertNotIn("강의 본문", guest_block)
+        self.assertIn("첫 15초", guest_block)          # 규칙은 전달된다
+        self.assertLess(len(guest_block), len(owner_block))
+
+    def test_an_entry_without_a_summary_is_dropped_for_guests(self):
+        """요약을 안 적어 둔 지식이 원문째로 새어 나가면 안 된다."""
+        from analyzer import Analyzer
+
+        analyzer = Analyzer.__new__(Analyzer)
+        block = analyzer._kb_rules([{"title": "메모", "summary": "", "content": "원문뿐인 지식"}])
+        self.assertEqual(block, "")
