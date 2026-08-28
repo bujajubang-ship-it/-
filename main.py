@@ -268,13 +268,14 @@ class PlanFeedbackRequest(BaseModel):
 
 
 @app.post("/api/plan-feedback")
-async def plan_feedback(req: PlanFeedbackRequest):
+async def plan_feedback(req: PlanFeedbackRequest, request: Request):
     """촬영 전 기획안을 검사한다. 사장님 채널 수치는 쓰지 않는다."""
     plan = (req.plan or "").strip()
     if len(plan) < 20:
         return JSONResponse({"error": "기획 내용을 조금 더 자세히 적어 주세요."}, status_code=400)
     try:
-        principles = _general_principles(req.keyword or plan[:40])
+        principles = _general_principles(
+            req.keyword or plan[:40], redact=current_role(request) == "guest")
     except Exception:
         principles = []
     try:
@@ -288,18 +289,32 @@ async def plan_feedback(req: PlanFeedbackRequest):
         return JSONResponse({"error": f"기획 피드백을 만들지 못했습니다: {exc}"}, status_code=502)
 
 
-def _general_principles(query: str) -> list[dict[str, Any]]:
+def _general_principles(query: str, *, redact: bool = False) -> list[dict[str, Any]]:
     """기획을 판단할 때 근거로 쓸 지식을 가져온다.
 
-    사장님이 쌓아 둔 지식(Low Data 판단 규칙, 영상 구성 원칙 등)을 그대로 쓴다.
-    친구는 지식 탭 자체를 못 열지만, 조언의 근거로는 이 지식이 쓰인다.
+    친구 계정이면 redact=True. 이 사람들은 터미널을 다루는 사람들이라
+    프롬프트에 원문이 들어가 있으면 대화로 꺼내 갈 수 있다. 그래서 **제목과
+    한 줄 요약만** 넘긴다. 다 털려도 새는 것이 한 줄짜리 요약뿐이도록 둔다.
     """
     from strategy_brain.retrieval import StrategyRetrieval
     envelope = StrategyRetrieval().search_knowledge({"query": query, "limit": 8})
     rows = getattr(envelope, "data", None)
     if isinstance(rows, dict):          # 담는 모양이 바뀌어도 견디게 둘 다 받는다
         rows = rows.get("items")
-    return list(rows or [])
+    rows = list(rows or [])
+    if not redact:
+        return rows
+    trimmed = []
+    for row in rows[:6]:
+        summary = str(row.get("summary") or "").strip()
+        if not summary:
+            # 요약이 없으면 원문 앞머리를 쓰되 한 줄로 자른다
+            summary = " ".join(str(row.get("content") or "").split())[:120]
+        trimmed.append({
+            "title": str(row.get("title") or "")[:60],
+            "summary": summary[:120],
+        })
+    return trimmed
 
 
 @app.exception_handler(StarletteHTTPException)

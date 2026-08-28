@@ -14,6 +14,9 @@
 닫는 것 중 특히 중요한 것
   · 자막 편집 가이드 — Vrew 에이전트를 쓰는 방식은 알리지 않는다(사장님 지시)
   · 채널 분석·지식·상담·파이프라인 — 사장님 자산과 개인 기록
+  · **AI 대화창(/api/chat)** — 모델에게 사장님 데이터를 읽는 도구 20여 개를 쥐여 준다.
+    지식·비즈니스PT·채널 성과·과거 기획·워크시트·상담 기록까지 닿는다.
+    친구들은 터미널을 다루는 사람들이라, 대화로 시키면 그대로 긁힌다. 그래서 통째로 막는다.
 """
 
 from __future__ import annotations
@@ -29,7 +32,6 @@ GUEST_TABS = ("edit", "plan-feedback", "worksheet")
 _ALLOWED_EXACT = frozenset({
     "/api/site-mode",
     "/api/health",
-    "/api/chat",                  # 편집 피드백 안에 붙어 있는 후속 질문 창
     "/api/plan-feedback",         # 기획 피드백
     "/api/analyze-edit",          # 편집 피드백
     "/api/worksheet",             # 기획 워크시트 (자기 줄만 보임)
@@ -104,6 +106,22 @@ def _cut_block(html: str, start: int) -> int:
     return len(html)
 
 
+# 친구 화면에서 통째로 들어내는 칸. 서버가 막아둔 기능의 껍데기를 남기지 않는다.
+_DROP_CARDS = ('class="card edit-chat-card"',)
+
+
+def _drop_card(html: str, marker: str) -> str:
+    """marker 를 품은 <div> 한 덩어리를 통째로 걷어낸다."""
+    while True:
+        hit = html.find(marker)
+        if hit < 0:
+            return html
+        start = html.rfind("<div", 0, hit)
+        if start < 0:
+            return html
+        html = html[:start] + html[_cut_block(html, start):]
+
+
 def filter_html(html: str) -> str:
     """친구에게 보여 줄 화면만 남긴다.
 
@@ -115,6 +133,8 @@ def filter_html(html: str) -> str:
         lambda m: m.group(0) if m.group(1) in GUEST_TABS else "", html)
     # 화면을 잘라내도 `<!-- 자막 편집 가이드 탭 -->` 같은 주석이 남아 무슨 기능이 있는지 드러난다.
     html = _HTML_COMMENT.sub("", html)
+    for marker in _DROP_CARDS:
+        html = _drop_card(html, marker)
     while True:
         cut = None
         for match in _PANE_START.finditer(html):

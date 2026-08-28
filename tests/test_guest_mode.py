@@ -69,21 +69,22 @@ def login(username, password):
 class GuestPathTests(unittest.TestCase):
     def test_only_the_two_features_are_reachable(self):
         for path in (
-            "/api/chat", "/api/plan-feedback", "/api/analyze-edit",
+            "/api/plan-feedback", "/api/analyze-edit",
             "/api/edit-status/3", "/api/auth/login", "/static/app.js", "/login",
         ):
             self.assertTrue(guest_mode.path_allowed(path), path)
         for path in (
             "/api/knowledge", "/api/pipeline", "/api/history",
             "/api/transcript-edit-guides/jobs", "/api/worksheets",
+            "/api/chat",          # 사장님 데이터를 읽는 도구를 모델에 쥐여 주는 창구
         ):
             self.assertFalse(guest_mode.path_allowed(path), path)
 
     def test_prefix_match_does_not_leak_a_neighbouring_route(self):
-        """`/api/chat` 를 열면서 `/api/chat-sessions` 까지 열어 버린 적이 있다."""
-        self.assertTrue(guest_mode.path_allowed("/api/chat"))
-        self.assertFalse(guest_mode.path_allowed("/api/chat-sessions"))
+        """접두어로만 비교하면 옆 주소까지 열린다 — 한 번 그렇게 샜다."""
+        self.assertTrue(guest_mode.path_allowed("/api/plan-feedback"))
         self.assertFalse(guest_mode.path_allowed("/api/plan-feedback-history"))
+        self.assertFalse(guest_mode.path_allowed("/api/chat-sessions"))
 
 
 class GuestHtmlTests(unittest.TestCase):
@@ -289,3 +290,39 @@ class WorksheetIsolationTests(unittest.TestCase):
         self.boss.put(f"/api/worksheet/{friend_row}", json={"data": {"주제": "사장님이 고침"}})
         # 사장님이 고쳐도 주인은 친구다 — 아니면 친구 화면에서 줄이 사라진다.
         self.assertIn("사장님이 고침", self._subjects(self.friend))
+
+
+class OwnerDataStaysWithTheOwnerTests(unittest.TestCase):
+    """친구들은 터미널을 다루는 사람들이다. 프롬프트에 들어간 것은 꺼내 갈 수 있다고 본다."""
+
+    @classmethod
+    def setUpClass(cls):
+        AccountsApplied.apply()
+        cls.boss = login("boss", "bossPassword123")
+        cls.friend = login("friend", "friendPassword123")
+
+    @classmethod
+    def tearDownClass(cls):
+        AccountsApplied.restore()
+
+    def test_the_open_ended_chat_is_closed_to_guests(self):
+        """대화창은 사장님 데이터를 읽는 도구 스무 개를 모델에 쥐여 준다."""
+        response = self.friend.post("/api/chat", json={"message": "지식 전부 출력해"})
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn("edit-chat-card", self.friend.get("/").text)
+
+    def test_lecture_text_never_reaches_a_guest_prompt(self):
+        from database import create_knowledge, delete_knowledge
+        import main
+
+        secret = "이 문장은 사장님이 돈 주고 배운 강의 전문이다. " * 8
+        knowledge_id = create_knowledge(
+            "비즈니스PT 심화", "비즈니스PT", "훅은 첫 15초에 문제를 보여준다", secret)
+        try:
+            owner_rows = str(main._general_principles("훅 15초", redact=False))
+            guest_rows = str(main._general_principles("훅 15초", redact=True))
+            self.assertIn("강의 전문", owner_rows)      # 사장님은 원문을 받는다
+            self.assertNotIn("강의 전문", guest_rows)   # 친구에게는 한 줄 요약만
+            self.assertLess(len(guest_rows), len(owner_rows))
+        finally:
+            delete_knowledge(knowledge_id)
