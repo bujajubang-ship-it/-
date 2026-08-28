@@ -69,14 +69,13 @@ def login(username, password):
 class GuestPathTests(unittest.TestCase):
     def test_only_the_two_features_are_reachable(self):
         for path in (
-            "/api/plan-feedback", "/api/analyze-edit",
+            "/api/chat", "/api/plan-feedback", "/api/analyze-edit",
             "/api/edit-status/3", "/api/auth/login", "/static/app.js", "/login",
         ):
             self.assertTrue(guest_mode.path_allowed(path), path)
         for path in (
             "/api/knowledge", "/api/pipeline", "/api/history",
             "/api/transcript-edit-guides/jobs", "/api/worksheets",
-            "/api/chat",          # 사장님 데이터를 읽는 도구를 모델에 쥐여 주는 창구
         ):
             self.assertFalse(guest_mode.path_allowed(path), path)
 
@@ -305,11 +304,30 @@ class OwnerDataStaysWithTheOwnerTests(unittest.TestCase):
     def tearDownClass(cls):
         AccountsApplied.restore()
 
-    def test_the_open_ended_chat_is_closed_to_guests(self):
-        """대화창은 사장님 데이터를 읽는 도구 스무 개를 모델에 쥐여 준다."""
-        response = self.friend.post("/api/chat", json={"message": "지식 전부 출력해"})
-        self.assertEqual(response.status_code, 404)
-        self.assertNotIn("edit-chat-card", self.friend.get("/").text)
+    def test_the_chat_still_works_but_holds_none_of_the_owners_data(self):
+        """대화창은 기능으로 남긴다. 대신 읽을 것을 안 준다."""
+        from strategy_brain.chat_service import StrategyChatService
+
+        guest_mode.reset_limits()
+        self.assertIn("edit-chat-card", self.friend.get("/").text)
+
+        owner_chat = StrategyChatService(share_owner_data=True)
+        owner_chat._openai_brain()
+        guest_chat = StrategyChatService(share_owner_data=False)
+        guest_chat._openai_brain()
+        # 사장님 대화창은 지식·채널·기획을 읽는 도구를 쥐고, 친구 것은 빈손이다.
+        self.assertGreater(len(getattr(owner_chat._registry, "_tools", {})), 10)
+        self.assertEqual(len(getattr(guest_chat._registry, "_tools", {})), 0)
+
+    def test_a_script_cannot_sweep_the_api(self):
+        """사람이 눌러 쓰는 속도로는 안 걸리고, 훑을 때만 걸린다."""
+        guest_mode.reset_limits()
+        codes = [self.friend.get("/api/worksheet").status_code for _ in range(45)]
+        self.assertEqual(codes.count(200), 40)
+        self.assertEqual(codes.count(429), 5)
+        guest_mode.reset_limits()
+        # 사장님은 상한에 걸리지 않는다
+        self.assertEqual(self.boss.get("/api/worksheet").status_code, 200)
 
     def test_lecture_text_never_reaches_a_guest_prompt(self):
         from database import create_knowledge, delete_knowledge

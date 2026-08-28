@@ -185,8 +185,14 @@ async def block_hidden_features(request: Request, call_next):
 
     화면에서 탭을 숨기는 것만으로는 주소를 직접 치면 그대로 열린다.
     """
-    if current_role(request) == "guest" and not guest_mode.path_allowed(request.url.path):
-        return JSONResponse({"error": guest_mode.hidden_notice()}, status_code=404)
+    if current_role(request) == "guest":
+        if not guest_mode.path_allowed(request.url.path):
+            return JSONResponse({"error": guest_mode.hidden_notice()}, status_code=404)
+        # 화면을 눌러 쓰는 속도로는 안 닿고, 스크립트로 훑을 때만 걸리는 선
+        over = guest_mode.rate_limited(request.url.path)
+        if over:
+            return JSONResponse({"error": over}, status_code=429,
+                                headers={"Retry-After": "60"})
     return await call_next(request)
 
 
@@ -4149,13 +4155,17 @@ async def edit_projects_refresh_feedback(project_id: int):
 
 
 @app.post("/api/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, request: Request):
+    # 친구 계정에는 사장님 지식·채널 데이터를 붙이지 않는다.
+    # 받은 피드백 내용만 놓고 이야기하는 대화창이 된다.
+    share = current_role(request) == "owner"
+
     async def stream():
         if not req.message.strip():
             yield sse({"error": "메시지를 입력해주세요."})
             return
         try:
-            service = StrategyChatService()
+            service = StrategyChatService(share_owner_data=share)
             answer_parts: list[str] = []
             trace: list[dict] = []
             started = time.perf_counter()

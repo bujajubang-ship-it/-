@@ -14,9 +14,8 @@
 닫는 것 중 특히 중요한 것
   · 자막 편집 가이드 — Vrew 에이전트를 쓰는 방식은 알리지 않는다(사장님 지시)
   · 채널 분석·지식·상담·파이프라인 — 사장님 자산과 개인 기록
-  · **AI 대화창(/api/chat)** — 모델에게 사장님 데이터를 읽는 도구 20여 개를 쥐여 준다.
-    지식·비즈니스PT·채널 성과·과거 기획·워크시트·상담 기록까지 닿는다.
-    친구들은 터미널을 다루는 사람들이라, 대화로 시키면 그대로 긁힌다. 그래서 통째로 막는다.
+  · AI 대화창은 열어 두되 **사장님 데이터는 붙이지 않는다**(share_owner_data=False).
+    지식·채널 성과·과거 기획을 읽는 도구를 아예 안 준다. 프롬프트에 없으면 못 꺼낸다.
 """
 
 from __future__ import annotations
@@ -33,6 +32,7 @@ _ALLOWED_EXACT = frozenset({
     "/api/site-mode",
     "/api/health",
     "/api/plan-feedback",         # 기획 피드백
+    "/api/chat",                  # 편집 피드백 후속 질문 — 사장님 데이터는 빼고 답한다
     "/api/analyze-edit",          # 편집 피드백
     "/api/worksheet",             # 기획 워크시트 (자기 줄만 보임)
     "/api/edit-feedback",         # 편집 피드백 실행
@@ -107,7 +107,7 @@ def _cut_block(html: str, start: int) -> int:
 
 
 # 친구 화면에서 통째로 들어내는 칸. 서버가 막아둔 기능의 껍데기를 남기지 않는다.
-_DROP_CARDS = ('class="card edit-chat-card"',)
+_DROP_CARDS = ()
 
 
 def _drop_card(html: str, marker: str) -> str:
@@ -144,3 +144,54 @@ def filter_html(html: str) -> str:
         if cut is None:
             return html
         html = html[:cut.start()] + html[_cut_block(html, cut.start()):]
+
+
+import threading
+import time as _time
+from collections import deque
+
+# ── 친구 계정 호출 상한 ───────────────────────────────────────────
+# 걱정은 "한 번에 다 긁어가는 것"이다. 사람이 화면을 눌러 쓰는 속도로는
+# 절대 안 닿고, 스크립트로 훑을 때만 걸리는 선에 둔다.
+LIMITS = {
+    "burst":  (40, 60),        # 1분에 40번
+    "hourly": (300, 3600),     # 1시간에 300번
+    "ai":     (60, 86400),     # AI를 부르는 것은 하루 60번 (요금도 같이 막힌다)
+}
+# 한 번에 돈이 나가는 길. 여기에만 하루 상한을 건다.
+AI_PATHS = ("/api/chat", "/api/plan-feedback", "/api/edit-feedback", "/api/worksheet/autofill")
+
+_hits: dict[str, deque] = {}
+_lock = threading.Lock()
+
+
+def _over(bucket: str, limit: int, window: int, now: float) -> bool:
+    log = _hits.setdefault(bucket, deque())
+    while log and now - log[0] > window:
+        log.popleft()
+    if len(log) >= limit:
+        return True
+    log.append(now)
+    return False
+
+
+def rate_limited(path: str, *, now: float | None = None) -> str:
+    """상한을 넘었으면 사람이 읽을 안내문을, 아니면 빈 문자열을 준다."""
+    if not path.startswith("/api/"):
+        return ""
+    now = _time.time() if now is None else now
+    with _lock:
+        for name in ("burst", "hourly"):
+            limit, window = LIMITS[name]
+            if _over(name, limit, window, now):
+                return "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."
+        if path.startswith(AI_PATHS):
+            limit, window = LIMITS["ai"]
+            if _over("ai", limit, window, now):
+                return "오늘 사용할 수 있는 분석 횟수를 다 썼습니다. 내일 다시 이용해 주세요."
+    return ""
+
+
+def reset_limits() -> None:
+    with _lock:
+        _hits.clear()

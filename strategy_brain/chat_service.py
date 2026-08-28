@@ -107,17 +107,26 @@ class StrategyChatService:
         legacy_factory: Callable[[], Any] | None = None,
         tool_registry: ReadOnlyToolRegistry | None = None,
         enable_prefetch: bool | None = None,
+        share_owner_data: bool = True,
     ) -> None:
         self.settings = settings or BrainSettings.from_env()
         self._brain = openai_brain
         self._legacy_factory = legacy_factory
         self._registry = tool_registry
+        # 친구 계정이면 False. 지식·채널 성과·과거 기획을 프롬프트에도,
+        # 모델이 부를 수 있는 도구 목록에도 넣지 않는다. 없으면 못 꺼낸다.
+        self._share_owner_data = share_owner_data
         self._enable_prefetch = (openai_brain is None) if enable_prefetch is None else enable_prefetch
+        if not share_owner_data:
+            self._enable_prefetch = False
 
     def _openai_brain(self) -> StrategyBrain:
         if self._brain is None:
             if self._registry is None:
-                self._registry = build_strategy_tool_registry()
+                self._registry = (
+                    build_strategy_tool_registry() if self._share_owner_data
+                    else ReadOnlyToolRegistry()      # 도구가 하나도 없는 빈 레지스트리
+                )
             self._brain = StrategyBrain(
                 OpenAIResponsesProvider(self.settings), self._registry
             )
@@ -137,7 +146,7 @@ class StrategyChatService:
             analyzer = Analyzer()
         else:
             analyzer = self._legacy_factory()
-        knowledge = list_knowledge(active_only=True)
+        knowledge = list_knowledge(active_only=True) if self._share_owner_data else []
         async for token in analyzer.chat_stream(
             message, history, attachments or [], knowledge
         ):
