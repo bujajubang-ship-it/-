@@ -7309,17 +7309,22 @@ document.addEventListener('DOMContentLoaded', applySiteMode);
 // ── 👥 친구 계정 (사장님만 보이는 칸) ─────────────────────────────
 async function loadGuestAccount() {
   const state = document.getElementById('guest-account-state');
+  const list = document.getElementById('guest-account-list');
   if (!state) return;
   try {
     const response = await fetch('/api/guest-account');
     if (!response.ok) { document.getElementById('guest-account-card')?.remove(); return; }
     const data = await response.json();
-    state.textContent = data.configured
-      ? `지금 친구 아이디: ${data.username}`
+    const accounts = data.accounts || [];
+    state.textContent = accounts.length
+      ? `친구 계정 ${accounts.length}개 / 최대 ${data.max}개`
       : '아직 친구 계정이 없습니다.';
-    if (data.username) {
-      document.getElementById('guest-account-username').value = data.username;
-    }
+    list.innerHTML = accounts.map(a =>
+      `<div class="edit-flow-list-item" style="display:flex;align-items:center;gap:12px">
+         <b>${escHtml(a.username)}</b>
+         <button type="button" class="reset-btn" style="margin-left:auto"
+                 onclick="removeGuestAccount('${escHtml(a.username)}')">없애기</button>
+       </div>`).join('');
   } catch (error) {
     state.textContent = '친구 계정 상태를 읽지 못했습니다.';
   }
@@ -7337,19 +7342,23 @@ async function saveGuestAccount() {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '저장하지 못했습니다.');
+    document.getElementById('guest-account-username').value = '';
     document.getElementById('guest-account-password').value = '';
-    state.textContent = `저장했습니다. 친구 아이디: ${data.username}`;
+    await loadGuestAccount();
+    state.textContent = `저장했습니다 — ${data.username}`;
   } catch (error) {
     state.textContent = error.message;
   }
 }
 
-async function removeGuestAccount() {
+async function removeGuestAccount(username) {
   const state = document.getElementById('guest-account-state');
   try {
-    const response = await fetch('/api/guest-account', { method: 'DELETE' });
+    const url = '/api/guest-account' + (username ? `?username=${encodeURIComponent(username)}` : '');
+    const response = await fetch(url, { method: 'DELETE' });
     if (!response.ok) throw new Error('없애지 못했습니다.');
-    state.textContent = '친구 계정을 없앴습니다. 이제 친구는 들어올 수 없습니다.';
+    await loadGuestAccount();
+    state.textContent = `${username} 계정을 없앴습니다. 그 친구는 더 이상 들어올 수 없습니다.`;
   } catch (error) {
     state.textContent = error.message;
   }

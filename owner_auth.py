@@ -280,9 +280,11 @@ class OwnerAuthenticator:
     def __init__(self, settings: OwnerAuthSettings):
         settings.validate()
         self.settings = settings
-        # 친구 계정을 어디서 읽을지. 기본은 환경변수, 앱이 DB에서 읽도록 바꿔 끼울 수 있다.
+        # 친구 계정 목록을 어디서 읽을지. [(아이디, 해시)] 를 준다.
+        # 기본은 환경변수 한 벌, 앱이 DB에서 읽도록 바꿔 끼운다.
         self.guest_provider = lambda: (
-            settings.guest_username, settings.guest_password_hash)
+            [(settings.guest_username, settings.guest_password_hash)]
+            if settings.guest_username and settings.guest_password_hash else [])
         self.rate_limiter = LoginRateLimiter(
             settings.max_failures, settings.failure_window_seconds
         )
@@ -291,40 +293,56 @@ class OwnerAuthenticator:
         return self.role_for(username, password) is not None
 
     def role_for(self, username: str, password: str) -> str | None:
-        """맞으면 'owner' 또는 'guest'를, 틀리면 None을 준다.
+        """맞으면 'owner' 또는 'guest'를, 틀리면 None."""
+        found = self.identify(username, password)
+        return found[0] if found else None
 
-        아이디가 있는지 없는지를 응답 속도로 알아채지 못하게, 두 계정 모두
-        비밀번호 검사를 끝까지 돌린다.
+    def identify(self, username: str, password: str) -> tuple[str, str] | None:
+        """(역할, 아이디) 를 준다. 친구가 여럿이라 누구인지까지 알아야 한다.
+
+        아이디가 있는지 없는지를 응답 속도로 알아채지 못하게, 사장님 검사는
+        언제나 끝까지 돌리고 친구 목록도 도중에 끊지 않는다.
         """
         owner_password = verify_password(password, self.settings.password_hash)
         owner_name = _constant_time_text_equal(username, self.settings.username)
-        guest_username, guest_hash = self._guest_account()
-        guest_enabled = bool(guest_username and guest_hash)
-        guest_password = (
-            verify_password(password, guest_hash) if guest_enabled else False
-        )
-        guest_name = (
-            _constant_time_text_equal(username, guest_username)
-            if guest_enabled else False
-        )
+        matched_guest = None
+        for guest_username, guest_hash in self._guest_accounts():
+            if not (guest_username and guest_hash):
+                continue
+            ok_password = verify_password(password, guest_hash)
+            ok_name = _constant_time_text_equal(username, guest_username)
+            if ok_password and ok_name and matched_guest is None:
+                matched_guest = guest_username
         if owner_password and owner_name:
-            return "owner"
-        if guest_password and guest_name:
-            return "guest"
+            return ("owner", self.settings.username)
+        if matched_guest:
+            return ("guest", matched_guest)
         return None
 
-    def _guest_account(self) -> tuple[str, str]:
-        try:
-            username, password_hash = self.guest_provider()
-        except Exception:
-            return "", ""
-        return str(username or "").strip(), str(password_hash or "").strip()
+    def guest_usernames(self) -> list[str]:
+        return [name for name, h in self._guest_accounts() if name and h]
 
-    def issue_session(self, *, now: int | None = None, role: str = "owner") -> str:
+    def _guest_accounts(self) -> list[tuple[str, str]]:
+        try:
+            rows = self.guest_provider() or []
+        except Exception:
+            return []
+        out = []
+        for row in rows:
+            try:
+                name, password_hash = row
+            except (TypeError, ValueError):
+                continue
+            out.append((str(name or "").strip(), str(password_hash or "").strip()))
+        return out
+
+    def issue_session(self, *, now: int | None = None, role: str = "owner",
+                      username: str | None = None) -> str:
         issued_at = int(time.time()) if now is None else int(now)
-        username = (
-            self._guest_account()[0] if role == "guest" else self.settings.username
-        )
+        if role == "guest":
+            username = username or (self.guest_usernames() or [""])[0]
+        else:
+            username = self.settings.username
         payload = {
             "exp": issued_at + self.settings.session_ttl_seconds,
             "iat": issued_at,
@@ -364,9 +382,9 @@ class OwnerAuthenticator:
             # 친구 계정을 나중에 껐다면 그 세션은 더 이상 통하지 않아야 한다.
             subject = payload.get("sub")
             role = payload.get("role") or "owner"
-            guest_username, guest_hash = self._guest_account()
             if role == "guest":
-                if not (guest_username and guest_hash) or subject != guest_username:
+                # 계정을 지우면 그 사람의 로그인도 그 자리에서 끊긴다
+                if subject not in self.guest_usernames():
                     return None
             elif subject != self.settings.username:
                 return None

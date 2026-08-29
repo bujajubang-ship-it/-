@@ -35,6 +35,10 @@ class AccountsApplied:
 
     @classmethod
     def apply(cls):
+        # DB에 남은 친구 계정이 있으면 환경변수 계정이 무시된다. 먼저 비운다.
+        from database import delete_setting
+        for key in (main.GUEST_LIST_KEY, main.GUEST_NAME_KEY, main.GUEST_HASH_KEY):
+            delete_setting(key)
         cls._saved = (main.OWNER_AUTH, main.app.middleware_stack)
         main.OWNER_AUTH = OwnerAuthenticator(OwnerAuthSettings.from_env())
         main.OWNER_AUTH.guest_provider = main._db_guest_account
@@ -49,6 +53,9 @@ class AccountsApplied:
 
     @classmethod
     def restore(cls):
+        from database import delete_setting
+        for key in (main.GUEST_LIST_KEY, main.GUEST_NAME_KEY, main.GUEST_HASH_KEY):
+            delete_setting(key)
         if not cls._saved:
             return
         for item, kwargs in zip(cls._middleware, cls._old_kwargs):
@@ -116,8 +123,9 @@ class TwoAccountTests(unittest.TestCase):
         cls.tag = secrets.token_hex(4)
         cls.owner_id = save_history(
             "edit", f"사장님 영상 {cls.tag}", {"_project": {"account": "owner"}})
+        # 주인 표시는 역할이 아니라 아이디다 — 친구가 여럿이라 이름으로 갈린다
         cls.guest_id = save_history(
-            "edit", f"친구 영상 {cls.tag}", {"_project": {"account": "guest"}})
+            "edit", f"친구 영상 {cls.tag}", {"_project": {"account": "friend"}})
         cls.legacy_id = save_history(
             "edit", f"계정 표시 전에 만든 것 {cls.tag}", {"_project": {}})
         cls.boss = login("boss", "bossPassword123")
@@ -235,6 +243,38 @@ class GuestAccountFromTheSiteTests(unittest.TestCase):
         self.assertEqual(friend.post(
             "/api/guest-account", json={"username": "x", "password": "y" * 12}).status_code, 404)
         self.assertNotIn("guest-account-card", friend.get("/").text)
+
+    def test_each_friend_gets_their_own_account_and_cannot_see_the_others(self):
+        """친구 셋이 한 아이디를 같이 쓰면 서로의 기획이 보인다. 그래서 계정을 나눈다."""
+        import json as _json
+
+        for name in ("giver1", "giver2"):
+            self.assertEqual(self.boss.post(
+                "/api/guest-account",
+                json={"username": name, "password": name + "pass1234"}).status_code, 200)
+        first = login("giver1", "giver1pass1234")
+        second = login("giver2", "giver2pass1234")
+        guest_mode.reset_limits()
+
+        one = first.post("/api/worksheet", json={"data": {"주제": "1번 기획"}}).json()["id"]
+        two = second.post("/api/worksheet", json={"data": {"주제": "2번 기획"}}).json()["id"]
+
+        def subjects(client):
+            return [_json.loads(row["data"]).get("주제")
+                    for row in client.get("/api/worksheet").json()]
+
+        try:
+            self.assertEqual(subjects(first), ["1번 기획"])
+            self.assertEqual(subjects(second), ["2번 기획"])
+            owner_view = subjects(self.boss)
+            self.assertIn("1번 기획", owner_view)      # 사장님은 둘 다 본다
+            self.assertIn("2번 기획", owner_view)
+            # 번호를 알아도 남의 줄은 못 연다
+            self.assertEqual(first.put(
+                f"/api/worksheet/{two}", json={"data": {"주제": "가로채기"}}).status_code, 404)
+        finally:
+            for row_id in (one, two):
+                self.boss.delete(f"/api/worksheet/{row_id}")
 
     def test_removing_the_account_locks_the_friend_out(self):
         self.boss.post(

@@ -198,22 +198,59 @@ async def block_hidden_features(request: Request, call_next):
 
 # ── 친구 계정 (사장님만) ─────────────────────────────────────────
 # Render 환경변수로 넣는 것이 번거로워 DB에 두고 화면에서 정하도록 했다.
-GUEST_NAME_KEY, GUEST_HASH_KEY = "guest_username", "guest_password_hash"
+GUEST_LIST_KEY = "guest_accounts"          # [{"username":..., "hash":...}]
+GUEST_NAME_KEY, GUEST_HASH_KEY = "guest_username", "guest_password_hash"   # 옛 한 벌 저장분
+MAX_GUESTS = 5
 
 
-def _db_guest_account() -> tuple[str, str]:
-    """DB에 정해 둔 친구 계정. 없으면 환경변수 값을 쓴다."""
+def _load_guests() -> list[dict[str, str]]:
+    """DB에 저장된 친구 계정 목록. 예전에 한 벌만 저장해 둔 것도 함께 읽는다."""
     try:
         from database import get_setting
-        username, password_hash = get_setting(GUEST_NAME_KEY), get_setting(GUEST_HASH_KEY)
+        raw = get_setting(GUEST_LIST_KEY)
+        rows = json.loads(raw) if raw else []
     except Exception:
-        username = password_hash = ""
-    if username and password_hash:
-        return username, password_hash
-    return OWNER_AUTH.settings.guest_username, OWNER_AUTH.settings.guest_password_hash
+        rows = []
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        name = str((row or {}).get("username") or "").strip()
+        password_hash = str((row or {}).get("hash") or "").strip()
+        if name and password_hash:
+            out.append({"username": name, "hash": password_hash})
+    if not out:
+        try:
+            from database import get_setting
+            name, password_hash = get_setting(GUEST_NAME_KEY), get_setting(GUEST_HASH_KEY)
+        except Exception:
+            name = password_hash = ""
+        if name and password_hash:
+            out.append({"username": name, "hash": password_hash})
+        elif OWNER_AUTH.settings.guest_username and OWNER_AUTH.settings.guest_password_hash:
+            out.append({"username": OWNER_AUTH.settings.guest_username,
+                        "hash": OWNER_AUTH.settings.guest_password_hash})
+    return out[:MAX_GUESTS]
 
 
-OWNER_AUTH.guest_provider = _db_guest_account
+def _save_guests(rows: list[dict[str, str]]) -> None:
+    from database import set_setting
+    set_setting(GUEST_LIST_KEY, json.dumps(rows[:MAX_GUESTS], ensure_ascii=False))
+
+
+def _db_guest_account() -> list[tuple[str, str]]:
+    return [(row["username"], row["hash"]) for row in _load_guests()]
+
+
+def current_account(request: Request) -> str:
+    """이 요청을 보낸 사람의 이름표. 사장님은 'owner', 친구는 자기 아이디.
+
+    친구가 여럿이라 역할('guest')로 묶으면 서로의 작업이 보인다.
+    """
+    if guest_mode.is_guest():
+        return "guest"
+    session = OWNER_AUTH.request_session(request) or {}
+    if str(session.get("role") or "owner") != "guest":
+        return "owner"
+    return str(session.get("sub") or "guest")
 
 
 class GuestAccountRequest(BaseModel):
@@ -225,16 +262,17 @@ class GuestAccountRequest(BaseModel):
 async def guest_account_get(request: Request):
     if current_role(request) != "owner":
         return JSONResponse({"error": guest_mode.hidden_notice()}, status_code=404)
-    username, password_hash = _db_guest_account()
-    return {"configured": bool(username and password_hash), "username": username}
+    rows = _load_guests()
+    return {"configured": bool(rows), "max": MAX_GUESTS,
+            "accounts": [{"username": row["username"]} for row in rows]}
 
 
 @app.post("/api/guest-account")
 async def guest_account_set(request: Request, body: GuestAccountRequest):
+    """친구 계정을 더하거나 비밀번호를 바꾼다."""
     if current_role(request) != "owner":
         return JSONResponse({"error": guest_mode.hidden_notice()}, status_code=404)
     from owner_auth import hash_password
-    from database import set_setting
     username = (body.username or "").strip()
     if not username:
         return JSONResponse({"error": "아이디를 입력해 주세요."}, status_code=400)
@@ -243,21 +281,37 @@ async def guest_account_set(request: Request, body: GuestAccountRequest):
     try:
         password_hash = hash_password(body.password or "")
     except ValueError:
-        return JSONResponse(
-            {"error": "비밀번호는 12자 이상이어야 합니다."}, status_code=400)
-    set_setting(GUEST_NAME_KEY, username)
-    set_setting(GUEST_HASH_KEY, password_hash)
-    return {"ok": True, "username": username}
+        return JSONResponse({"error": "비밀번호는 12자 이상이어야 합니다."}, status_code=400)
+    rows = _load_guests()
+    for row in rows:
+        if row["username"] == username:
+            row["hash"] = password_hash        # 같은 아이디면 비밀번호만 바꾼다
+            break
+    else:
+        if len(rows) >= MAX_GUESTS:
+            return JSONResponse(
+                {"error": f"친구 계정은 {MAX_GUESTS}개까지 만들 수 있습니다."}, status_code=400)
+        rows.append({"username": username, "hash": password_hash})
+    _save_guests(rows)
+    return {"ok": True, "username": username,
+            "accounts": [{"username": r["username"]} for r in rows]}
 
 
 @app.delete("/api/guest-account")
-async def guest_account_delete(request: Request):
+async def guest_account_delete(request: Request, username: str = ""):
     if current_role(request) != "owner":
         return JSONResponse({"error": guest_mode.hidden_notice()}, status_code=404)
     from database import delete_setting
-    delete_setting(GUEST_NAME_KEY)
-    delete_setting(GUEST_HASH_KEY)
-    return {"ok": True}
+    target = (username or "").strip()
+    # 아이디를 주면 그 하나만, 안 주면 전부 지운다
+    rows = [] if not target else [r for r in _load_guests() if r["username"] != target]
+    _save_guests(rows)
+    if not target:                                  # 전부 지우는 경우 옛 저장분도 정리
+        delete_setting(GUEST_NAME_KEY); delete_setting(GUEST_HASH_KEY)
+    return {"ok": True, "accounts": [{"username": r["username"]} for r in rows]}
+
+
+OWNER_AUTH.guest_provider = _db_guest_account
 
 
 @app.get("/api/site-mode")
@@ -611,8 +665,9 @@ async def owner_login(request: Request, credentials: OwnerLoginRequest):
             headers={"Retry-After": str(retry_after), "Cache-Control": "no-store"},
         )
 
-    role = OWNER_AUTH.role_for(credentials.username, credentials.password)
-    if role is None:
+    found = OWNER_AUTH.identify(credentials.username, credentials.password)
+    if found is None:
+        role = None
         OWNER_AUTH.rate_limiter.record_failure(client_key)
         retry_after = OWNER_AUTH.rate_limiter.retry_after(client_key)
         headers = {"Cache-Control": "no-store"}
@@ -630,7 +685,7 @@ async def owner_login(request: Request, credentials: OwnerLoginRequest):
     )
     response.set_cookie(
         OWNER_AUTH.settings.cookie_name,
-        OWNER_AUTH.issue_session(role=role),
+        OWNER_AUTH.issue_session(role=found[0], username=found[1]),
         max_age=OWNER_AUTH.settings.session_ttl_seconds,
         httponly=True,
         secure=OWNER_AUTH.settings.secure_cookie,
@@ -826,7 +881,7 @@ async def analyze(req: AnalyzeRequest):
     youtube_key = os.getenv("YOUTUBE_API_KEY", "").strip()
     naver_id = os.getenv("NAVER_CLIENT_ID", "").strip()
     naver_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
-    account = current_role(request)
+    account = current_account(request)
 
     async def stream():
         if not youtube_key:
@@ -1063,7 +1118,7 @@ async def list_edit_feedback_projects(request: Request):
             continue
         # 친구는 자기가 만든 것만 본다. 사장님은 친구 것까지 다 본다.
         # 계정이 생기기 전에 만들어진 것은 전부 사장님 것이다.
-        if role == "guest" and metadata.get("account") != "guest":
+        if role == "guest" and metadata.get("account") != current_account(request):
             continue
         projects.append({
             "account": metadata.get("account") or "owner",
@@ -4252,7 +4307,7 @@ async def history_get(id: int, request: Request):
     # 목록에서 걸러도 번호를 직접 넣으면 열린다. 여기서도 주인을 확인한다.
     if current_role(request) == "guest":
         account = ((item.get("report") or {}).get("_project") or {}).get("account")
-        if account != "guest":
+        if account != current_account(request):
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="없음")
     return item
@@ -4415,7 +4470,8 @@ def _worksheet_account(row: dict[str, Any]) -> str:
 
 
 def _worksheet_visible(request: Request, row: dict[str, Any]) -> bool:
-    return current_role(request) != "guest" or _worksheet_account(row) == "guest"
+    # 사장님은 다 본다. 친구는 자기 아이디로 만든 줄만 본다.
+    return current_role(request) != "guest" or _worksheet_account(row) == current_account(request)
 
 
 @app.get("/api/worksheet")
@@ -4427,7 +4483,7 @@ async def worksheet_list(request: Request):
 async def worksheet_create(request: Request):
     data = await request.json()
     payload = dict(data.get("data", {}) or {})
-    payload["_account"] = current_role(request)
+    payload["_account"] = current_account(request)
     id_ = create_worksheet_row(json.dumps(payload, ensure_ascii=False))
     return {"id": id_}
 
