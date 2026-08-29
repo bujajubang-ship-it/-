@@ -77,6 +77,8 @@ def hidden_notice() -> str:
 
 
 _TAB_BUTTON = re.compile(r'<button[^>]*id="tab-([a-z0-9-]+)"[^>]*>.*?</button>\s*', re.S)
+# data-guest-text="..." 가 붙은 칸은 친구 화면에서 그 문구로 통째로 바뀐다
+_GUEST_TAG = re.compile(r'<([a-z]+)([^>]*?)\sdata-guest-text="([^"]*)"([^>]*)>', re.S)
 _HTML_COMMENT = re.compile(r"<!--(?!\[if).*?-->\s*", re.S)
 _PANE_START = re.compile(r'<div id="pane-([a-z0-9-]+)"')
 
@@ -122,6 +124,32 @@ def _drop_card(html: str, marker: str) -> str:
         html = html[:start] + html[_cut_block(html, start):]
 
 
+def _swap_guest_text(html: str) -> str:
+    """data-guest-text 가 달린 칸의 속을 그 문구로 갈아 끼운다.
+
+    안쪽에 <b> 같은 태그가 섞여 있어 정규식만으로는 끝을 못 찾는다.
+    여는 태그와 짝이 맞는 닫는 태그를 세어서 찾는다.
+    """
+    while True:
+        m = _GUEST_TAG.search(html)
+        if not m:
+            return html
+        tag, before, replacement, after = m.group(1), m.group(2), m.group(3), m.group(4)
+        depth, i = 1, m.end()
+        open_tag, close_tag = "<%s" % tag, "</%s>" % tag
+        while depth and i < len(html):
+            nxt_open = html.find(open_tag, i)
+            nxt_close = html.find(close_tag, i)
+            if nxt_close < 0:
+                nxt_close = len(html)
+            if 0 <= nxt_open < nxt_close:
+                depth += 1; i = nxt_open + len(open_tag)
+            else:
+                depth -= 1; i = nxt_close + len(close_tag)
+        html = (html[:m.start()] + "<%s%s%s>%s%s" % (tag, before, after, replacement, close_tag)
+                + html[i:])
+
+
 def filter_html(html: str) -> str:
     """친구에게 보여 줄 화면만 남긴다.
 
@@ -135,6 +163,8 @@ def filter_html(html: str) -> str:
     html = _HTML_COMMENT.sub("", html)
     for marker in _DROP_CARDS:
         html = _drop_card(html, marker)
+    # 친구에게는 없는 기능(파이프라인 등)을 가리키는 안내문을 갈아끼운다
+    html = _swap_guest_text(html)
     while True:
         cut = None
         for match in _PANE_START.finditer(html):
