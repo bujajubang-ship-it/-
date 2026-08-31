@@ -3237,6 +3237,15 @@ function renderTranscriptGuideProject(project, requestedVersion = null) {
   document.getElementById('tg-condensations').innerHTML = (result.condensations || []).map(item => `<div class="edit-flow-list-item"><b>유지 ${(item.keep_sentence_ids || []).map(escHtml).join(' · ')}</b><br>삭제 ${(item.delete_sentence_ids || []).map(escHtml).join(' · ')}<br><small>${escHtml(item.purpose_after_condensing || '')}</small></div>`).join('') || '<div class="edit-flow-list-item">축약 없음</div>';
 
   document.getElementById('tg-employee-guide-text').textContent = version.employee_guide_text || '';
+  // 첫 장면이 말토막으로 시작하면 도입부가 엉망으로 보인다. 눈에 띄게 알린다.
+  const warn = (result || {})._opening_warnings;
+  const box = document.getElementById('tg-opening-warning');
+  if (box) {
+    box.innerHTML = warn
+      ? `<div class="progress-step error" style="align-items:flex-start"><span class="step-icon">⚠️</span><span>도입부로 쓰기 어려운 문장으로 시작합니다 — <b>"${escHtml(warn.text)}"</b><br>${escHtml((warn.problems||[]).join(' · '))}<br>수정 요청창에 "도입부를 다른 문장으로 시작해줘"라고 적으면 다시 잡아줍니다.</span></div>`
+      : '';
+    box.classList.toggle('hidden', !warn);
+  }
 
   const sentences = project.sentences || [];
   document.getElementById('tg-sentence-count').textContent = `(${sentences.length}문장)`;

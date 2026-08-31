@@ -479,3 +479,43 @@ class ContradictoryEditPlanTests(unittest.TestCase):
             self.assertNotIn(kept, delete_part, kept)
         for dropped in ("문장 5 입니다.", "문장 8 입니다.", "문장 12 입니다."):
             self.assertIn(dropped, delete_part, dropped)
+
+
+class OpeningSceneTests(unittest.TestCase):
+    """도입부 첫 마디가 말토막이면 영상 전체가 엉망으로 보인다."""
+
+    def _check(self, start_id, script):
+        sentences = split_sentences(script)
+        result = {
+            "edit_table": [{"final_order": 1, "sentence_start_id": start_id,
+                            "sentence_end_id": start_id, "action": "유지"}],
+            "deletions": [], "overall_flow": [], "condensations": [], "duplicates": [],
+            "data_basis_note": "채널 데이터 표본이 부족하여 Business PT와 대본의 논리 구조를 중심으로 판단함",
+        }
+        validate_result(result, sentences,
+                        numeric_data_available=False, channel_data_available=False)
+        return result.get("_opening_warnings")
+
+    SCRIPT = ("그리고 마지막으로 중앙 중앙은 중앙에는\n"
+              "좁은 주방일수록 설계가 중요합니다\n"
+              "여기 여기 이쪽을 보시면\n")
+
+    def test_a_connective_opening_is_flagged(self):
+        warning = self._check("S001", self.SCRIPT)
+        self.assertIsNotNone(warning)
+        self.assertIn("앞 내용을 받는 말로 시작합니다", warning["problems"])
+
+    def test_a_stutter_opening_is_flagged(self):
+        warning = self._check("S003", self.SCRIPT)
+        self.assertIsNotNone(warning)
+        self.assertIn("같은 말을 더듬어 되풀이합니다", warning["problems"])
+
+    def test_a_clean_opening_passes(self):
+        self.assertIsNone(self._check("S002", self.SCRIPT))
+
+    def test_the_channel_rules_reach_the_guide(self):
+        """편집 피드백에는 들어가던 채널 목표·후킹 원칙이 여기엔 빠져 있었다."""
+        from plain_transcript_edit import SYSTEM_INSTRUCTIONS
+        self.assertIn("CTR 10%", SYSTEM_INSTRUCTIONS)
+        self.assertIn("제목 작성 원칙", SYSTEM_INSTRUCTIONS)
+        self.assertIn("맨 첫 문장은 그 자체로", SYSTEM_INSTRUCTIONS)

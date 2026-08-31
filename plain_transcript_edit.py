@@ -201,7 +201,18 @@ RESULT_SCHEMA: dict[str, Any] = _object({
 })
 
 
-SYSTEM_INSTRUCTIONS = """당신은 부자주방 편집 담당 직원에게 전달할 대본 기반 영상 흐름 설계자다.
+try:
+    from analyzer import CHANNEL_GOALS, CONTENT_CREATION_RULES
+except Exception:                       # 분석기를 못 불러와도 가이드는 만들어야 한다
+    CHANNEL_GOALS = CONTENT_CREATION_RULES = ""
+
+# 첫 장면을 이런 말로 시작하면 도입부가 말토막처럼 들린다.
+OPENING_STOPWORDS = (
+    "그리고", "그래서", "그러면", "그럼", "그런데", "근데", "또한", "또", "그러니까",
+    "마지막으로", "다음으로", "이제", "아니", "자 그럼", "여기서",
+)
+
+SYSTEM_INSTRUCTIONS = f"""당신은 부자주방 편집 담당 직원에게 전달할 대본 기반 영상 흐름 설계자다.
 영상은 보지 못했다. 제공된 문장 ID와 원문만 사용하고 대본에 없는 발언을 만들지 않는다.
 단어 또는 문장 중간을 자르지 말고, 이동은 반드시 연속된 완결 문장 묶음으로 한다.
 한 장소·화자로 보이는 연속 구간은 가급적 함께 유지한다. 확신할 수 없으면 '불확실'이라고 쓴다.
@@ -213,6 +224,22 @@ evidence에 실제 CTR/Retention 수치가 없으면 숫자를 만들지 않는�
 데이터 표본이 부족하면 정확히 '채널 데이터 표본이 부족하여 Business PT와 대본의 논리 구조를 중심으로 판단함'이라고 쓴다.
 모든 start_sentence/end_sentence는 제공된 원문과 글자까지 정확히 같아야 한다.
 결과는 편집자가 그대로 실행할 수 있게 구체적으로 작성한다.
+
+【첫 장면(도입부)을 고르는 규칙 — 가장 중요하다】
+- 첫 장면의 **맨 첫 문장은 그 자체로 말이 되는 완결된 문장**이어야 한다.
+- 다음으로 시작하는 문장은 첫 장면의 시작으로 쓰지 않는다:
+  '그리고', '그래서', '그러면', '그런데', '근데', '또', '마지막으로', '다음으로', '이제'.
+  앞 내용을 받는 말이라 처음 보는 시청자에게는 말이 끊긴 것처럼 들린다.
+- 같은 낱말을 더듬어 되풀이한 문장('중앙 중앙은 중앙에는')도 첫 장면의 시작으로 쓰지 않는다.
+- 좋은 시작: 시청자의 문제를 말하는 문장, 결과·완성 장면을 가리키는 문장, 숫자가 든 문장.
+- 쓰고 싶은 구간의 첫 문장이 위 조건에 안 맞으면, **그 구간 안에서 조건에 맞는 문장부터**
+  시작하도록 sentence_start_id 를 뒤로 옮긴다. 구간 자체를 포기하지 말고 시작점을 고쳐라.
+
+【채널 목표】
+{CHANNEL_GOALS}
+첫 30초에 시청자가 '내 문제구나' 또는 '결과가 저거구나'를 알아야 이탈률 목표를 지킨다.
+
+{CONTENT_CREATION_RULES}
 
 caption_polish 는 화면에 뜨는 자막에서 군더더기를 '빼기만' 하는 목록이다.
 이 자막은 이미 찍은 영상을 받아 적은 것이다. 원문에 없는 글자가 자막에 들어가면
@@ -371,6 +398,25 @@ def validate_result(
     if conflict:
         result["_delete_conflicts"] = sorted(conflict)[:50]
         deleted -= conflict
+    # 첫 장면이 접속사나 더듬은 말로 시작하면 도입부가 말토막처럼 들린다.
+    # 모델이 규칙을 어겼는지 코드로도 본다 — 결과는 살리되 눈에 띄게 남긴다.
+    opening = sorted(
+        (row for row in result.get("edit_table") or [] if row.get("action") != "삭제"),
+        key=lambda row: int(row.get("final_order") or 0))
+    if opening:
+        first_id = str(opening[0].get("sentence_start_id") or "")
+        first_text = str((by_id.get(first_id) or {}).get("text") or "").strip()
+        problems = []
+        if any(first_text.startswith(word) for word in OPENING_STOPWORDS):
+            problems.append("앞 내용을 받는 말로 시작합니다")
+        words = first_text.split()
+        if any(words[i] == words[i + 1] for i in range(len(words) - 1)):
+            problems.append("같은 말을 더듬어 되풀이합니다")
+        if problems:
+            result["_opening_warnings"] = {
+                "sentence_id": first_id, "text": first_text, "problems": problems,
+            }
+
     # 자막 다듬기는 '화면 글자만' 손대는 것이다. 말에 없던 낱말이 자막으로 새로 생기면
     # 시청자에게는 하지 않은 말을 한 것이 되므로, 원문에서 멀어지면 통째로 막는다.
     polished_ids: set[str] = set()
