@@ -1138,6 +1138,24 @@ async def list_edit_feedback_projects(request: Request):
     return projects
 
 
+@app.get("/api/transcript-edit-guides/recent-jobs")
+async def recent_transcript_edit_jobs(request: Request, limit: int = 10):
+    """최근 분석 작업과 실패 사유. 사장님만 본다 — 원인을 찾을 때 쓴다."""
+    if current_role(request) != "owner":
+        return JSONResponse({"error": guest_mode.hidden_notice()}, status_code=404)
+    connection = PLAIN_TRANSCRIPT_EDIT_JOBS.store._connect()
+    try:
+        rows = connection.execute(
+            "SELECT job_id,kind,status,progress_step,progress_percent,progress_message,"
+            "error,attempt,retry_state,sentence_count,created_at,started_at,finished_at,heartbeat_at "
+            "FROM plain_transcript_edit_jobs ORDER BY created_at DESC LIMIT ?",
+            (max(1, min(int(limit), 50)),),
+        ).fetchall()
+    finally:
+        connection.close()
+    return [dict(row) for row in rows]
+
+
 @app.get("/api/transcript-edit-guides/projects")
 async def list_transcript_edit_guide_projects():
     projects = []

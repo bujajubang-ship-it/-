@@ -2928,7 +2928,9 @@ function updateTranscriptGuideJobStatus(job) {
   document.getElementById('tg-sentence-progress').textContent = `${Number(job.analyzed_sentence_count || 0)} / ${Number(job.sentence_count || 0)}`;
   document.getElementById('tg-evidence-count').textContent = String(Number(job.evidence_count || 0));
   document.getElementById('tg-retry').textContent = job.retry_state || 'none';
-  document.getElementById('tg-progress-steps').innerHTML = `<div class="progress-step ${job.status === 'failed' ? 'error' : 'active'}"><span class="step-icon">${job.status === 'failed' ? '⚠️' : '⏳'}</span><span>${escHtml(job.progress_message || '')}</span></div>`;
+  // 무엇 때문에 실패했는지 화면에 그대로 보여준다. 안 보이면 원인을 찾을 길이 없다.
+  const detail = job.error ? `<div class="progress-step error" style="align-items:flex-start"><span class="step-icon">🔎</span><span style="font-family:ui-monospace,monospace;font-size:12px;line-height:1.6;word-break:break-all">${escHtml(job.error)}</span></div>` : '';
+  document.getElementById('tg-progress-steps').innerHTML = `<div class="progress-step ${job.status === 'failed' ? 'error' : 'active'}"><span class="step-icon">${job.status === 'failed' ? '⚠️' : '⏳'}</span><span>${escHtml(job.progress_message || '')}</span></div>` + detail;
 }
 
 async function pollTranscriptGuideJob(jobId, revision) {
