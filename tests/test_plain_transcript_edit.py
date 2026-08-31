@@ -519,3 +519,54 @@ class OpeningSceneTests(unittest.TestCase):
         self.assertIn("CTR 10%", SYSTEM_INSTRUCTIONS)
         self.assertIn("제목 작성 원칙", SYSTEM_INSTRUCTIONS)
         self.assertIn("맨 첫 문장은 그 자체로", SYSTEM_INSTRUCTIONS)
+
+
+class OpeningHintTests(unittest.TestCase):
+    def test_the_model_is_told_which_sentences_can_open(self):
+        """규칙을 말로만 주면 좋은 구간을 고르고도 첫 줄이 말토막인 걸 놓친다."""
+        import asyncio as _asyncio
+        from plain_transcript_edit import PlainTranscriptEditService
+
+        captured = {}
+
+        class Spy:
+            async def _structured(self, **kwargs):
+                captured.update(kwargs)
+                return valid_result()
+
+        service = PlainTranscriptEditService(analysis=Spy())
+        sentences = split_sentences("그리고 마지막으로 중앙 중앙은\n좁은 주방일수록 설계가 중요합니다")
+        _asyncio.run(service.analyze(
+            request={"title": "t"}, sentences=sentences, duplicates=[], evidence={}))
+
+        payload = json.loads(captured["prompt"])
+        flags = {row["id"]: row["can_open"] for row in payload["sentences"]}
+        self.assertFalse(flags["S001"])       # 접속사 + 더듬음
+        self.assertTrue(flags["S002"])
+        self.assertIn("opening_rule", payload)
+
+    def test_the_guide_uses_the_configured_reasoning_effort(self):
+        """설정은 max 인데 코드에 high 가 박혀 있어 자막 가이드만 낮게 돌고 있었다."""
+        import asyncio as _asyncio
+        import os as _os
+        from plain_transcript_edit import PlainTranscriptEditService
+
+        captured = {}
+
+        class Spy:
+            async def _structured(self, **kwargs):
+                captured.update(kwargs)
+                return valid_result()
+
+        previous = _os.environ.get("OPENAI_REASONING_EFFORT")
+        _os.environ["OPENAI_REASONING_EFFORT"] = "max"
+        try:
+            _asyncio.run(PlainTranscriptEditService(analysis=Spy()).analyze(
+                request={"title": "t"}, sentences=split_sentences(SCRIPT),
+                duplicates=[], evidence={}))
+            self.assertEqual(captured["reasoning_effort"], "max")
+        finally:
+            if previous is None:
+                _os.environ.pop("OPENAI_REASONING_EFFORT", None)
+            else:
+                _os.environ["OPENAI_REASONING_EFFORT"] = previous

@@ -12,6 +12,7 @@ import difflib
 import hashlib
 import io
 import json
+import os
 import re
 from typing import Any
 
@@ -207,6 +208,17 @@ except Exception:                       # 분석기를 못 불러와도 가이�
     CHANNEL_GOALS = CONTENT_CREATION_RULES = ""
 
 # 첫 장면을 이런 말로 시작하면 도입부가 말토막처럼 들린다.
+def can_open(text: str) -> bool:
+    """이 문장으로 영상을 시작해도 말이 되나. 검증과 프롬프트가 같은 잣대를 쓴다."""
+    text = str(text or "").strip()
+    if len(text) < 6:
+        return False
+    if any(text.startswith(word) for word in OPENING_STOPWORDS):
+        return False
+    words = text.split()
+    return not any(words[i] == words[i + 1] for i in range(len(words) - 1))
+
+
 OPENING_STOPWORDS = (
     "그리고", "그래서", "그러면", "그럼", "그런데", "근데", "또한", "또", "그러니까",
     "마지막으로", "다음으로", "이제", "아니", "자 그럼", "여기서",
@@ -264,7 +276,13 @@ class PlainTranscriptEditService:
     ) -> dict[str, Any]:
         prompt = json.dumps({
             "project": request,
-            "sentences": [{"id": row["id"], "text": row["text"]} for row in sentences],
+            # 도입부로 쓸 수 있는 문장인지 미리 표시해 준다. 말로만 규칙을 주면
+            # 좋은 구간을 고르고도 그 구간의 첫 줄이 말토막인 걸 놓친다.
+            "sentences": [
+                {"id": row["id"], "text": row["text"], "can_open": can_open(row["text"])}
+                for row in sentences
+            ],
+            "opening_rule": "첫 장면의 sentence_start_id 는 can_open 이 true 인 문장이어야 한다.",
             "code_duplicate_candidates": duplicates,
             "retrieved_evidence": evidence,
             "required_output_order": [
@@ -275,7 +293,8 @@ class PlainTranscriptEditService:
         return await self.analysis._structured(
             prompt=prompt, instructions=SYSTEM_INSTRUCTIONS,
             schema=RESULT_SCHEMA, schema_name="plain_transcript_edit_flow",
-            reasoning_effort="high", allow_anthropic=False,
+            reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "high").strip() or "high",
+            allow_anthropic=False,
         )
 
     async def revise(
@@ -412,6 +431,8 @@ def validate_result(
         words = first_text.split()
         if any(words[i] == words[i + 1] for i in range(len(words) - 1)):
             problems.append("같은 말을 더듬어 되풀이합니다")
+        if not problems and not can_open(first_text):
+            problems.append("도입부로 쓰기엔 너무 짧습니다")
         if problems:
             result["_opening_warnings"] = {
                 "sentence_id": first_id, "text": first_text, "problems": problems,
