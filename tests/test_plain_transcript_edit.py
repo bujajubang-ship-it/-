@@ -286,9 +286,13 @@ class ApiAndUiTests(unittest.TestCase):
     def test_create_job_route_is_background_and_has_status_url(self):
         class FakeManager:
             _worker_task = object()
+            started = 0
             def enqueue_initial(self, request):
                 self.request = request
                 return {"job_id": "a" * 32}
+            def start(self):
+                # 라우트는 일꾼이 죽어 있어도 다시 세워야 한다
+                self.started += 1
         manager = FakeManager()
         with patch.object(main, "PLAIN_TRANSCRIPT_EDIT_JOBS", manager):
             response = self.client.post("/api/transcript-edit-guides/jobs", json={
@@ -298,6 +302,7 @@ class ApiAndUiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["job_id"], "a" * 32)
         self.assertEqual(manager.request["script"], SCRIPT)
+        self.assertEqual(manager.started, 1)
         self.assertEqual(
             response.json()["status_url"],
             "/api/transcript-edit-guides/jobs/" + "a" * 32,
@@ -346,3 +351,61 @@ class ApiAndUiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkerStaysAliveTests(unittest.TestCase):
+    """일꾼이 죽으면 그 뒤 모든 분석이 대기만 한다 — 화면은 계속 돌기만 했다."""
+
+    def _manager(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path as _Path
+        from plain_transcript_edit_jobs import (
+            PlainTranscriptEditJobManager, PlainTranscriptEditJobStore)
+
+        path = str(_Path(tempfile.mkdtemp()) / "jobs.db")
+
+        def connect():
+            connection = sqlite3.connect(path)
+            connection.row_factory = sqlite3.Row
+            return connection
+
+        return PlainTranscriptEditJobManager(store=PlainTranscriptEditJobStore(connect))
+
+    def test_a_failing_job_does_not_take_the_worker_down_with_it(self):
+        async def scenario():
+            manager = self._manager()
+            calls = {"n": 0}
+
+            async def explode(job, checkpoint, started):
+                calls["n"] += 1
+                raise RuntimeError("일부러 터뜨림")
+
+            manager._process_initial = explode
+            manager.start()
+            manager.enqueue_initial(
+                {"title": "t", "topic": "x", "script": "문장 하나입니다. 두 번째 문장입니다."})
+            await asyncio.sleep(3)
+            try:
+                self.assertGreater(calls["n"], 0)
+                self.assertFalse(manager._worker_task.done())
+            finally:
+                await manager.stop()
+
+        asyncio.run(scenario())
+
+    def test_start_revives_a_worker_that_already_stopped(self):
+        """예전에는 '일꾼이 없을 때만' 세워서, 한 번 죽으면 영영 안 살아났다."""
+        async def scenario():
+            manager = self._manager()
+            manager.start()
+            manager._worker_task.cancel()
+            await asyncio.sleep(0.3)
+            self.assertTrue(manager._worker_task.done())
+            manager.start()
+            try:
+                self.assertFalse(manager._worker_task.done())
+            finally:
+                await manager.stop()
+
+        asyncio.run(scenario())

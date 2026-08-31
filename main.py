@@ -1086,8 +1086,9 @@ async def edit_feedback(req: EditFeedbackRequest, request: Request):
 @app.post("/api/transcript-edit-guides/jobs")
 async def create_plain_transcript_edit_job(req: PlainTranscriptEditRequest):
     job = PLAIN_TRANSCRIPT_EDIT_JOBS.enqueue_initial(req.model_dump())
-    if PLAIN_TRANSCRIPT_EDIT_JOBS._worker_task is None:
-        asyncio.create_task(PLAIN_TRANSCRIPT_EDIT_JOBS.process_once())
+    # start() 는 일꾼이 죽어 있으면 다시 세운다. 예전처럼 '없을 때만' 세우면
+    # 한 번 죽은 뒤로는 아무도 일을 집어가지 않아 화면이 계속 돌기만 한다.
+    PLAIN_TRANSCRIPT_EDIT_JOBS.start()
     return JSONResponse({
         "ok": True, "job_id": job["job_id"],
         "status_url": f"/api/transcript-edit-guides/jobs/{job['job_id']}",
@@ -1101,6 +1102,9 @@ async def get_plain_transcript_edit_job(job_id: str):
     job = PLAIN_TRANSCRIPT_EDIT_JOBS.store.get(job_id)
     if not job:
         return JSONResponse({"error": "분석 작업을 찾지 못했습니다."}, status_code=404)
+    # 사용자가 결과를 기다리는 동안 일꾼이 죽어 있으면 여기서 다시 세운다.
+    if str(job.get("status")) in ("queued", "processing"):
+        PLAIN_TRANSCRIPT_EDIT_JOBS.start()
     return job
 
 

@@ -2945,6 +2945,12 @@ async function pollTranscriptGuideJob(jobId, revision) {
         localStorage.removeItem('transcriptEditGuideJobId');
         currentTranscriptGuideProjectId = Number(job.result?.history_id || 0) || currentTranscriptGuideProjectId;
         currentTranscriptGuideProject = job.result?.project || null;
+        if (!currentTranscriptGuideProject && currentTranscriptGuideProjectId) {
+          // 작업 기록에 결과가 안 담겼어도 저장은 끝났을 수 있다. 저장된 것을 열어 준다.
+          await openTranscriptGuideProject(currentTranscriptGuideProjectId);
+          await loadTranscriptGuideProjects();
+          return;
+        }
         if (!currentTranscriptGuideProject) throw new Error('완료된 자막 편집 가이드가 없습니다.');
         renderTranscriptGuideProject(currentTranscriptGuideProject);
         document.getElementById('tg-input-section').classList.add('hidden');
@@ -2959,11 +2965,35 @@ async function pollTranscriptGuideJob(jobId, revision) {
         localStorage.removeItem('transcriptEditGuideJobId');
         throw new Error(job.progress_message || '분석에 실패했습니다.');
       }
+      // 진행이 멈춘 채 오래 지나면 이미 저장된 결과가 있는지 확인한다.
+      // (저장은 끝났는데 작업 상태만 못 넘어간 경우가 있다)
+      if (attempt > 0 && attempt % 80 === 0) {
+        const saved = await findFinishedTranscriptGuide(job);
+        if (saved) {
+          localStorage.removeItem('transcriptEditGuideJobId');
+          await openTranscriptGuideProject(saved);
+          await loadTranscriptGuideProjects();
+          return;
+        }
+      }
       await new Promise(resolve => setTimeout(resolve, 1500));
     }
     throw new Error('분석 대기 시간이 초과되었습니다. 프로젝트 목록에서 상태를 다시 확인해주세요.');
   } finally {
     transcriptGuidePollingJobId = null;
+  }
+}
+
+// 작업이 시작된 뒤에 만들어진 프로젝트가 있으면 그게 이 작업의 결과다.
+async function findFinishedTranscriptGuide(job) {
+  try {
+    const startedAt = String(job.started_at || job.created_at || '').slice(0, 19).replace('T', ' ');
+    const projects = await fetch('/api/transcript-edit-guides/projects').then(r => r.json());
+    if (!Array.isArray(projects)) return 0;
+    const match = projects.find(p => String(p.created_at || '') >= startedAt);
+    return match ? Number(match.id) : 0;
+  } catch (error) {
+    return 0;
   }
 }
 

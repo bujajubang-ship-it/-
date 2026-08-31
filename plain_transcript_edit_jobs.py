@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 import time
 import uuid
@@ -362,8 +363,16 @@ class PlainTranscriptEditJobManager:
 
     async def _worker_loop(self) -> None:
         while True:
-            if await self.process_once():
-                continue
+            try:
+                if await self.process_once():
+                    continue
+            except asyncio.CancelledError:
+                raise                      # 서버가 내려가는 것이니 그대로 멈춘다
+            except Exception:
+                # 여기서 새어 나가면 일꾼이 죽고, 그 뒤 모든 작업이 대기만 한다.
+                # 한 건이 잘못돼도 다음 건은 계속 처리한다.
+                logging.exception("plain transcript edit worker iteration failed")
+                await asyncio.sleep(1)
             # A hard process exit cannot execute the graceful cancellation path.
             # Revisit stale processing rows so they eventually resume from the
             # last persisted checkpoint without requiring another restart.
