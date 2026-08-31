@@ -402,13 +402,31 @@ class PlainTranscriptEditJobManager:
             fields["checkpoint_json"] = json.dumps(checkpoint, ensure_ascii=False, default=str)
         self.store.update(job_id, **fields)
 
-    async def _await_with_heartbeat(self, job_id: str, awaitable: Any) -> Any:
-        """Keep the persisted heartbeat fresh while a model call is in flight."""
+    async def _await_with_heartbeat(self, job_id: str, awaitable: Any, *,
+                                    step: str = "", start_percent: int = 0,
+                                    end_percent: int = 0, label: str = "") -> Any:
+        """Keep the persisted heartbeat fresh while a model call is in flight.
+
+        모델이 몇 분씩 생각하는 동안 화면이 한 자리에 멈춰 있으면 멎은 것처럼 보인다.
+        그래서 지나간 시간을 함께 적어 보낸다.
+        """
 
         async def pulse() -> None:
+            waited = 0
             while True:
                 await asyncio.sleep(15)
-                await asyncio.to_thread(self.store.update, job_id, heartbeat_at=utc_now())
+                waited += 15
+                fields: dict[str, Any] = {"heartbeat_at": utc_now()}
+                if step:
+                    # 끝 지점까지 천천히 차오르게 한다 (2분이면 거의 다 찬다)
+                    span = max(0, end_percent - start_percent)
+                    grown = min(span, int(span * min(1.0, waited / 120)))
+                    fields.update(
+                        progress_step=step,
+                        progress_percent=start_percent + grown,
+                        progress_message=f"{label} ({waited // 60}분 {waited % 60}초 경과)",
+                    )
+                await asyncio.to_thread(self.store.update, job_id, **fields)
 
         pulse_task = asyncio.create_task(pulse())
         try:
@@ -482,7 +500,9 @@ class PlainTranscriptEditJobManager:
         if "analysis_result" not in checkpoint:
             result = await self._await_with_heartbeat(
                 job_id,
-                self.service_factory().analyze(
+                step="analysis", start_percent=58, end_percent=88,
+                label="AI가 전체 대본을 읽고 편집안을 설계하는 중입니다",
+                awaitable=self.service_factory().analyze(
                     request=request, sentences=sentences,
                     duplicates=checkpoint["duplicates"], evidence=evidence,
                 ),
@@ -560,7 +580,9 @@ class PlainTranscriptEditJobManager:
         )
         result = await self._await_with_heartbeat(
             job_id,
-            self.service_factory().revise(
+            step="revision", start_percent=40, end_percent=80,
+            label="요청하신 부분을 다시 설계하는 중입니다",
+            awaitable=self.service_factory().revise(
                 current=current, user_request=message, sentence_context=context,
                 evidence_summary={
                     key: {"source": value.get("source"), "sample_size": value.get("sample_size"), "unavailable_reason": value.get("unavailable_reason")}

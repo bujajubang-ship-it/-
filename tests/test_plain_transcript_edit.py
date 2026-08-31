@@ -409,3 +409,35 @@ class WorkerStaysAliveTests(unittest.TestCase):
                 await manager.stop()
 
         asyncio.run(scenario())
+
+
+class ReferenceListsDoNotSinkTheAnalysisTests(unittest.TestCase):
+    """참고 목록에 엉뚱한 문장 번호가 하나 섞였다고 몇 분짜리 분석을 버리지 않는다."""
+
+    def _sentences(self):
+        return split_sentences(SCRIPT)
+
+    def test_a_made_up_id_in_condensations_is_dropped_not_fatal(self):
+        result = valid_result()
+        result["condensations"] = [{
+            "keep_sentence_ids": ["S005", "S999"],      # S999 는 없는 문장
+            "delete_sentence_ids": ["S006", "S404"],
+            "purpose_after_condensing": "사용 전 주의",
+        }]
+        validate_result(result, self._sentences(), numeric_data_available=False)
+        kept = result["condensations"][0]
+        self.assertEqual(kept["keep_sentence_ids"], ["S005"])
+        self.assertEqual(kept["delete_sentence_ids"], ["S006"])
+
+    def test_a_made_up_id_in_prose_is_recorded_not_fatal(self):
+        result = valid_result()
+        result["biggest_problem"] = "S777 구간이 늘어진다"
+        validate_result(result, self._sentences(), numeric_data_available=False)
+        self.assertIn("S777", result.get("_id_warnings") or [])
+
+    def test_the_edit_table_is_still_checked_strictly(self):
+        """편집을 실제로 움직이는 표는 예전처럼 엄격하게 본다."""
+        result = valid_result()
+        result["edit_table"][0]["sentence_start_id"] = "S999"
+        with self.assertRaises(ValueError):
+            validate_result(result, self._sentences(), numeric_data_available=False)

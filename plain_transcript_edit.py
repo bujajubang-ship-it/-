@@ -340,17 +340,28 @@ def validate_result(
     for row in result.get("deletions") or []:
         span = validate_span(row, final=False)
         deleted.update(item["id"] for item in span)
+    # 축약·중복 목록은 참고 자료다. 편집자에게 나가는 지시문에는 쓰이지 않는다.
+    # 여기에 없는 문장 번호가 하나 섞였다고 몇 분짜리 분석을 통째로 버리지 않는다.
+    # 모르는 번호는 조용히 빼고, 실제로 편집을 움직이는 표(edit_table·deletions)만
+    # 위에서 엄격하게 본다.
     condensed_keep: set[str] = set()
     condensed_delete: set[str] = set()
+    kept_condensations = []
     for row in result.get("condensations") or []:
-        keep_ids = {str(value) for value in row.get("keep_sentence_ids") or []}
-        delete_ids = {str(value) for value in row.get("delete_sentence_ids") or []}
-        if (keep_ids | delete_ids) - set(by_id):
-            raise ValueError("축약 목록에 존재하지 않는 문장 ID가 있습니다.")
-        if keep_ids & delete_ids:
-            raise ValueError("축약 목록에서 같은 문장을 유지·삭제로 동시에 지정했습니다.")
+        keep_ids = {str(v) for v in row.get("keep_sentence_ids") or []} & set(by_id)
+        delete_ids = {str(v) for v in row.get("delete_sentence_ids") or []} & set(by_id)
+        delete_ids -= keep_ids                 # 같은 문장을 둘 다 지정하면 살리는 쪽을 따른다
+        if not (keep_ids or delete_ids):
+            continue
+        row["keep_sentence_ids"] = sorted(keep_ids)
+        row["delete_sentence_ids"] = sorted(delete_ids)
+        kept_condensations.append(row)
         condensed_keep.update(keep_ids)
         condensed_delete.update(delete_ids)
+    if "condensations" in result:
+        result["condensations"] = kept_condensations
+    for row in result.get("duplicates") or []:
+        row["candidates"] = [str(v) for v in row.get("candidates") or [] if str(v) in by_id]
     if deleted & condensed_keep:
         raise ValueError("완전 삭제와 축약 유지가 동시에 지정된 문장이 있습니다.")
     conflict = deleted & final_used
@@ -381,9 +392,11 @@ def validate_result(
             )
     if polished_ids & deleted:
         raise ValueError(f"삭제할 문장을 다듬도록 지정했습니다: {sorted(polished_ids & deleted)}")
+    # 설명 문장 안에 엉뚱한 번호를 한 번 쓴 것만으로 분석을 버리지 않는다.
+    # 편집을 움직이는 구간은 위에서 이미 문장 단위로 확인했다.
     unknown = {ref for ref in _SENTENCE_REF.findall(_all_text(result)) if ref not in by_id}
     if unknown:
-        raise ValueError(f"존재하지 않는 문장 ID 사용: {sorted(unknown)}")
+        result["_id_warnings"] = sorted(unknown)[:20]
     ctr_available = numeric_data_available if ctr_data_available is None else ctr_data_available
     retention_available = numeric_data_available if retention_data_available is None else retention_data_available
     result_text = _all_text(result)
