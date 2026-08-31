@@ -504,39 +504,38 @@ def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
         except ValueError:
             return []
 
+    delete_rows = [row for row in (result.get("deletions") or []) if rows_of(row)]
     delete_items: list[dict[str, Any]] = []
-    for row in result.get("deletions") or []:
+    for row in delete_rows:
         delete_items.extend(item for item in rows_of(row) if str(item.get("text") or "").strip())
     deleted_orders = {int(item.get("order") or 0) for item in delete_items}
 
-    def occurrence_note(item: dict[str, Any]) -> str:
-        """같은 자막이 여러 번 찍혔으면 몇 번째를 지울지 밝힌다.
-
-        전부 지우는 경우에는 번호를 붙이지 않는다 — 같은 줄이 여러 번 나오면
-        에이전트가 어느 하나만 지우라는 뜻으로 읽는다.
-        """
+    def where_note(item: dict[str, Any]) -> str:
+        """같은 자막이 여러 번 찍혔으면 몇 번째인지 밝힌다. 경계를 잘못 잡으면 엉뚱한 데가 잘린다."""
         text = str(item.get("text") or "").strip()
         orders = order_by_text.get(text) or []
         if len(orders) < 2:
             return ""
-        if all(order in deleted_orders for order in orders):
-            return f"   ← 똑같은 자막 {len(orders)}개 모두"
         try:
             nth = orders.index(int(item.get("order") or 0)) + 1
         except ValueError:
             return ""
-        return f"   ← 똑같은 자막이 {len(orders)}개 있는데 그중 {nth}번째 것만"
+        return f" (똑같은 자막 {len(orders)}개 중 {nth}번째)"
 
+    # 삭제는 덩어리로 준다. 한 줄씩 다 적으면 수백 줄이 되어 에이전트가 감당하지 못한다.
     delete_lines: list[str] = []
-    seen_all_deleted: set[str] = set()
-    for item in delete_items:
-        text = str(item.get("text") or "").strip()
-        note = occurrence_note(item)
-        if note.endswith("모두"):
-            if text in seen_all_deleted:
-                continue          # 같은 줄을 두 번 적지 않는다
-            seen_all_deleted.add(text)
-        delete_lines.append(f"- {text}{note}")
+    for number, row in enumerate(delete_rows, 1):
+        items = [item for item in rows_of(row) if str(item.get("text") or "").strip()]
+        if not items:
+            continue
+        first, last = items[0], items[-1]
+        if len(items) == 1:
+            delete_lines.append(
+                f'{number}. "{str(first.get("text")).strip()}"{where_note(first)}  — 1줄')
+        else:
+            delete_lines.append(
+                f'{number}. "{str(first.get("text")).strip()}"{where_note(first)}\n'
+                f'   부터 "{str(last.get("text")).strip()}"{where_note(last)} 까지  — {len(items)}줄')
 
     scenes = sorted(result.get("edit_table") or [],
                     key=lambda row: int(row.get("final_order") or 0))
@@ -558,46 +557,47 @@ def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
         if str(row.get("polished_text") or "").strip()
     ]
 
+    total_delete = len(delete_items)
+    total_keep = sum(len(rows_of(row)) for row in scenes)
+
     lines = [
-        "이 영상은 편집 전 촬영 원본이라 NG 테이크와 촬영 중 나눈 대화가 섞여 있어.",
-        "아래 세 가지 작업을 순서대로 해줘.",
+        "이 영상은 편집 전 촬영 원본이야. NG 테이크와 촬영 중 나눈 잡담이 섞여 있어.",
+        "아래 세 가지를 순서대로 해줘. 한 단계를 끝내고 다음 단계로 넘어가.",
         "",
-        "★ 가장 중요한 규칙: 이 영상에서 이미 말한 것 말고 새로운 말을 절대 만들지 마.",
-        "  지우기, 순서 바꾸기, 낱말 빼기만 해. 없던 말을 넣거나 다른 말로 바꾸지 마.",
+        "★ 규칙: 영상에서 이미 말한 것 말고 새로운 말을 만들지 마.",
+        "  지우기, 순서 바꾸기, 낱말 빼기만 해.",
         "",
-        "[작업 1] 아래 목록에 있는 자막을 삭제해 줘.",
-        "- 목록에 적힌 자막만 지우고, 목록에 없는 자막은 절대 지우지 마.",
-        "- 자막 글자를 고치거나 새로 쓰지 마. 이 단계는 삭제만 해.",
-        "- 뒤에 「똑같은 자막 N개 모두」라고 적힌 것은 같은 말이 여러 번 찍힌 것인데 전부 지우면 돼.",
-        "- 뒤에 「똑같은 자막이 N개 있는데 그중 M번째 것만」이라고 적힌 것은 조심해 줘."
-        " 앞에서부터 세서 M번째로 나오는 것 하나만 지우고, 나머지 같은 자막은 그대로 남겨 줘.",
+        f"[1단계] 아래 {len(delete_lines)}개 덩어리를 삭제해 줘. (자막 {total_delete}줄이 지워져야 해)",
+        '- 각 줄은 「"시작자막" 부터 "끝자막" 까지」 형식이야.',
+        "  그 두 자막과 사이에 있는 자막을 한 덩어리로 통째로 지워.",
+        '- 따옴표가 하나만 있는 줄은 그 자막 한 개만 지우면 돼.',
+        "- 끝에 적힌 줄 수(— N줄)와 실제로 지워진 줄 수가 같은지 확인해 줘.",
+        '- "똑같은 자막 N개 중 M번째"라고 적힌 것은 조심해. 앞에서부터 세서 그 자리를 잡아.',
         "",
     ]
-    lines.extend(delete_lines or ["- (지울 자막 없음)"])
+    lines.extend(delete_lines or ["1. (지울 자막 없음)"])
     lines.extend([
         "",
-        "[작업 2] 작업 1을 끝낸 뒤, 남은 자막을 아래 번호 순서대로 다시 배열해 줘.",
-        '- 각 줄은 「"시작 자막" 부터 "끝 자막" 까지」 형식이야.'
-        " 그 두 자막과 사이에 있는 자막들을 한 덩어리로 통째로 옮겨 줘. 덩어리 안의 순서는 바꾸지 마.",
-        "- 따옴표가 하나만 있는 줄은 그 자막 한 개짜리 덩어리야.",
-        "- 이 단계에서는 자막을 새로 지우거나 글자를 고치지 마. 위치만 옮겨.",
-        f"- 아래 1번부터 {len(order_lines)}번까지가 최종 영상의 순서야.",
+        f"[2단계] 남은 자막을 아래 {len(order_lines)}개 덩어리 순서대로 다시 배열해 줘. "
+        f"(자막 {total_keep}줄이 남아야 해)",
+        '- 각 줄은 「"시작자막" 부터 "끝자막" 까지」 형식이야. 덩어리 안의 순서는 바꾸지 마.',
+        "- 이 단계에서는 자막을 지우거나 글자를 고치지 마. 위치만 옮겨.",
         "",
     ])
     lines.extend(order_lines or ["1. (순서 변경 없음)"])
+    if polish_lines:
+        lines.extend([
+            "",
+            f"[3단계] 아래 {len(polish_lines)}개 자막에서 군더더기 말을 빼 줘.",
+            "- 화면에 뜨는 자막 글자만 고치는 거야. 영상은 자르지 마.",
+            '- 「원래 자막」 → 「바꿀 자막」 형식이야. 오른쪽은 왼쪽에서 낱말을 뺀 것뿐이야.',
+            "- 목록에 없는 자막은 그대로 둬. 알아서 더 다듬지 마.",
+            "",
+        ])
+        lines.extend(polish_lines)
     lines.extend([
         "",
-        "[작업 3] 마지막으로 아래 자막에서 군더더기 말을 빼 줘.",
-        "- 말소리는 그대로 두고 화면에 뜨는 자막 글자만 고치는 거야. 영상을 자르지 마.",
-        "- 「원래 자막」 → 「바꿀 자막」 형식이야. 왼쪽과 똑같은 자막을 찾아 오른쪽 문장으로 바꿔 줘.",
-        "- 오른쪽은 왼쪽에서 낱말을 뺀 것뿐이야. 새 낱말은 하나도 없어.",
-        "- 목록에 없는 자막은 그대로 둬. 네가 알아서 더 다듬거나 맞춤법을 고치지 마.",
-        "",
-    ])
-    lines.extend(polish_lines or ["- (다듬을 자막 없음)"])
-    lines.extend([
-        "",
-        "세 작업을 모두 마치면 자막이 몇 개 남았는지와 첫 자막이 무엇인지 알려줘.",
+        "다 끝나면 자막이 몇 줄 남았는지 알려줘.",
     ])
     return "\n".join(lines).strip() + "\n"
 

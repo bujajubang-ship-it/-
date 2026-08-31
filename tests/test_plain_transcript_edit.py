@@ -123,12 +123,12 @@ class SentenceAndExportTests(unittest.TestCase):
         sentences = split_sentences(SCRIPT)
         version = {"version": 1, "result": valid_result()}
         prompt = render_vrew_prompt({"sentences": sentences}, version)
-        self.assertIn("[작업 1]", prompt)
-        self.assertIn("[작업 2]", prompt)
-        self.assertIn("[작업 3]", prompt)
+        self.assertIn("[1단계]", prompt)
+        self.assertIn("[2단계]", prompt)
+        self.assertIn("[3단계]", prompt)
         self.assertIn('"A/S 부품 공급 여부도 꼭 확인하세요." → "A/S 부품 공급 여부도 확인하세요."', prompt)
         # 같은 문장이 두 번 찍혔으면 몇 번째를 지울지 적어야 살릴 테이크가 안 지워진다.
-        self.assertIn("똑같은 자막이 2개 있는데 그중 2번째 것만", prompt)
+        self.assertIn("똑같은 자막 2개 중 2번째", prompt)
         # 여러 문장짜리 장면은 '부터 ~ 까지'로 묶어 준다.
         self.assertIn('"대표: 오늘은 좁은 주방의 문제를 설명합니다." 부터', prompt)
         for banned in ("S001", "S006", "이유:", "근거:"):
@@ -231,8 +231,8 @@ class BackgroundJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(project["_project"]["mode"], "transcript_edit_guide")
         self.assertEqual(len(project["conversation"]), 4)
         guide_text = project["versions"][-1]["employee_guide_text"]
-        self.assertIn("[작업 1]", guide_text)
-        self.assertIn("[작업 2]", guide_text)
+        self.assertIn("[1단계]", guide_text)
+        self.assertIn("[2단계]", guide_text)
         self.assertNotIn("[상세 편집 순서]", guide_text)
         self.assertEqual(project["_project"]["transcript_hash"], initial["transcript_hash"])
 
@@ -343,7 +343,7 @@ class ApiAndUiTests(unittest.TestCase):
         self.assertEqual(markdown.status_code, 200)
         self.assertIn("버전: v1", markdown.text)
         self.assertEqual(txt_response.status_code, 200)
-        self.assertIn("[작업 1]", txt_response.text)
+        self.assertIn("[1단계]", txt_response.text)
         self.assertNotIn("[편집 담당자 전달용 최종본]", txt_response.text)
         self.assertEqual(csv_response.status_code, 200)
         self.assertIn("sentence_start_id", csv_response.text)
