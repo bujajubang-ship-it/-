@@ -224,6 +224,44 @@ OPENING_STOPWORDS = (
     "마지막으로", "다음으로", "이제", "아니", "자 그럼", "여기서",
 )
 
+REVIEW_SCHEMA: dict[str, Any] = _object({
+    "verdict": {"type": "string", "enum": ["ok", "fix"]},
+    "opening_check": {"type": "string"},
+    "flow_check": {"type": "string"},
+    "problems": {"type": "array", "items": _object({
+        "where": {"type": "string"},
+        "problem": {"type": "string"},
+        "fix": {"type": "string"},
+    })},
+    "revised_order": {"type": "array", "items": _object({
+        "final_order": {"type": "integer"},
+        "sentence_start_id": {"type": "string"},
+        "sentence_end_id": {"type": "string"},
+        "purpose": {"type": "string"},
+    })},
+})
+
+REVIEW_INSTRUCTIONS = """당신은 편집이 끝난 영상을 처음 보는 사람이다.
+설계된 순서대로 자막을 읽고, 이대로 잘라 붙이면 영상이 어떻게 보일지 판단한다.
+
+이것만 본다.
+1. 도입부 — 첫 마디가 이 영상의 핵심을 가리키는가.
+   썸네일과 제목을 보고 들어온 시청자가 바로 듣고 싶어 하는 이야기인가.
+   앞 내용을 받는 말('그리고', '그래서', '마지막으로')이나 더듬은 말로 시작하면 안 된다.
+   인사·자기소개로 시작해서도 안 된다. 시청자의 문제나 결과부터 보여야 한다.
+2. 서론 → 본론 → 결론이 자연스럽게 이어지는가.
+   말이 중간에서 끊기거나, 앞뒤가 뒤집혀 뜻이 통하지 않는 자리가 있는가.
+3. 같은 이야기가 두 번 나오거나, 결론이 나온 뒤에 본론이 또 나오지 않는가.
+
+고칠 것이 없으면 verdict 를 "ok" 로 하고 revised_order 는 빈 배열로 둔다.
+고칠 것이 있으면 verdict 를 "fix" 로 하고, **전체 장면 순서를 처음부터 끝까지** revised_order 에 다시 적는다.
+- 주어진 문장 ID 범위만 쓴다. 없는 번호를 만들지 않는다.
+- 문장 중간을 자르지 않는다. 구간의 시작을 뒤로 미루는 것은 괜찮다.
+- 한 문장을 두 장면에 겹쳐 넣지 않는다.
+- 장면을 통째로 빼도 된다. 대신 남는 것만으로 서론·본론·결론이 서야 한다.
+말로만 지적하지 말고 반드시 고친 순서를 내놓는다."""
+
+
 SYSTEM_INSTRUCTIONS = f"""당신은 부자주방 편집 담당 직원에게 전달할 대본 기반 영상 흐름 설계자다.
 영상은 보지 못했다. 제공된 문장 ID와 원문만 사용하고 대본에 없는 발언을 만들지 않는다.
 단어 또는 문장 중간을 자르지 말고, 이동은 반드시 연속된 완결 문장 묶음으로 한다.
@@ -293,6 +331,55 @@ class PlainTranscriptEditService:
         return await self.analysis._structured(
             prompt=prompt, instructions=SYSTEM_INSTRUCTIONS,
             schema=RESULT_SCHEMA, schema_name="plain_transcript_edit_flow",
+            reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "high").strip() or "high",
+            allow_anthropic=False,
+        )
+
+    async def review(
+        self, *, request: dict[str, Any], sentences: list[dict[str, Any]],
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """설계가 끝난 뒤 사람처럼 한 번 더 읽어본다."""
+        by_id = {row["id"]: row for row in sentences}
+
+        def span_text(row: dict[str, Any], full: bool) -> dict[str, Any]:
+            start = str(row.get("sentence_start_id") or "")
+            end = str(row.get("sentence_end_id") or start)
+            try:
+                items = sentence_range(sentences, start, end)
+            except ValueError:
+                return {}
+            block = {
+                "순서": int(row.get("final_order") or 0),
+                "역할": row.get("purpose") or "",
+                "구간": f"{start}~{end}",
+                "줄수": len(items),
+            }
+            if full:
+                block["자막"] = [item["text"] for item in items]
+            else:
+                block["시작"] = items[0]["text"]
+                block["끝"] = items[-1]["text"]
+            return block
+
+        scenes = sorted(
+            (row for row in result.get("edit_table") or [] if row.get("action") != "삭제"),
+            key=lambda row: int(row.get("final_order") or 0))
+        # 도입부는 판단이 제일 중요하니 앞 세 장면은 자막을 통째로 보여 준다.
+        plan = [span_text(row, full=(index < 3)) for index, row in enumerate(scenes)]
+        prompt = json.dumps({
+            "영상_제목": request.get("title"),
+            "주제": request.get("topic"),
+            "설계한_사람의_의도": result.get("core_message"),
+            "설계된_순서": [block for block in plan if block],
+            "도입부로_쓸_수_있는_문장": [
+                {"id": row["id"], "text": row["text"]}
+                for row in sentences if can_open(row["text"])
+            ][:120],
+        }, ensure_ascii=False, default=str)
+        return await self.analysis._structured(
+            prompt=prompt, instructions=REVIEW_INSTRUCTIONS,
+            schema=REVIEW_SCHEMA, schema_name="plain_transcript_edit_review",
             reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "high").strip() or "high",
             allow_anthropic=False,
         )

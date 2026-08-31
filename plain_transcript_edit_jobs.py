@@ -510,14 +510,75 @@ class PlainTranscriptEditJobManager:
             checkpoint["analysis_result"] = result
             self._progress(job_id, "detail_table", 82, "문장 ID 기준 상세 편집표를 생성했습니다.", checkpoint=checkpoint)
         result = normalize_estimates(checkpoint["analysis_result"], sentences)
-        self._progress(job_id, "validation", 92, "문장 원문과 편집 지시를 코드로 검증합니다.", checkpoint=checkpoint)
-        validate_result(
-            result, sentences,
-            numeric_data_available=numeric_evidence_available(evidence),
-            channel_data_available=channel_evidence_available(evidence),
-            ctr_data_available=ctr_evidence_available(evidence),
-            retention_data_available=retention_evidence_available(evidence),
-        )
+        self._progress(job_id, "validation", 88, "문장 원문과 편집 지시를 코드로 검증합니다.", checkpoint=checkpoint)
+
+        def check(candidate: dict[str, Any]) -> None:
+            validate_result(
+                candidate, sentences,
+                numeric_data_available=numeric_evidence_available(evidence),
+                channel_data_available=channel_evidence_available(evidence),
+                ctr_data_available=ctr_evidence_available(evidence),
+                retention_data_available=retention_evidence_available(evidence),
+            )
+
+        check(result)
+
+        # 사람이 한 번 읽어보는 자리. 이대로 자르면 영상이 어떻게 보일지 보고,
+        # 어색하면 순서를 고쳐 온다. 고친 것이 검증을 통과할 때만 받아들인다.
+        if "review" not in checkpoint:
+            try:
+                review = await self._await_with_heartbeat(
+                    job_id,
+                    step="review", start_percent=90, end_percent=95,
+                    label="설계한 순서를 처음부터 다시 읽어보는 중입니다",
+                    awaitable=self.service_factory().review(
+                        request=request, sentences=sentences, result=result),
+                )
+            except Exception as exc:
+                logging.warning("plain transcript edit review skipped: %s", exc)
+                review = {"verdict": "skipped", "error": str(exc)[:200]}
+            checkpoint["review"] = review
+        review = checkpoint.get("review") or {}
+
+        revised = review.get("revised_order") or []
+        if str(review.get("verdict")) == "fix" and revised:
+            candidate = json.loads(json.dumps(result, ensure_ascii=False, default=str))
+            by_span = {}
+            for row in result.get("edit_table") or []:
+                by_span[(row.get("sentence_start_id"), row.get("sentence_end_id"))] = row
+            table = []
+            for row in sorted(revised, key=lambda item: int(item.get("final_order") or 0)):
+                key = (row.get("sentence_start_id"), row.get("sentence_end_id"))
+                base = dict(by_span.get(key) or {})
+                base.update({
+                    "final_order": int(row.get("final_order") or 0),
+                    "sentence_start_id": row.get("sentence_start_id"),
+                    "sentence_end_id": row.get("sentence_end_id"),
+                    "purpose": row.get("purpose") or base.get("purpose") or "",
+                })
+                base.setdefault("action", "이동")
+                base.setdefault("start_sentence", None)
+                base.setdefault("end_sentence", None)
+                base["start_sentence"] = None       # 원문 대조는 코드가 다시 채운다
+                base["end_sentence"] = None
+                table.append(base)
+            candidate["edit_table"] = table
+            try:
+                check(candidate)
+            except Exception as exc:
+                logging.warning("review revision rejected, keeping original: %s", exc)
+                result["_review"] = {"verdict": "fix_rejected", "reason": str(exc)[:200],
+                                     "problems": review.get("problems") or []}
+            else:
+                result = candidate
+                result["_review"] = {"verdict": "fixed",
+                                     "problems": review.get("problems") or [],
+                                     "opening_check": review.get("opening_check") or ""}
+        else:
+            result["_review"] = {"verdict": str(review.get("verdict") or "ok"),
+                                 "opening_check": review.get("opening_check") or "",
+                                 "flow_check": review.get("flow_check") or ""}
+        self._progress(job_id, "validation", 96, "검토를 마쳤습니다.", checkpoint=checkpoint)
         now = utc_now()
         project_metadata = {
             "schema_version": 1, "mode": PROJECT_MODE,

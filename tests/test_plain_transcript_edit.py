@@ -570,3 +570,131 @@ class OpeningHintTests(unittest.TestCase):
                 _os.environ.pop("OPENAI_REASONING_EFFORT", None)
             else:
                 _os.environ["OPENAI_REASONING_EFFORT"] = previous
+
+
+class AfterReviewTests(unittest.IsolatedAsyncioTestCase):
+    """설계가 끝난 뒤 사람이 한 번 읽어보는 것과 같은 검토 단계.
+
+    도입부가 말토막이거나 서론·본론·결론이 뒤엉킨 순서를 그대로 편집에 넘기면 안 된다.
+    다만 검토가 내놓은 수정안도 틀릴 수 있으므로, 검사에 걸리면 원래 순서를 지킨다.
+    """
+
+    REVIEW_SCRIPT = "\n".join([
+        "그리고 마지막으로 중앙 중앙은 중앙에는",
+        "좁은 주방일수록 설계가 먼저입니다",
+        "오늘은 양식집 주방을 보여드리겠습니다",
+        "먼저 조리 동선부터 보시죠",
+        "그래서 결론은 동선이 전부입니다",
+    ])
+
+    @staticmethod
+    def _plan(first_id):
+        return {
+            "edit_table": [
+                {"final_order": 1, "sentence_start_id": first_id, "sentence_end_id": first_id,
+                 "action": "유지", "purpose": "도입"},
+                {"final_order": 2, "sentence_start_id": "S003", "sentence_end_id": "S004",
+                 "action": "유지", "purpose": "본론"},
+                {"final_order": 3, "sentence_start_id": "S005", "sentence_end_id": "S005",
+                 "action": "유지", "purpose": "결론"},
+            ],
+            "deletions": [], "overall_flow": [], "condensations": [], "duplicates": [],
+            "core_message": "동선이 전부다",
+            "data_basis_note": "채널 데이터 표본이 부족하여 Business PT와 대본의 논리 구조를 중심으로 판단함",
+        }
+
+    async def _run(self, review_reply):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        path = Path(temp.name) / "jobs.db"
+
+        def connect():
+            connection = sqlite3.connect(path, timeout=5)
+            connection.row_factory = sqlite3.Row
+            return connection
+
+        plan = self._plan
+
+        class Fake:
+            async def analyze(self, **_kwargs):
+                return plan("S001")            # 접속사로 시작하는 나쁜 도입부
+
+            async def review(self, **_kwargs):
+                return review_reply
+
+        manager = PlainTranscriptEditJobManager(
+            store=PlainTranscriptEditJobStore(connect),
+            service_factory=Fake, evidence_collector=lambda _topic: {},
+        )
+        job = manager.enqueue_initial(
+            {"title": "양식집 주방", "topic": "주방 동선", "script": self.REVIEW_SCRIPT})
+        await manager.process_once()
+        row = manager.store.get(job["job_id"])
+        self.assertEqual(row["status"], "done")
+        current = ((row.get("result") or {}).get("project") or {}).get("current_result") or {}
+        return current
+
+    async def test_a_bad_opening_is_replaced_by_the_review(self):
+        current = await self._run({
+            "verdict": "fix", "opening_check": "접속사로 시작해 도입부가 될 수 없음",
+            "flow_check": "본론·결론은 자연스러움",
+            "problems": [{"where": "1번 장면", "problem": "말토막", "fix": "S002로 연다"}],
+            "revised_order": [
+                {"final_order": 1, "sentence_start_id": "S002", "sentence_end_id": "S002", "purpose": "도입"},
+                {"final_order": 2, "sentence_start_id": "S003", "sentence_end_id": "S004", "purpose": "본론"},
+                {"final_order": 3, "sentence_start_id": "S005", "sentence_end_id": "S005", "purpose": "결론"},
+            ],
+        })
+        self.assertEqual(current["_review"]["verdict"], "fixed")
+        self.assertEqual(current["edit_table"][0]["sentence_start_id"], "S002")
+
+    async def test_a_broken_revision_is_rejected_and_the_original_kept(self):
+        current = await self._run({
+            "verdict": "fix", "opening_check": "", "flow_check": "", "problems": [],
+            "revised_order": [
+                {"final_order": 1, "sentence_start_id": "S999", "sentence_end_id": "S999", "purpose": "엉터리"},
+            ],
+        })
+        self.assertEqual(current["_review"]["verdict"], "fix_rejected")
+        self.assertEqual(current["edit_table"][0]["sentence_start_id"], "S001")
+
+    async def test_an_ok_verdict_leaves_the_plan_alone(self):
+        current = await self._run({
+            "verdict": "ok", "opening_check": "도입부 문제 없음", "flow_check": "흐름 자연스러움",
+            "problems": [], "revised_order": [],
+        })
+        self.assertEqual(current["_review"]["verdict"], "ok")
+        self.assertEqual(
+            [row["sentence_start_id"] for row in current["edit_table"]], ["S001", "S003", "S005"])
+
+    async def test_a_failing_review_never_sinks_the_whole_guide(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        path = Path(temp.name) / "jobs.db"
+
+        def connect():
+            connection = sqlite3.connect(path, timeout=5)
+            connection.row_factory = sqlite3.Row
+            return connection
+
+        plan = self._plan
+
+        class Fake:
+            async def analyze(self, **_kwargs):
+                return plan("S001")
+
+            async def review(self, **_kwargs):
+                raise RuntimeError("검토 모델 호출 실패")
+
+        manager = PlainTranscriptEditJobManager(
+            store=PlainTranscriptEditJobStore(connect),
+            service_factory=Fake, evidence_collector=lambda _topic: {},
+        )
+        job = manager.enqueue_initial(
+            {"title": "양식집 주방", "topic": "주방 동선", "script": self.REVIEW_SCRIPT})
+        await manager.process_once()
+        row = manager.store.get(job["job_id"])
+        self.assertEqual(row["status"], "done")
+        current = ((row.get("result") or {}).get("project") or {}).get("current_result") or {}
+        self.assertEqual(current["_review"]["verdict"], "skipped")
+        self.assertEqual(current["edit_table"][0]["sentence_start_id"], "S001")

@@ -3241,10 +3241,11 @@ function renderTranscriptGuideProject(project, requestedVersion = null) {
   const warn = (result || {})._opening_warnings;
   const box = document.getElementById('tg-opening-warning');
   if (box) {
-    box.innerHTML = warn
+    const openingHtml = warn
       ? `<div class="progress-step error" style="align-items:flex-start"><span class="step-icon">⚠️</span><span>도입부로 쓰기 어려운 문장으로 시작합니다 — <b>"${escHtml(warn.text)}"</b><br>${escHtml((warn.problems||[]).join(' · '))}<br>수정 요청창에 "도입부를 다른 문장으로 시작해줘"라고 적으면 다시 잡아줍니다.</span></div>`
       : '';
-    box.classList.toggle('hidden', !warn);
+    box.innerHTML = openingHtml + renderTranscriptGuideReview((result || {})._review);
+    box.classList.toggle('hidden', !box.innerHTML);
   }
 
   const sentences = project.sentences || [];
@@ -3253,6 +3254,25 @@ function renderTranscriptGuideProject(project, requestedVersion = null) {
   document.getElementById('tg-evidence-list').innerHTML = `<h4>v${currentTranscriptGuideVersion} 사용 근거</h4>` + ((result.used_evidence || []).map(item => `<div class="edit-flow-list-item"><b>${escHtml(item.source || '')}</b> · 표본 ${Number(item.sample_size || 0)}<br>${escHtml(item.claim || '')}</div>`).join('') || '<div class="edit-flow-list-item">저장된 근거 없음</div>');
   document.getElementById('tg-version-history').innerHTML = '<h4>버전 기록</h4>' + versions.map(item => `<div class="edit-flow-list-item"><b>v${Number(item.version)}</b> · ${escHtml(String(item.created_at || '').slice(0, 19).replace('T', ' '))}<br>${escHtml(item.revision_summary || '')}${item.user_request ? `<br><small>수정 요청: ${escHtml(item.user_request)}</small>` : ''}</div>`).join('');
   document.getElementById('tg-chat-messages').innerHTML = (project.conversation || []).map(item => `<div class="chat-bubble ${item.role === 'user' ? 'user' : 'assistant'}"><div class="chat-bubble-inner"><small>v${Number(item.version || 1)}</small><br>${escHtml(item.content || '')}</div></div>`).join('') || '<div class="chat-bubble assistant"><div class="chat-bubble-inner">편집안을 확인했습니다. 수정 요청을 입력하면 기존 결과와 관련 문장만 사용해 새 버전을 만듭니다.</div></div>';
+}
+
+// 설계가 끝난 뒤 한 번 더 읽어본 결과. 어색한 순서를 그대로 넘기지 않기 위한 안전장치다.
+function renderTranscriptGuideReview(review) {
+  if (!review || !review.verdict) return '';
+  const problems = (review.problems || [])
+    .map(item => `${escHtml(item.where || '')} ${escHtml(item.problem || '')}`.trim())
+    .filter(Boolean);
+  const detail = problems.length ? `<br><small>${problems.join('<br>')}</small>` : '';
+  if (review.verdict === 'fixed') {
+    return `<div class="progress-step" style="align-items:flex-start"><span class="step-icon">✅</span><span>검토에서 어색한 부분을 찾아 <b>순서를 다시 잡았습니다.</b>${detail}</span></div>`;
+  }
+  if (review.verdict === 'fix_rejected') {
+    return `<div class="progress-step error" style="align-items:flex-start"><span class="step-icon">⚠️</span><span>검토가 문제를 지적했지만 고친 순서가 대본과 맞지 않아 <b>원래 순서를 그대로 두었습니다.</b> 아래 내용을 보고 수정 요청창에 직접 적어주세요.${detail}</span></div>`;
+  }
+  if (review.verdict === 'skipped') {
+    return `<div class="progress-step error" style="align-items:flex-start"><span class="step-icon">⚠️</span><span>마지막 검토를 끝내지 못했습니다. 순서가 어색하면 수정 요청을 한 번 넣어주세요.</span></div>`;
+  }
+  return `<div class="progress-step" style="align-items:flex-start"><span class="step-icon">✅</span><span>검토에서 도입부와 흐름을 다시 읽어봤고 고칠 곳이 없었습니다.</span></div>`;
 }
 
 function selectTranscriptGuideVersion(version) {

@@ -8,3 +8,5 @@ __pycache__/
 .venv/
 venv/
 storage/edit_projects/
+.env.*
+artifacts/
