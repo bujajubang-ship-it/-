@@ -364,9 +364,13 @@ def validate_result(
         row["candidates"] = [str(v) for v in row.get("candidates") or [] if str(v) in by_id]
     if deleted & condensed_keep:
         raise ValueError("완전 삭제와 축약 유지가 동시에 지정된 문장이 있습니다.")
+    # 같은 문장을 '살릴 것'과 '지울 것'에 동시에 넣는 일이 잦다(긴 대본일수록 심하다).
+    # 최종 배치가 편집자가 따라가는 표이므로 그쪽을 살리고, 삭제 목록에서 뺀다.
+    # 예전에는 여기서 통째로 거부해 몇 분짜리 분석을 두 번 버렸다.
     conflict = deleted & final_used
     if conflict:
-        raise ValueError(f"삭제와 최종 사용이 동시에 지정됨: {sorted(conflict)}")
+        result["_delete_conflicts"] = sorted(conflict)[:50]
+        deleted -= conflict
     # 자막 다듬기는 '화면 글자만' 손대는 것이다. 말에 없던 낱말이 자막으로 새로 생기면
     # 시청자에게는 하지 않은 말을 한 것이 되므로, 원문에서 멀어지면 통째로 막는다.
     polished_ids: set[str] = set()
@@ -504,11 +508,29 @@ def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
         except ValueError:
             return []
 
-    delete_rows = [row for row in (result.get("deletions") or []) if rows_of(row)]
-    delete_items: list[dict[str, Any]] = []
-    for row in delete_rows:
-        delete_items.extend(item for item in rows_of(row) if str(item.get("text") or "").strip())
-    deleted_orders = {int(item.get("order") or 0) for item in delete_items}
+    scenes_for_gap = sorted(result.get("edit_table") or [],
+                            key=lambda row: int(row.get("final_order") or 0))
+    kept_orders: set[int] = set()
+    for row in scenes_for_gap:
+        for item in rows_of(row):
+            kept_orders.add(int(item.get("order") or 0))
+
+    # 지울 것은 따로 받지 않고 **남길 것의 빈자리**로 정한다.
+    # 모델이 같은 문장을 살릴 것과 지울 것에 동시에 넣는 일이 잦은데,
+    # 이렇게 만들면 그런 모순이 생길 수 없다.
+    delete_runs: list[list[dict[str, Any]]] = []
+    run: list[dict[str, Any]] = []
+    for item in sentences:
+        order = int(item.get("order") or 0)
+        text = str(item.get("text") or "").strip()
+        if order in kept_orders or not text:
+            if run:
+                delete_runs.append(run); run = []
+            continue
+        run.append(item)
+    if run:
+        delete_runs.append(run)
+    delete_items = [item for group in delete_runs for item in group]
 
     def where_note(item: dict[str, Any]) -> str:
         """같은 자막이 여러 번 찍혔으면 몇 번째인지 밝힌다. 경계를 잘못 잡으면 엉뚱한 데가 잘린다."""
@@ -522,20 +544,16 @@ def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
             return ""
         return f" (똑같은 자막 {len(orders)}개 중 {nth}번째)"
 
-    # 삭제는 덩어리로 준다. 한 줄씩 다 적으면 수백 줄이 되어 에이전트가 감당하지 못한다.
     delete_lines: list[str] = []
-    for number, row in enumerate(delete_rows, 1):
-        items = [item for item in rows_of(row) if str(item.get("text") or "").strip()]
-        if not items:
-            continue
-        first, last = items[0], items[-1]
-        if len(items) == 1:
+    for number, group in enumerate(delete_runs, 1):
+        first, last = group[0], group[-1]
+        if len(group) == 1:
             delete_lines.append(
                 f'{number}. "{str(first.get("text")).strip()}"{where_note(first)}  — 1줄')
         else:
             delete_lines.append(
                 f'{number}. "{str(first.get("text")).strip()}"{where_note(first)}\n'
-                f'   부터 "{str(last.get("text")).strip()}"{where_note(last)} 까지  — {len(items)}줄')
+                f'   부터 "{str(last.get("text")).strip()}"{where_note(last)} 까지  — {len(group)}줄')
 
     scenes = sorted(result.get("edit_table") or [],
                     key=lambda row: int(row.get("final_order") or 0))

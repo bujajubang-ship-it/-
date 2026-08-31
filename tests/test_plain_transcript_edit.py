@@ -441,3 +441,41 @@ class ReferenceListsDoNotSinkTheAnalysisTests(unittest.TestCase):
         result["edit_table"][0]["sentence_start_id"] = "S999"
         with self.assertRaises(ValueError):
             validate_result(result, self._sentences(), numeric_data_available=False)
+
+
+class ContradictoryEditPlanTests(unittest.TestCase):
+    """긴 대본일수록 모델이 같은 문장을 살릴 것·지울 것에 동시에 넣는다."""
+
+    def _plan(self):
+        script = "\n".join("문장 %d 입니다." % i for i in range(1, 13))
+        sentences = split_sentences(script)
+        result = {
+            "edit_table": [
+                {"final_order": 1, "sentence_start_id": "S001", "sentence_end_id": "S004", "action": "유지"},
+                {"final_order": 2, "sentence_start_id": "S009", "sentence_end_id": "S010", "action": "유지"},
+            ],
+            # S003·S004 가 위 최종 배치와 겹친다
+            "deletions": [{"sentence_start_id": "S003", "sentence_end_id": "S008"}],
+            "overall_flow": [], "condensations": [], "duplicates": [],
+            "data_basis_note": "채널 데이터 표본이 부족하여 Business PT와 대본의 논리 구조를 중심으로 판단함",
+        }
+        return sentences, result
+
+    def test_an_overlap_is_resolved_instead_of_failing_the_run(self):
+        sentences, result = self._plan()
+        validate_result(result, sentences,
+                        numeric_data_available=False, channel_data_available=False)
+        self.assertEqual(result.get("_delete_conflicts"), ["S003", "S004"])
+
+    def test_the_prompt_never_asks_to_delete_a_line_it_also_keeps(self):
+        """지울 구간은 남길 것의 빈자리로 정한다 — 그래서 모순이 생길 수 없다."""
+        sentences, result = self._plan()
+        validate_result(result, sentences,
+                        numeric_data_available=False, channel_data_available=False)
+        prompt = render_vrew_prompt({"sentences": sentences}, {"version": 1, "result": result})
+        delete_part = prompt.split("[1단계]")[1].split("[2단계]")[0]
+        for kept in ("문장 1 입니다.", "문장 3 입니다.", "문장 4 입니다.",
+                     "문장 9 입니다.", "문장 10 입니다."):
+            self.assertNotIn(kept, delete_part, kept)
+        for dropped in ("문장 5 입니다.", "문장 8 입니다.", "문장 12 입니다."):
+            self.assertIn(dropped, delete_part, dropped)
