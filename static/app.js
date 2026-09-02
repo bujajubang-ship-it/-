@@ -5502,7 +5502,7 @@ function renderGroupControls() {
   if (plGroupBy) {
     const field = plGroupField();
     const stageOrder = PIPELINE_STAGES.map(s => s.key);
-    let vals = [...new Set(editVideosList().map(v => v[field] || '미지정'))];
+    let vals = [...new Set(boardVideosList().map(v => v[field] || '미지정'))];
     if (plGroupBy === 'stage') vals.sort((a, b) => stageOrder.indexOf(a) - stageOrder.indexOf(b));
     const chips = vals.map(val => {
       const stage = plGroupBy === 'stage' ? PIPELINE_STAGES.find(s => s.key === val) : null;
@@ -5518,6 +5518,7 @@ function renderGroupControls() {
   }
 
   const hasControl = plGroupBy || plFilterVal;
+  const doneCount = doneVideosList().length;
   el.innerHTML = `
     <div class="pl-ctrl-row">
       <span class="pl-ctrl-label">묶기</span>
@@ -5525,6 +5526,7 @@ function renderGroupControls() {
       <div class="pl-ctrl-sep"></div>
       <button class="pl-fold-btn" onclick="collapseAll()" title="전체 접기">▶ 모두 접기</button>
       <button class="pl-fold-btn" onclick="expandAll()" title="전체 펼치기">▼ 모두 펼치기</button>
+      ${doneCount ? `<button class="pl-fold-btn" onclick="togglePlDone()" style="${plShowDone ? 'background:#06b6d4;color:#fff;border-color:#06b6d4' : ''}" title="업로드까지 끝난 영상은 달력에 그대로 남아 있습니다">${plShowDone ? '🎬 올린 영상 숨기기' : `🎬 올린 영상 ${doneCount}개 보기`}</button>` : ''}
       ${hasControl ? `<button class="pl-ctrl-reset" onclick="resetPlControls()">× 초기화</button>` : ''}
     </div>
     ${filterRow}
@@ -5546,9 +5548,12 @@ function renderPipelineSummary() {
 
 function renderKanban() {
   const el = document.getElementById('pl-kanban');
-  const baseVideos = editVideosList();
+  const baseVideos = boardVideosList();
   if (!baseVideos.length) {
-    el.innerHTML = '<div class="pl-empty">아직 편집 단계 영상이 없습니다.<br>우상단 <strong>+ 편집 영상 추가</strong>를 눌러 시작하세요.</div>';
+    const done = doneVideosList().length;
+    el.innerHTML = done && !plShowDone
+      ? `<div class="pl-empty">진행 중인 영상이 없습니다. 올린 영상 ${done}개는 달력에 남아 있습니다.<br><button onclick="togglePlDone()" style="margin-top:8px;padding:6px 14px;background:#06b6d4;color:#fff;border:none;border-radius:6px;cursor:pointer">🎬 올린 영상 ${done}개 보기</button></div>`
+      : '<div class="pl-empty">아직 편집 단계 영상이 없습니다.<br>우상단 <strong>+ 편집 영상 추가</strong>를 눌러 시작하세요.</div>';
     return;
   }
 
@@ -5749,11 +5754,25 @@ async function moveStage(id, dir) {
 
 async function setStage(id, idx) {
   if (idx < 0 || idx >= PIPELINE_STAGES.length) return;
+  const key = PIPELINE_STAGES[idx].key;
   await fetch(`/api/pipeline/${id}`, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ stage: PIPELINE_STAGES[idx].key })
+    body: JSON.stringify({ stage: key })
   });
-  loadPipeline();
+  // 목록에서 사라지는 이유를 모르면 지워진 줄 안다.
+  const vanishes = isDoneStage(key) && !plShowDone && !isDoneStage((plVideos.find(x => x.id === id) || {}).stage);
+  await loadPipeline();
+  if (vanishes) toastPipeline('올린 영상 목록으로 옮겼습니다. 달력에는 그대로 있습니다.');
+}
+
+function toastPipeline(text) {
+  const el = document.getElementById('pl-kanban');
+  if (!el) return;
+  const box = document.createElement('div');
+  box.textContent = text;
+  box.style.cssText = 'margin:0 0 10px;padding:9px 12px;border-radius:8px;background:#ecfeff;color:#0e7490;font-size:13px;font-weight:600';
+  el.prepend(box);
+  setTimeout(() => box.remove(), 4000);
 }
 
 async function deleteVideo(id) {
@@ -6457,6 +6476,28 @@ const PLAN_STAGE_KEYS = PLAN_STEPS.map(s => s.key);
 function isPlanStage(stage) { return PLAN_STAGE_KEYS.includes(stage); }
 function planVideosList() { return plVideos.filter(v => isPlanStage(v.stage)); }
 function editVideosList() { return plVideos.filter(v => !isPlanStage(v.stage)); }
+
+// 올라간 영상은 더 볼 일이 없는데 목록에 계속 쌓여서 지금 할 일이 안 보인다.
+// 보드에서만 감추고, 달력에는 그대로 남긴다(달력은 plVideos를 직접 쓴다).
+const PIPELINE_DONE_STAGES = ['uploaded', 'sns'];
+function isDoneStage(stage) { return PIPELINE_DONE_STAGES.includes(stage); }
+function doneVideosList() { return editVideosList().filter(v => isDoneStage(v.stage)); }
+
+let plShowDone = JSON.parse(localStorage.getItem('pl_show_done') || 'false');
+
+function boardVideosList() {
+  const rows = editVideosList();
+  return plShowDone ? rows : rows.filter(v => !isDoneStage(v.stage));
+}
+
+function togglePlDone() {
+  plShowDone = !plShowDone;
+  localStorage.setItem('pl_show_done', JSON.stringify(plShowDone));
+  // 감춰진 항목만 걸러 놓은 필터가 남아 있으면 빈 화면이 된다.
+  if (!plShowDone && isDoneStage(plFilterVal)) plFilterVal = null;
+  renderGroupControls();
+  renderKanban();
+}
 
 // 가이드(ⓘ) 펼침 상태 — 기본은 접힘, 열면 보이게
 let planGuideOpen = new Set();
