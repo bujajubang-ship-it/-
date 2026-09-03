@@ -59,6 +59,11 @@ def valid_result(summary="최초 구성"):
         "deletions": [
             {"sentence_start_id": "S006", "sentence_end_id": "S006", "start_sentence": "설치 전에는 잔반을 제거해야 합니다.", "end_sentence": "설치 전에는 잔반을 제거해야 합니다.", "reason": "동일 설명 반복"},
         ],
+        "sound_effects": [
+            {"sentence_id": "S007", "effect_name": "집중용 띵 2", "reason": "실사용 후기로 시선을 모은다"},
+            {"sentence_id": "S006", "effect_name": "뽀로롱", "reason": "삭제할 문장이라 빠져야 한다"},
+            {"sentence_id": "S008", "effect_name": "없는 효과음", "reason": "Vrew에 없는 이름이라 빠져야 한다"},
+        ],
         "duplicates": [{"topic": "잔반 제거", "candidates": ["S005", "S006"], "selected": "S005", "reason": "동일 원문", "remaining_action": "S006 삭제"}],
         "condensations": [{"delete_sentence_ids": ["S006"], "keep_sentence_ids": ["S005"], "purpose_after_condensing": "사용 전 주의"}],
         "final_instructions": {
@@ -81,6 +86,28 @@ class FakeService:
 
     async def revise(self, **_kwargs):
         return valid_result("실사용 후기를 더 앞에 유지")
+
+
+class SoundEffectTests(unittest.TestCase):
+    """Vrew 에이전트는 라이브러리에 적힌 이름 그대로여야 효과음을 찾는다."""
+
+    def test_only_real_effects_on_kept_sentences_survive(self):
+        sentences = split_sentences(SCRIPT)
+        result = valid_result()
+        validate_result(result, sentences, numeric_data_available=False)
+        names = [row["effect_name"] for row in result["sound_effects"]]
+        self.assertEqual(names, ["집중용 띵 2"])
+
+    def test_the_vrew_prompt_keeps_the_cut_version_and_adds_a_sound_version(self):
+        sentences = split_sentences(SCRIPT)
+        result = valid_result()
+        validate_result(result, sentences, numeric_data_available=False)
+        text = render_vrew_prompt({"sentences": sentences}, {"version": 1, "result": result})
+        self.assertIn("[1단계]", text)
+        self.assertIn("[효과음 버전]", text)
+        self.assertIn("「집중용 띵 2」", text)
+        self.assertLess(text.index("[1단계]"), text.index("[효과음 버전]"))
+        self.assertIn("실사용자: 1년 동안 사용해보니 설거지 시간이 실제로 줄었습니다.", text)
 
 
 class ShortformTests(unittest.TestCase):

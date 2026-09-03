@@ -21,6 +21,36 @@ from edit_analysis_service import EditAnalysisService
 
 ACTIONS = frozenset({"유지", "이동", "축약", "삭제", "다른 구간과 결합"})
 LOW_DATA_NOTE = "채널 데이터 표본이 부족하여 Business PT와 대본의 논리 구조를 중심으로 판단함"
+
+# Vrew 효과음 라이브러리에 실제로 적혀 있는 이름 그대로다.
+# 에이전트는 이 이름으로 검색해서 넣기 때문에 한 글자라도 바꾸면 못 찾는다.
+# 새 효과음을 쓰려면 Vrew 화면에 보이는 이름·길이를 그대로 여기에 추가하면 된다.
+VREW_SOUND_EFFECTS: list[dict[str, Any]] = [
+    {"name": "또잉! 등장음", "seconds": 0.21, "tags": ["시선집중", "카툰", "게임"]},
+    {"name": "빵하고클릭하는소리", "seconds": 0.18, "tags": ["소리효과", "카툰", "알림"]},
+    {"name": "띠용 놀라는 소리", "seconds": 0.31, "tags": ["소리효과", "시선집중", "카툰"]},
+    {"name": "가볍게 휘두르는 소리", "seconds": 0.63, "tags": ["소리효과", "장면전환", "트랜지션"]},
+    {"name": "마우스 클릭음", "seconds": 0.91, "tags": ["사물소리", "동작"]},
+    {"name": "놀람 반전", "seconds": 1.67, "tags": ["소리효과", "장면전환", "트랜지션"]},
+    {"name": "사르르 팝업", "seconds": 1.70, "tags": ["시선집중", "카툰", "게임"]},
+    {"name": "뽀로롱", "seconds": 1.80, "tags": ["소리효과", "시선집중", "장면전환"]},
+    {"name": "깨달음을 얻었을 때(뽀봉)", "seconds": 1.80, "tags": ["소리효과", "카툰", "게임"]},
+    {"name": "메신저 퀵 팝업 알림 (boing)", "seconds": 2.06, "tags": ["소리효과", "알림", "팝업"]},
+    {"name": "집중용 띵 3", "seconds": 2.25, "tags": ["소리효과", "알림", "팝업"]},
+    {"name": "동전 또롱(La 톤)", "seconds": 2.62, "tags": ["소리효과", "시선집중", "게임"]},
+    {"name": "집중용 띵 2", "seconds": 3.63, "tags": ["소리효과", "장면전환", "트랜지션"]},
+    {"name": "맑은 터치음 (뽁)", "seconds": 7.22, "tags": ["시선집중", "카툰", "장면전환"]},
+    {"name": "불길한 뱃고동 배경음2 (대)", "seconds": 7.29, "tags": ["배경음", "공포", "긴장감"]},
+    {"name": "머리 한 대 맞은 듯한 느낌 (띠용)", "seconds": 9.56, "tags": ["카툰", "코믹", "부딪침"]},
+    {"name": "네 말이 정답이야(또로롱~)", "seconds": 9.56, "tags": ["시선집중", "카툰", "알림"]},
+    {"name": "맑고 경쾌한 뽀로롱 알림음", "seconds": 9.56, "tags": ["시선집중", "카툰", "장면전환"]},
+]
+SOUND_EFFECT_NAMES = [row["name"] for row in VREW_SOUND_EFFECTS]
+SOUND_EFFECT_SECONDS = {row["name"]: row["seconds"] for row in VREW_SOUND_EFFECTS}
+SOUND_EFFECT_MENU = "\n".join(
+    f"- {row['name']} ({row['seconds']}초) {' '.join('#' + tag for tag in row['tags'])}"
+    for row in VREW_SOUND_EFFECTS
+)
 _SENTENCE_ID = re.compile(r"^S(\d{3,})$")
 _SENTENCE_REF = re.compile(r"S\d{3,}")
 _SENTENCE_PART = re.compile(r"[^.!?。！？\n]+(?:[.!?。！？]+|$)")
@@ -169,6 +199,11 @@ RESULT_SCHEMA: dict[str, Any] = _object({
     "edit_table": {"type": "array", "items": EDIT_ROW_SCHEMA},
     "deletions": {"type": "array", "items": DELETE_SCHEMA},
     "caption_polish": {"type": "array", "items": CAPTION_POLISH_SCHEMA},
+    "sound_effects": {"type": "array", "items": _object({
+        "sentence_id": {"type": "string"},
+        "effect_name": {"type": "string", "enum": SOUND_EFFECT_NAMES},
+        "reason": {"type": "string"},
+    })},
     "duplicates": {"type": "array", "items": _object({
         "topic": {"type": "string"},
         "candidates": {"type": "array", "items": {"type": "string"}},
@@ -293,6 +328,19 @@ evidence에 실제 CTR/Retention 수치가 없으면 숫자를 만들지 않는�
 첫 30초에 시청자가 '내 문제구나' 또는 '결과가 저거구나'를 알아야 이탈률 목표를 지킨다.
 
 {CONTENT_CREATION_RULES}
+
+【효과음(sound_effects) 고르기】
+Vrew 효과음 라이브러리에 있는 아래 목록에서만 고른다. 이름을 한 글자도 바꾸지 않는다.
+목록에 없는 효과음은 만들지 않는다. 넣을 자리가 없으면 빈 배열로 둔다.
+{SOUND_EFFECT_MENU}
+- sentence_id 는 최종 배치에 남는 문장이어야 한다. 삭제하는 문장에는 넣지 않는다.
+- 자막 내용과 맞아야 한다. 놀람·반전에는 놀라는 소리, 장면이 바뀌는 자리에는 장면전환 계열,
+  숫자·핵심 정보를 짚는 자리에는 시선집중 계열을 쓴다.
+- 남발하지 않는다. 소리가 계속 나면 시청자가 피곤해서 나간다.
+  롱폼은 3~10개, 숏폼은 장면마다 하나까지 쓸 수 있다.
+- 한 문장에 효과음은 하나만 넣는다.
+- #배경음 은 길게 깔리는 소리다. 꼭 필요하면 영상 전체에서 한 번만 쓴다.
+- reason 에는 '왜 이 자리에 이 소리인지'를 한 줄로 쓴다.
 
 caption_polish 는 화면에 뜨는 자막에서 군더더기를 '빼기만' 하는 목록이다.
 이 자막은 이미 찍은 영상을 받아 적은 것이다. 원문에 없는 글자가 자막에 들어가면
@@ -606,6 +654,23 @@ def validate_result(
             )
     if polished_ids & deleted:
         raise ValueError(f"삭제할 문장을 다듬도록 지정했습니다: {sorted(polished_ids & deleted)}")
+    # 효과음은 Vrew 라이브러리에 실제로 있는 이름이어야 에이전트가 찾는다.
+    # 이름이 틀렸거나 지울 문장에 붙은 것은 조용히 빼고, 분석은 그대로 살린다.
+    effects: list[dict[str, Any]] = []
+    used_for: set[str] = set()
+    for row in result.get("sound_effects") or []:
+        sentence_id = str(row.get("sentence_id") or "")
+        name = str(row.get("effect_name") or "")
+        if sentence_id not in final_used or sentence_id in used_for:
+            continue
+        if name not in SOUND_EFFECT_SECONDS:
+            continue
+        used_for.add(sentence_id)
+        effects.append({"sentence_id": sentence_id, "effect_name": name,
+                        "reason": str(row.get("reason") or "")})
+    if "sound_effects" in result:
+        result["sound_effects"] = effects
+
     # 설명 문장 안에 엉뚱한 번호를 한 번 쓴 것만으로 분석을 버리지 않는다.
     # 편집을 움직이는 구간은 위에서 이미 문장 단위로 확인했다.
     unknown = {ref for ref in _SENTENCE_REF.findall(_all_text(result)) if ref not in by_id}
@@ -835,6 +900,42 @@ def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
         "",
         "다 끝나면 자막이 몇 줄 남았는지 알려줘.",
     ])
+
+    # 효과음은 컷편집이 끝난 다음 얹는 것이라 아래에 따로 붙인다.
+    # 위까지만 복사해 쓰면 예전과 똑같은 컷편집 지시문이 된다.
+    by_id = {str(row.get("id")): row for row in sentences}
+    effect_lines: list[str] = []
+    for number, row in enumerate(result.get("sound_effects") or [], 1):
+        item = by_id.get(str(row.get("sentence_id") or ""))
+        name = str(row.get("effect_name") or "")
+        if not item or name not in SOUND_EFFECT_SECONDS:
+            continue
+        text = str(item.get("text") or "").strip()
+        reason = str(row.get("reason") or "").strip()
+        effect_lines.append(
+            f'{number}. "{text}"{where_note(item)}\n'
+            f'   → 효과음: 「{name}」 ({SOUND_EFFECT_SECONDS[name]}초)'
+            + (f"  — {reason}" if reason else "")
+        )
+
+    lines.extend([
+        "",
+        "=" * 46,
+        "[효과음 버전] 위 편집이 다 끝난 뒤에 이어서 해줘. 컷편집만 필요하면 여기부터는 안 해도 돼.",
+        "",
+    ])
+    if effect_lines:
+        lines.extend([
+            f"아래 {len(effect_lines)}개 자막이 시작하는 지점에 효과음을 하나씩 깔아줘.",
+            "- 「」 안의 이름은 Vrew 효과음 검색창에 그대로 넣으면 나오는 이름이야. 이름을 바꾸지 마.",
+            "- 목록에 없는 자막에는 효과음을 넣지 마. 알아서 더 넣지 마.",
+            "- 효과음 소리가 말소리를 덮지 않게 볼륨은 낮게 깔아줘.",
+            "",
+        ])
+        lines.extend(effect_lines)
+        lines.extend(["", "다 넣었으면 효과음이 몇 개 들어갔는지 알려줘."])
+    else:
+        lines.append("(이 영상에는 추천할 효과음이 없어. 효과음 없이 그대로 두면 돼.)")
     return "\n".join(lines).strip() + "\n"
 
 
