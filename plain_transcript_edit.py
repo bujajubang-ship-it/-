@@ -911,12 +911,8 @@ def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
         if not item or name not in SOUND_EFFECT_SECONDS:
             continue
         text = str(item.get("text") or "").strip()
-        reason = str(row.get("reason") or "").strip()
-        effect_lines.append(
-            f'{number}. "{text}"{where_note(item)}\n'
-            f'   → 효과음: 「{name}」 ({SOUND_EFFECT_SECONDS[name]}초)'
-            + (f"  — {reason}" if reason else "")
-        )
+        # 이유·초는 적지 않는다. 에이전트가 찾아야 하는 건 효과음 이름 하나뿐이다.
+        effect_lines.append(f'{number}. "{text}"{where_note(item)} ({name})')
 
     lines.extend([
         "",
@@ -927,7 +923,7 @@ def render_vrew_prompt(project: dict[str, Any], version: dict[str, Any]) -> str:
     if effect_lines:
         lines.extend([
             f"아래 {len(effect_lines)}개 자막이 시작하는 지점에 효과음을 하나씩 깔아줘.",
-            "- 「」 안의 이름은 Vrew 효과음 검색창에 그대로 넣으면 나오는 이름이야. 이름을 바꾸지 마.",
+            "- 자막 뒤 괄호 안이 효과음 이름이야. Vrew 효과음 검색창에 그대로 넣으면 나와. 이름을 바꾸지 마.",
             "- 목록에 없는 자막에는 효과음을 넣지 마. 알아서 더 넣지 마.",
             "- 효과음 소리가 말소리를 덮지 않게 볼륨은 낮게 깔아줘.",
             "",

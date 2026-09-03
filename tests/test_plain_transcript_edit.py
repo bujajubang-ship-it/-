@@ -105,7 +105,8 @@ class SoundEffectTests(unittest.TestCase):
         text = render_vrew_prompt({"sentences": sentences}, {"version": 1, "result": result})
         self.assertIn("[1단계]", text)
         self.assertIn("[효과음 버전]", text)
-        self.assertIn("「집중용 띵 2」", text)
+        self.assertIn("(집중용 띵 2)", text)
+        self.assertNotIn("실사용 후기로 시선을 모은다", text)  # 이유는 안 적는다
         self.assertLess(text.index("[1단계]"), text.index("[효과음 버전]"))
         self.assertIn("실사용자: 1년 동안 사용해보니 설거지 시간이 실제로 줄었습니다.", text)
 
