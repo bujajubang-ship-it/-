@@ -3244,7 +3244,21 @@ function renderTranscriptGuideProject(project, requestedVersion = null) {
     const openingHtml = warn
       ? `<div class="progress-step error" style="align-items:flex-start"><span class="step-icon">⚠️</span><span>도입부로 쓰기 어려운 문장으로 시작합니다 — <b>"${escHtml(warn.text)}"</b><br>${escHtml((warn.problems||[]).join(' · '))}<br>수정 요청창에 "도입부를 다른 문장으로 시작해줘"라고 적으면 다시 잡아줍니다.</span></div>`
       : '';
-    box.innerHTML = openingHtml + renderTranscriptGuideReview((result || {})._review);
+    // 근거에 없는 CTR·유지율 숫자를 적은 자리. 분석은 살리고 눈으로 확인만 하게 한다.
+    const metrics = (result || {})._metric_warnings || [];
+    const metricHtml = metrics.length
+      ? `<div class="progress-step error" style="align-items:flex-start"><span class="step-icon">⚠️</span><span>실제 데이터에 없는 수치가 적혀 있습니다 — <b>${metrics.map(escHtml).join(' · ')}</b><br>근거로 믿지 말고 그 문장은 무시하세요.</span></div>`
+      : '';
+    // 근거를 못 찾았거나 길이 계산이 어긋난 자리. 분석은 그대로 쓰고 사실만 알린다.
+    const dur = (result || {})._duration_warning;
+    const noteHtml = [
+      (result || {})._low_data_notice_added ? '채널 데이터를 찾지 못해 대본 논리만으로 판단했습니다.' : '',
+      dur ? `추천 길이가 문장량 합계와 달라 ${formatEditFlowDuration(dur.sentence_seconds)}로 맞췄습니다.` : '',
+    ].filter(Boolean);
+    const noteBox = noteHtml.length
+      ? `<div class="progress-step" style="align-items:flex-start"><span class="step-icon">ℹ️</span><span>${noteHtml.map(escHtml).join('<br>')}</span></div>`
+      : '';
+    box.innerHTML = openingHtml + metricHtml + noteBox + renderTranscriptGuideReview((result || {})._review);
     box.classList.toggle('hidden', !box.innerHTML);
   }
 

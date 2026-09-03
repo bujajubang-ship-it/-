@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import main
 from plain_transcript_edit import (
+    LOW_DATA_NOTE,
     analyze_duplicates,
     render_csv,
     render_markdown,
@@ -96,14 +97,37 @@ class SentenceAndExportTests(unittest.TestCase):
         broken["edit_table"][0]["sentence_start_id"] = "S007 일부"
         with self.assertRaises(ValueError):
             validate_result(broken, sentences, numeric_data_available=False)
+        # 근거 없는 수치는 분석을 버리지 않고 경고로 남긴다.
         unsupported_retention = valid_result()
         unsupported_retention["data_basis_note"] += " Retention 30초 유지율은 48%입니다."
-        with self.assertRaisesRegex(ValueError, "Retention"):
-            validate_result(
-                unsupported_retention, sentences,
-                numeric_data_available=True, ctr_data_available=True,
-                retention_data_available=False,
-            )
+        validate_result(
+            unsupported_retention, sentences,
+            numeric_data_available=True, ctr_data_available=True,
+            retention_data_available=False,
+        )
+        self.assertTrue(unsupported_retention.get("_metric_warnings"))
+        # 프롬프트가 알려준 채널 목표를 그대로 옮겨 적은 것은 지어낸 수치가 아니다.
+        goal_quote = valid_result()
+        goal_quote["data_basis_note"] += " 썸네일 CTR 10% 이상 목표에 맞춰 도입부를 앞세웠습니다."
+        validate_result(goal_quote, sentences, numeric_data_available=False)
+        self.assertIsNone(goal_quote.get("_metric_warnings"))
+
+    def test_missing_channel_data_never_throws_the_analysis_away(self):
+        """근거 검색이 빈손이어도 편집안은 나와야 한다 — 예전엔 여기서 통째로 실패했다."""
+        sentences = split_sentences(SCRIPT)
+        no_data = valid_result()
+        no_data["data_basis_note"] = "대본 논리만 보고 판단"
+        validate_result(no_data, sentences, numeric_data_available=False, channel_data_available=False)
+        self.assertIn(LOW_DATA_NOTE, no_data["data_basis_note"])
+        self.assertTrue(no_data.get("_low_data_notice_added"))
+
+    def test_a_wrong_recommended_length_is_corrected_not_fatal(self):
+        sentences = split_sentences(SCRIPT)
+        result = valid_result()
+        result["recommended_duration_seconds"] = 9999
+        validate_result(result, sentences, numeric_data_available=False)
+        self.assertTrue(result.get("_duration_warning"))
+        self.assertLess(result["recommended_duration_seconds"], 9999)
 
     def test_markdown_and_csv_exports(self):
         result = valid_result()

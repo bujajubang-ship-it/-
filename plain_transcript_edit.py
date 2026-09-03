@@ -20,6 +20,7 @@ from edit_analysis_service import EditAnalysisService
 
 
 ACTIONS = frozenset({"유지", "이동", "축약", "삭제", "다른 구간과 결합"})
+LOW_DATA_NOTE = "채널 데이터 표본이 부족하여 Business PT와 대본의 논리 구조를 중심으로 판단함"
 _SENTENCE_ID = re.compile(r"^S(\d{3,})$")
 _SENTENCE_REF = re.compile(r"S\d{3,}")
 _SENTENCE_PART = re.compile(r"[^.!?。！？\n]+(?:[.!?。！？]+|$)")
@@ -271,7 +272,9 @@ SYSTEM_INSTRUCTIONS = f"""당신은 부자주방 편집 담당 직원에게 전�
 실사용 후기·현장 증거·문제·결과를 제품 일반 설명보다 앞세울 수 있다.
 중복 설명은 가장 짧고 명확한 연속 묶음 하나만 선택한다.
 evidence에 실제 CTR/Retention 수치가 없으면 숫자를 만들지 않는다.
-데이터 표본이 부족하면 정확히 '채널 데이터 표본이 부족하여 Business PT와 대본의 논리 구조를 중심으로 판단함'이라고 쓴다.
+아래 【채널 목표】의 숫자는 인용해도 되지만 반드시 '목표'라고 밝혀 쓴다.
+측정된 실적인 것처럼 'CTR 12%가 나왔다' 식으로 쓰지 않는다.
+데이터 표본이 부족하면 data_basis_note에 정확히 '{LOW_DATA_NOTE}'이라고 쓴다.
 모든 start_sentence/end_sentence는 제공된 원문과 글자까지 정확히 같아야 한다.
 결과는 편집자가 그대로 실행할 수 있게 구체적으로 작성한다.
 
@@ -437,6 +440,25 @@ def _all_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+# 프롬프트가 채널 목표로 'CTR 10% 이상, 초반 30초 이탈률 40% 미만'을 직접 알려준다.
+# 모델은 그 목표를 근거 문장에 그대로 옮겨 적는데, 예전에는 이것까지 '지어낸 수치'로 보고
+# 몇 분 걸린 분석을 통째로 버렸다(재시도해도 프롬프트가 같아 두 번 다 실패했다).
+# 목표로 적은 것은 통과시키고, 측정값처럼 쓴 숫자만 경고로 남긴다.
+_CTR_NUMBER = r"CTR[^\n]{0,30}?\d+(?:\.\d+)?%"
+_RETENTION_NUMBER = r"(?:Retention|리텐션|유지율|이탈률)[^\n]{0,30}?\d+(?:\.\d+)?%"
+_GOAL_WORDS = ("목표", "기준", "이상", "미만", "이하", "달성", "지키")
+
+
+def _invented_metrics(text: str, pattern: str) -> list[str]:
+    found: list[str] = []
+    for match in re.finditer(pattern, text, re.I):
+        context = text[max(0, match.start() - 30):match.end() + 30]
+        if any(word in context for word in _GOAL_WORDS):
+            continue
+        found.append(match.group(0))
+    return found
+
+
 def validate_result(
     result: dict[str, Any], sentences: list[dict[str, Any]], *,
     numeric_data_available: bool, channel_data_available: bool = True,
@@ -558,18 +580,26 @@ def validate_result(
     ctr_available = numeric_data_available if ctr_data_available is None else ctr_data_available
     retention_available = numeric_data_available if retention_data_available is None else retention_data_available
     result_text = _all_text(result)
-    if not ctr_available and re.search(r"CTR[^\n]{0,30}?\d+(?:\.\d+)?%", result_text, re.I):
-        raise ValueError("실제 데이터 없이 CTR 수치를 사용했습니다.")
-    if not retention_available and re.search(
-        r"(?:Retention|리텐션|유지율)[^\n]{0,30}?\d+(?:\.\d+)?%", result_text, re.I,
-    ):
-        raise ValueError("실제 데이터 없이 Retention 수치를 사용했습니다.")
-    if not channel_data_available and "채널 데이터 표본이 부족하여 Business PT와 대본의 논리 구조를 중심으로 판단함" not in str(result.get("data_basis_note") or ""):
-        raise ValueError("채널 데이터가 없을 때 필요한 표본 부족 고지가 없습니다.")
+    metric_warnings: list[str] = []
+    if not ctr_available:
+        metric_warnings += [f"CTR: {text}" for text in _invented_metrics(result_text, _CTR_NUMBER)]
+    if not retention_available:
+        metric_warnings += [f"Retention: {text}" for text in _invented_metrics(result_text, _RETENTION_NUMBER)]
+    if metric_warnings:
+        result["_metric_warnings"] = metric_warnings[:20]
+    # 근거를 못 찾는 건 흔한 일이고, 그때도 편집안은 나와야 한다.
+    # 고지 문구가 빠졌다고 분석을 버리지 말고 코드가 직접 붙인다.
+    if not channel_data_available and LOW_DATA_NOTE not in str(result.get("data_basis_note") or ""):
+        note = str(result.get("data_basis_note") or "").strip()
+        result["data_basis_note"] = f"{note} {LOW_DATA_NOTE}".strip() if note else LOW_DATA_NOTE
+        result["_low_data_notice_added"] = True
+    # 추천 길이는 참고 숫자일 뿐이다. 문장량 합계와 크게 어긋나면
+    # 예전에는 분석을 통째로 버렸는데, 이제는 합계로 바로잡고 알려만 준다.
     estimated = sum(float(row.get("estimated_seconds") or 0) for row in result.get("edit_table") or [] if row.get("action") != "삭제")
     recommended = float(result.get("recommended_duration_seconds") or 0)
     if estimated > 0 and recommended > 0 and not 0.5 <= recommended / estimated <= 1.8:
-        raise ValueError("추천 길이가 사용 문장량 추정과 지나치게 다릅니다.")
+        result["_duration_warning"] = {"model_seconds": recommended, "sentence_seconds": round(estimated, 1)}
+        result["recommended_duration_seconds"] = round(estimated, 1)
     return result
 
 
