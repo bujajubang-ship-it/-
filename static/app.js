@@ -2830,7 +2830,7 @@ async function loadTranscriptGuideProjects() {
     const date = String(project.created_at || '').slice(0, 16).replace('T', ' ');
     const duration = project.expected_duration_seconds ? ` · 예상 ${formatEditFlowDuration(project.expected_duration_seconds)}` : '';
     return `<button type="button" class="edit-project-card${active ? ' active' : ''}" onclick="openTranscriptGuideProject(${Number(project.id)})">
-      <span class="edit-project-card-kicker">자막 편집 가이드 · PROJECT #${Number(project.id)}</span>
+      <span class="edit-project-card-kicker">${project.video_format === 'shortform' ? '숏폼' : '롱폼'} 편집 가이드 · PROJECT #${Number(project.id)}</span>
       <strong>${escHtml(project.title || '제목 없는 프로젝트')}</strong>
       <span class="edit-project-card-date">${escHtml(project.topic || '')} · v${Number(project.current_version || 1)}${duration}<br>${escHtml(date || '날짜 없음')}</span>
       ${project.last_revision_summary ? `<span class="edit-project-card-summary">${escHtml(project.last_revision_summary)}</span>` : ''}
@@ -2873,7 +2873,9 @@ function newTranscriptGuideProject() {
     const input = document.getElementById(id);
     if (input) input.value = '';
   }
+  document.getElementById('tg-format-input').value = 'longform';
   document.getElementById('tg-target-input').value = '10';
+  updateTranscriptGuideFormat();
   document.getElementById('tg-report-section').classList.add('hidden');
   document.getElementById('tg-progress-section').classList.add('hidden');
   document.getElementById('tg-input-section').classList.remove('hidden');
@@ -2883,12 +2885,34 @@ function newTranscriptGuideProject() {
   document.getElementById('tg-title-input').focus();
 }
 
+// 롱폼은 분, 숏폼은 초로 목표 길이를 받는다. 숏폼은 길어야 2분(120초)이다.
+function updateTranscriptGuideFormat() {
+  const shortform = document.getElementById('tg-format-input').value === 'shortform';
+  const input = document.getElementById('tg-target-input');
+  const label = document.getElementById('tg-target-label');
+  const hint = document.getElementById('tg-format-hint');
+  if (shortform) {
+    input.min = 1; input.max = 120; input.step = 1;
+    if (!(Number(input.value) >= 1 && Number(input.value) <= 120)) input.value = 60;
+    label.childNodes[0].nodeValue = '목표 영상 길이(초)';
+  } else {
+    input.min = 0; input.max = 360; input.step = 0.5;
+    if (Number(input.value) > 360) input.value = 10;
+    label.childNodes[0].nodeValue = '목표 영상 길이(분)';
+  }
+  if (hint) hint.classList.toggle('hidden', !shortform);
+}
+
 async function startTranscriptGuideAnalysis() {
   if (transcriptGuideAnalyzing) return;
   const title = document.getElementById('tg-title-input').value.trim();
   const topic = document.getElementById('tg-topic-input').value.trim();
   const script = document.getElementById('tg-script-input').value.trim();
-  const targetMinutes = Number(document.getElementById('tg-target-input').value || 0);
+  const videoFormat = document.getElementById('tg-format-input').value === 'shortform' ? 'shortform' : 'longform';
+  const targetValue = Number(document.getElementById('tg-target-input').value || 0);
+  const targetSeconds = videoFormat === 'shortform'
+    ? Math.min(120, Math.max(1, Math.round(targetValue || 60)))
+    : Math.max(0, targetValue * 60);
   const purpose = document.getElementById('tg-purpose-input').value.trim();
   const additionalRequest = document.getElementById('tg-request-input').value.trim();
   if (!title) { document.getElementById('tg-title-input').focus(); return; }
@@ -2905,7 +2929,8 @@ async function startTranscriptGuideAnalysis() {
     const response = await fetch('/api/transcript-edit-guides/jobs', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        title, topic, script, target_duration_seconds: Math.max(0, targetMinutes * 60),
+        title, topic, script, video_format: videoFormat,
+        target_duration_seconds: targetSeconds,
         purpose, additional_request: additionalRequest,
       }),
     });

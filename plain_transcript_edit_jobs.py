@@ -583,6 +583,7 @@ class PlainTranscriptEditJobManager:
         project_metadata = {
             "schema_version": 1, "mode": PROJECT_MODE,
             "title": request.get("title"), "topic": request.get("topic"),
+            "video_format": request.get("video_format") or "longform",
             "target_duration_seconds": request.get("target_duration_seconds"),
             "purpose": request.get("purpose"), "additional_request": request.get("additional_request"),
             "script": request.get("script"), "transcript_hash": transcript_hash(str(request.get("script") or "")),
@@ -645,6 +646,7 @@ class PlainTranscriptEditJobManager:
             label="요청하신 부분을 다시 설계하는 중입니다",
             awaitable=self.service_factory().revise(
                 current=current, user_request=message, sentence_context=context,
+                video_format=str((project.get("_project") or {}).get("video_format") or "longform"),
                 evidence_summary={
                     key: {"source": value.get("source"), "sample_size": value.get("sample_size"), "unavailable_reason": value.get("unavailable_reason")}
                     for key, value in (project.get("evidence_cache") or {}).items()

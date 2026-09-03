@@ -698,9 +698,14 @@
             <input type="text" id="tg-title-input" placeholder="프로젝트 제목" autocomplete="off" />
             <input type="text" id="tg-topic-input" placeholder="영상 주제" autocomplete="off" />
             <div class="edit-flow-input-row">
-              <label>목표 영상 길이(분)<input type="number" id="tg-target-input" min="0" max="360" step="0.5" value="10" /></label>
+              <label>영상 형식<select id="tg-format-input" onchange="updateTranscriptGuideFormat()">
+                <option value="longform">롱폼 (일반 영상)</option>
+                <option value="shortform">숏폼 (2분 이하)</option>
+              </select></label>
+              <label id="tg-target-label">목표 영상 길이(분)<input type="number" id="tg-target-input" min="0" max="360" step="0.5" value="10" /></label>
               <label>영상 목적<input type="text" id="tg-purpose-input" placeholder="예: 구매 상담, 현장 소개" /></label>
             </div>
+            <p class="search-desc hidden" id="tg-format-hint">숏폼은 1~120초로 정합니다. 편집 방식은 같지만 장면을 3~5초 단위로 더 촘촘하게 끊고, 목표 길이를 넘기지 않게 맞춥니다.</p>
             <textarea id="tg-script-input" placeholder="타임코드 없이 전체 영상 자막을 처음부터 끝까지 그대로 붙여넣으세요. 원문은 변경하지 않습니다." rows="16"></textarea>
             <textarea id="tg-request-input" placeholder="추가 요청사항 (선택)&#10;예: 실사용 후기를 앞에 두고 A/S는 마지막에 배치" rows="3"></textarea>
             <button id="tg-analyze-btn" onclick="startTranscriptGuideAnalysis()">자막 편집 가이드 만들기</button>

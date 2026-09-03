@@ -307,6 +307,36 @@ caption_polish 는 화면에 뜨는 자막에서 군더더기를 '빼기만' 하
 - original_text 는 해당 문장 원문과 글자까지 정확히 같아야 한다."""
 
 
+SHORTFORM_REVIEW_NOTE = """
+
+숏폼이므로 다음도 함께 본다.
+- 첫 장면이 곧바로 결과나 문제를 보여주는가. 배경 설명으로 시작하면 고친다.
+- 전체가 목표 길이 안에 들어오는가. 넘치면 덜 중요한 장면을 빼고 순서를 다시 적는다.
+- 한 장면이 8초 넘게 이어져 화면이 멈춰 보이는 자리가 있는가."""
+
+
+SHORTFORM_INSTRUCTIONS = """
+
+【숏폼(2분 이하) 추가 규칙 — 여기서는 1초가 롱폼의 10초와 같다】
+편집 방식은 롱폼과 같다. 다만 길이가 짧으니 훨씬 촘촘하게 본다.
+- 목표 길이를 반드시 지킨다. 넘치면 덜 중요한 문장부터 삭제해 목표 안에 맞춘다.
+  recommended_duration_seconds 는 목표 길이를 넘지 않아야 한다.
+- 첫 문장에서 곧바로 결과·문제·숫자를 보여준다. 배경 설명·인사·예고는 전부 삭제한다.
+- 군더더기와 늘어지는 말은 롱폼보다 더 과감하게 자른다. 같은 뜻이면 짧은 문장을 남긴다.
+- 장면은 3~5초 단위로 끊는다. 한 장면이 8초를 넘으면 그 안에서 더 쪼개거나 축약한다.
+- 모든 장면에 화면이 바뀌는 지점을 transition_note 또는 broll_note 로 반드시 적는다.
+  화면이 오래 그대로면 시청자가 그 자리에서 나간다.
+- 마지막 문장은 끊기지 말고 한 문장으로 맺는다.
+- edit_instruction 에는 '어디서 잘라 어디에 붙이는지'를 초 단위로 상상할 수 있게 쓴다."""
+
+
+def instructions_for(video_format: Any) -> str:
+    """숏폼이면 촘촘한 규칙을 덧붙인다. 판단 알고리즘 자체는 같다."""
+    if str(video_format or "").strip() == "shortform":
+        return SYSTEM_INSTRUCTIONS + SHORTFORM_INSTRUCTIONS
+    return SYSTEM_INSTRUCTIONS
+
+
 class PlainTranscriptEditService:
     def __init__(self, analysis: EditAnalysisService | None = None) -> None:
         self.analysis = analysis or EditAnalysisService()
@@ -332,7 +362,7 @@ class PlainTranscriptEditService:
             ],
         }, ensure_ascii=False, default=str)
         return await self.analysis._structured(
-            prompt=prompt, instructions=SYSTEM_INSTRUCTIONS,
+            prompt=prompt, instructions=instructions_for(request.get("video_format")),
             schema=RESULT_SCHEMA, schema_name="plain_transcript_edit_flow",
             reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "high").strip() or "high",
             allow_anthropic=False,
@@ -375,13 +405,16 @@ class PlainTranscriptEditService:
             "주제": request.get("topic"),
             "설계한_사람의_의도": result.get("core_message"),
             "설계된_순서": [block for block in plan if block],
+            "형식": "숏폼" if str(request.get("video_format") or "") == "shortform" else "롱폼",
+            "목표_길이_초": request.get("target_duration_seconds"),
             "도입부로_쓸_수_있는_문장": [
                 {"id": row["id"], "text": row["text"]}
                 for row in sentences if can_open(row["text"])
             ][:120],
         }, ensure_ascii=False, default=str)
+        shortform = str(request.get("video_format") or "") == "shortform"
         return await self.analysis._structured(
-            prompt=prompt, instructions=REVIEW_INSTRUCTIONS,
+            prompt=prompt, instructions=REVIEW_INSTRUCTIONS + (SHORTFORM_REVIEW_NOTE if shortform else ""),
             schema=REVIEW_SCHEMA, schema_name="plain_transcript_edit_review",
             reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "high").strip() or "high",
             allow_anthropic=False,
@@ -390,6 +423,7 @@ class PlainTranscriptEditService:
     async def revise(
         self, *, current: dict[str, Any], user_request: str,
         sentence_context: list[dict[str, Any]], evidence_summary: dict[str, Any],
+        video_format: str = "longform",
     ) -> dict[str, Any]:
         prompt = json.dumps({
             "current_result": current,
@@ -399,7 +433,7 @@ class PlainTranscriptEditService:
             "instruction": "기존 결과를 기준으로 요청된 부분만 판단하되 완전한 수정 결과 JSON을 반환",
         }, ensure_ascii=False, default=str)
         return await self.analysis._structured(
-            prompt=prompt, instructions=SYSTEM_INSTRUCTIONS,
+            prompt=prompt, instructions=instructions_for(video_format),
             schema=RESULT_SCHEMA, schema_name="plain_transcript_edit_revision",
             reasoning_effort="medium", allow_anthropic=False,
         )

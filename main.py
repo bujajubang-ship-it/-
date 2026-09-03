@@ -19,7 +19,7 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 load_dotenv()
@@ -503,9 +503,18 @@ class PlainTranscriptEditRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     topic: str = Field(min_length=1, max_length=300)
     script: str = Field(min_length=10, max_length=300_000)
+    # 롱폼은 분 단위로 들어오고, 숏폼은 1~120초로 들어온다.
+    video_format: str = Field(default="longform", pattern="^(longform|shortform)$")
     target_duration_seconds: float = Field(default=0, ge=0, le=21600)
     purpose: str = Field(default="", max_length=500)
     additional_request: str = Field(default="", max_length=4000)
+
+    @model_validator(mode="after")
+    def _shortform_stays_under_two_minutes(self):
+        if self.video_format == "shortform":
+            # 숏폼은 길어야 2분이다. 화면에서 막지만 서버에서도 한 번 더 잡는다.
+            self.target_duration_seconds = min(120.0, max(1.0, float(self.target_duration_seconds or 60)))
+        return self
 
 
 class PlainTranscriptEditRevisionRequest(BaseModel):
@@ -1172,6 +1181,7 @@ async def list_transcript_edit_guide_projects():
             "title": metadata.get("title") or row.get("keyword") or "",
             "topic": metadata.get("topic") or "",
             "current_version": int(metadata.get("current_version") or 1),
+            "video_format": metadata.get("video_format") or "longform",
             "expected_duration_seconds": current.get("recommended_duration_seconds"),
             "last_revision_summary": metadata.get("last_revision_summary") or "",
         })

@@ -14,7 +14,9 @@ from fastapi.testclient import TestClient
 import main
 from plain_transcript_edit import (
     LOW_DATA_NOTE,
+    SHORTFORM_INSTRUCTIONS,
     analyze_duplicates,
+    instructions_for,
     render_csv,
     render_markdown,
     render_vrew_prompt,
@@ -79,6 +81,38 @@ class FakeService:
 
     async def revise(self, **_kwargs):
         return valid_result("실사용 후기를 더 앞에 유지")
+
+
+class ShortformTests(unittest.TestCase):
+    """숏폼은 길이만 다른 게 아니라 더 촘촘하게 끊어야 이탈을 막는다."""
+
+    def test_shortform_adds_tighter_rules_and_longform_does_not(self):
+        self.assertIn(SHORTFORM_INSTRUCTIONS, instructions_for("shortform"))
+        self.assertNotIn(SHORTFORM_INSTRUCTIONS, instructions_for("longform"))
+        self.assertNotIn(SHORTFORM_INSTRUCTIONS, instructions_for(None))
+
+    def test_the_api_keeps_shortform_between_one_and_120_seconds(self):
+        over = main.PlainTranscriptEditRequest(
+            title="숏폼", topic="주방", script=SCRIPT,
+            video_format="shortform", target_duration_seconds=600,
+        )
+        self.assertEqual(over.target_duration_seconds, 120)
+        # 비워두면 60초를 기본으로 잡고, 1초 미만은 1초로 올린다.
+        blank = main.PlainTranscriptEditRequest(
+            title="숏폼", topic="주방", script=SCRIPT,
+            video_format="shortform", target_duration_seconds=0,
+        )
+        self.assertEqual(blank.target_duration_seconds, 60)
+        tiny = main.PlainTranscriptEditRequest(
+            title="숏폼", topic="주방", script=SCRIPT,
+            video_format="shortform", target_duration_seconds=0.4,
+        )
+        self.assertEqual(tiny.target_duration_seconds, 1)
+        longform = main.PlainTranscriptEditRequest(
+            title="롱폼", topic="주방", script=SCRIPT, target_duration_seconds=600,
+        )
+        self.assertEqual(longform.video_format, "longform")
+        self.assertEqual(longform.target_duration_seconds, 600)
 
 
 class SentenceAndExportTests(unittest.TestCase):
